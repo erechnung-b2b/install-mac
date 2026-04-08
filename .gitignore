@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# PyInstaller Build
+build/
+dist/
+*.spec.bak
+
+# Laufzeitdaten (nicht ins Repository!)
+data/
+export/
+.deps_installed
+
+# LIZENZ: Private Key und Admin-Tools NIEMALS ins Repo!
+lizenz_data/
+lizenz_verwaltung.html
+lizenz_server.py
+lizenz_starten.bat
+licensing_old_hmac.py
+
+# IDE
+.vscode/
+.idea/
+*.swp

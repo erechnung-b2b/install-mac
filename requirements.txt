@@ -1,0 +1,7 @@
+lxml>=4.9.0
+flask>=3.0.0
+qrcode>=7.4
+cryptography>=41.0
+pdfplumber>=0.10.0
+reportlab>=4.0.0
+pikepdf>=8.0.0

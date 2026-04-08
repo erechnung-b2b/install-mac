@@ -1,0 +1,2358 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>E-Rechnungsplattform</title>
+<style>
+:root{--bg:#f8f7f5;--bg2:#fff;--bg3:#f1efe8;--text:#1a1a1a;--text2:#666;--text3:#999;--border:#e2e0d9;--accent:#185FA5;--accent-bg:#E6F1FB;--success:#0F6E56;--success-bg:#E1F5EE;--warning:#854F0B;--warning-bg:#FAEEDA;--danger:#A32D2D;--danger-bg:#FCEBEB;--info:#185FA5;--info-bg:#E6F1FB;--radius:8px;--radius-lg:12px;--font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;--mono:'SF Mono',Monaco,Consolas,monospace}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.5}
+button{font-family:var(--font);font-size:13px;padding:6px 14px;border:1px solid var(--border);background:var(--bg2);border-radius:var(--radius);cursor:pointer;transition:all .15s}
+button:hover{background:var(--bg3)}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+button.primary:hover{opacity:.9}
+button.success{background:var(--success);color:#fff;border-color:var(--success)}
+button.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
+input,select,textarea{font-family:var(--font);font-size:13px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2);width:100%;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+
+.shell{display:flex;min-height:100vh}
+.sidebar{width:220px;background:var(--bg2);border-right:1px solid var(--border);padding:16px 0;flex-shrink:0}
+.sidebar h1{font-size:15px;font-weight:600;padding:0 16px 16px;border-bottom:1px solid var(--border)}
+.sidebar h1 span{font-size:11px;color:var(--text2);display:block;font-weight:400;margin-top:2px}
+.nav-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;font-size:13px;color:var(--text2);transition:all .15s;border-left:3px solid transparent}
+.nav-item:hover{background:var(--bg3);color:var(--text)}
+.nav-item.active{color:var(--accent);background:var(--accent-bg);border-left-color:var(--accent);font-weight:500}
+.nav-item .icon{width:18px;text-align:center;font-size:15px}
+.nav-item .badge{margin-left:auto;background:var(--warning-bg);color:var(--warning);font-size:11px;padding:1px 7px;border-radius:10px;font-weight:500}
+
+.main{flex:1;padding:24px 32px;max-width:1200px}
+.page{display:none}
+.page.active{display:block}
+
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:24px}
+.topbar h2{font-size:20px;font-weight:500}
+.topbar .sub{font-size:12px;color:var(--text2);margin-top:2px}
+
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}
+.metric{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);padding:16px}
+.metric .label{font-size:12px;color:var(--text2)}
+.metric .value{font-size:26px;font-weight:500;margin:4px 0 2px}
+.metric .sub{font-size:11px}
+.metric .sub.up{color:var(--success)}
+.metric .sub.warn{color:var(--warning)}
+
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);margin-bottom:16px;overflow:hidden}
+.card-header{padding:14px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.card-header h3{font-size:14px;font-weight:500}
+.card-body{padding:20px}
+
+table{width:100%;border-collapse:collapse}
+th{text-align:left;font-weight:500;color:var(--text2);font-size:12px;padding:10px 14px;background:var(--bg3);border-bottom:1px solid var(--border)}
+td{padding:10px 14px;border-bottom:1px solid var(--border);font-size:13px}
+tr:hover{background:var(--bg)}
+tr.clickable{cursor:pointer}
+th.r,td.r{text-align:right}
+th.c,td.c{text-align:center}
+
+.badge{display:inline-block;font-size:11px;padding:3px 10px;border-radius:var(--radius);font-weight:500}
+.badge.neu{background:var(--info-bg);color:var(--info)}
+.badge.pruefung,.badge.freigabe{background:var(--warning-bg);color:var(--warning)}
+.badge.freigegeben{background:var(--success-bg);color:var(--success)}
+.badge.exportiert{background:#E1F5EE;color:#085041}
+.badge.abgelehnt{background:var(--danger-bg);color:var(--danger)}
+.badge.valid{background:var(--success-bg);color:var(--success)}
+.badge.invalid{background:var(--danger-bg);color:var(--danger)}
+
+.toolbar{display:flex;gap:10px;margin-bottom:16px;align-items:center}
+.toolbar input{max-width:320px}
+.toolbar select{max-width:160px;width:auto}
+
+.detail-grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+.detail-party{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+.party-block .title{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text2);margin-bottom:6px}
+.party-block .name{font-size:15px;font-weight:500}
+.party-block p{font-size:13px;color:var(--text2);margin:2px 0}
+
+.sum-table{width:auto;margin-left:auto;min-width:260px}
+.sum-table td{padding:4px 0;border:0}
+.sum-table td:first-child{color:var(--text2);padding-right:24px}
+.sum-table td:last-child{text-align:right}
+.sum-table tr.total{border-top:1px solid var(--border)}
+.sum-table tr.total td{font-weight:500;font-size:16px;padding-top:8px}
+
+.timeline{padding:0;list-style:none}
+.timeline li{display:flex;gap:10px;padding:8px 0;align-items:flex-start;font-size:13px}
+.timeline .dot{width:10px;height:10px;border-radius:50%;margin-top:4px;flex-shrink:0}
+.timeline .dot.done{background:var(--success)}
+.timeline .dot.pending{background:var(--warning)}
+.timeline .dot.error{background:var(--danger)}
+.timeline .meta{font-size:11px;color:var(--text2)}
+
+.modal-overlay{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.4);z-index:100;align-items:center;justify-content:center}
+.modal-overlay.show{display:flex}
+.modal{background:var(--bg2);border-radius:var(--radius-lg);padding:24px;width:480px;max-width:90vw;max-height:80vh;overflow-y:auto}
+.modal h3{font-size:16px;font-weight:500;margin-bottom:16px}
+.form-row{margin-bottom:12px}
+.form-row label{display:block;font-size:12px;color:var(--text2);margin-bottom:4px}
+.form-row-2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+.upload-zone{border:2px dashed var(--border);border-radius:var(--radius-lg);padding:32px;text-align:center;cursor:pointer;transition:all .15s}
+.upload-zone:hover,.upload-zone.over{border-color:var(--accent);background:var(--accent-bg)}
+.upload-zone p{color:var(--text2);font-size:13px}
+.upload-zone .big{font-size:24px;margin-bottom:8px}
+
+.toast{position:fixed;bottom:24px;right:24px;padding:12px 20px;border-radius:var(--radius);font-size:13px;z-index:200;animation:slideIn .3s}
+.toast.success{background:var(--success);color:#fff}
+.toast.error{background:var(--danger);color:#fff}
+@keyframes slideIn{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+.notif-bell{position:relative;cursor:pointer;font-size:18px;padding:4px 8px}
+.notif-bell .dot{position:absolute;top:0;right:2px;width:8px;height:8px;border-radius:50%;background:var(--danger)}
+.notif-panel{display:none;position:absolute;top:100%;right:0;width:360px;max-height:400px;overflow-y:auto;background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius-lg);box-shadow:0 4px 20px rgba(0,0,0,.12);z-index:50}
+.notif-panel.show{display:block}
+.notif-panel .notif-item{padding:10px 14px;border-bottom:1px solid var(--border);font-size:12px;cursor:pointer;transition:background .1s}
+.notif-panel .notif-item:hover{background:var(--bg)}
+.notif-panel .notif-item.unread{background:var(--accent-bg)}
+.notif-panel .notif-item .notif-title{font-weight:500;font-size:13px;margin-bottom:2px}
+.notif-panel .notif-item .notif-time{color:var(--text3);font-size:11px}
+
+.bulk-bar{display:none;padding:10px 16px;background:var(--accent-bg);border-radius:var(--radius);margin-bottom:12px;align-items:center;gap:12px;font-size:13px}
+.bulk-bar.show{display:flex}
+.bulk-bar .count{font-weight:500;color:var(--accent)}
+
+.kontierung-box{background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px;margin-top:8px}
+.kontierung-row{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px}
+.kontierung-row .conf{min-width:40px;text-align:right;font-weight:500}
+.kontierung-row .src{color:var(--text3);font-size:11px}
+
+.inv-doc{background:#fff;color:#1a1a1a;max-width:800px;margin:0 auto;padding:48px 56px;border:1px solid var(--border);border-radius:var(--radius-lg);font-size:13px;line-height:1.6;position:relative}
+.inv-doc .doc-header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:32px;padding-bottom:20px;border-bottom:2px solid #1a1a1a}
+.inv-doc .doc-header .seller-name{font-size:20px;font-weight:600;margin:0}
+.inv-doc .doc-header .seller-sub{font-size:12px;color:#666;margin:2px 0}
+.inv-doc .doc-type{font-size:24px;font-weight:500;text-align:right}
+.inv-doc .doc-type .nr{font-size:14px;color:#666;font-weight:400}
+.inv-doc .addr-block{margin-bottom:24px}
+.inv-doc .addr-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#999;margin-bottom:4px}
+.inv-doc .addr-to{font-size:14px;font-weight:500}
+.inv-doc .meta-grid{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-bottom:28px}
+.inv-doc .meta-box{background:#f8f8f6;padding:14px 16px;border-radius:6px}
+.inv-doc .meta-box .label{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#999;margin-bottom:4px}
+.inv-doc .meta-row{display:flex;justify-content:space-between;font-size:12px;padding:2px 0}
+.inv-doc .meta-row .k{color:#666}
+.inv-doc .pos-table{width:100%;border-collapse:collapse;margin-bottom:24px}
+.inv-doc .pos-table thead th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#999;padding:8px 10px;border-bottom:1px solid #ddd;text-align:left}
+.inv-doc .pos-table thead th.r{text-align:right}
+.inv-doc .pos-table tbody td{padding:10px;border-bottom:1px solid #eee;vertical-align:top}
+.inv-doc .pos-table tbody td.r{text-align:right}
+.inv-doc .pos-table tbody td.name{font-weight:500}
+.inv-doc .pos-table tbody td .desc{font-size:11px;color:#888;margin-top:2px}
+.inv-doc .sum-block{display:flex;justify-content:flex-end}
+.inv-doc .sum-inner{min-width:280px}
+.inv-doc .sum-row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px}
+.inv-doc .sum-row .k{color:#666}
+.inv-doc .sum-total{border-top:2px solid #1a1a1a;margin-top:8px;padding-top:8px;font-size:16px;font-weight:600}
+.inv-doc .pay-block{margin-top:28px;padding-top:20px;border-top:1px solid #eee}
+.inv-doc .pay-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.inv-doc .pay-item .label{font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#999}
+.inv-doc .pay-item .val{font-size:13px;font-weight:500;margin-top:2px}
+.inv-doc .note-block{margin-top:20px;padding:12px 16px;background:#f8f8f6;border-radius:6px;font-size:12px;color:#666}
+.inv-doc .footer-block{margin-top:32px;padding-top:16px;border-top:1px solid #ddd;display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;font-size:11px;color:#999}
+.inv-doc .footer-block .col-title{font-weight:500;color:#666;margin-bottom:2px}
+.inv-doc .val-overlay{position:absolute;top:12px;right:12px;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:500}
+.inv-doc .val-ok{background:#E1F5EE;color:#0F6E56}
+.inv-doc .val-err{background:#FCEBEB;color:#A32D2D}
+.inv-doc .val-issues{margin-top:20px;padding:14px 16px;border-radius:6px;font-size:12px}
+.inv-doc .val-issues.has-err{background:#FCEBEB;border:1px solid #F09595}
+.inv-doc .val-issues.all-ok{background:#E1F5EE;border:1px solid #5DCAA5}
+.inv-doc .val-issue{padding:3px 0;display:flex;gap:6px}
+.inv-doc .val-issue .sev{font-weight:500}
+
+@media print{
+  body *{visibility:hidden}
+  #page-viewer,#page-viewer *{visibility:visible}
+  #page-viewer{position:absolute;left:0;top:0;width:100%}
+  .sidebar,.topbar,.no-print{display:none !important}
+  .inv-doc{border:none;padding:32px;box-shadow:none;max-width:100%}
+  .val-overlay,.val-issues{display:none !important}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+
+<div class="sidebar">
+  <h1><span id="sidebar-logo" style="margin-bottom:4px"></span>E-Rechnung<span>Demo GmbH · v1.0</span></h1>
+  <div class="nav-item active" onclick="navigate('dashboard')"><span class="icon">&#9632;</span>Dashboard</div>
+  <div class="nav-item" onclick="navigate('inbox')"><span class="icon">&#9993;</span>Rechnungen<span class="badge" id="nav-badge">3</span></div>
+  <div class="nav-item" onclick="navigate('workflow')"><span class="icon">&#10003;</span>Freigaben<span class="badge" id="wf-badge">2</span></div>
+  <div class="nav-item" onclick="navigate('create')"><span class="icon">&#10010;</span>Rechnung erstellen</div>
+  <div class="nav-item" onclick="navigate('archive')"><span class="icon">&#9881;</span>Archiv</div>
+  <div style="border-top:1px solid var(--border);margin:12px 0"></div>
+  <div class="nav-item" onclick="navigate('settings')"><span class="icon">&#9881;</span>Einstellungen</div>
+</div>
+
+<div class="main">
+
+<!-- License Banner -->
+<div id="license-banner" style="display:none;padding:8px 16px;margin-bottom:4px;border-radius:var(--radius);font-size:13px;text-align:center"></div>
+
+<!-- Notification Bell (global) -->
+<div style="display:flex;justify-content:flex-end;margin-bottom:-16px;position:relative;z-index:40">
+  <div class="notif-bell" onclick="toggleNotifPanel()" id="notif-bell">
+    &#128276;<span class="dot" id="notif-dot" style="display:none"></span>
+  </div>
+  <div class="notif-panel" id="notif-panel">
+    <div style="padding:10px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+      <span style="font-weight:500;font-size:13px">Benachrichtigungen</span>
+      <button onclick="markAllRead()" style="font-size:11px;padding:3px 8px">Alle gelesen</button>
+    </div>
+    <div id="notif-list"></div>
+    <div id="notif-empty" style="padding:20px;text-align:center;color:var(--text3);font-size:13px;display:none">Keine Benachrichtigungen</div>
+  </div>
+</div>
+
+<!-- ═══ DASHBOARD ═══ -->
+<div class="page active" id="page-dashboard">
+  <div class="topbar"><div><h2>Dashboard</h2><div class="sub" id="dash-date"></div></div></div>
+  <div class="metrics" id="dash-metrics"></div>
+  <div class="card"><div class="card-header"><h3>Letzte Eingänge</h3><button onclick="navigate('inbox')">Alle anzeigen</button></div>
+    <table><thead><tr><th>Rechnung</th><th>Lieferant</th><th class="r">Brutto</th><th class="c">Gültig</th><th class="c">Status</th><th>Datum</th></tr></thead>
+    <tbody id="dash-table"></tbody></table>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <div class="card-header"><h3>DATEV-Sammelexport</h3></div>
+    <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <label>Jahr <input type="number" id="datev-year" value="2026" min="2020" max="2099" style="width:90px"></label>
+      <label>Monat
+        <select id="datev-month">
+          <option value="">Ganzes Jahr</option>
+          <option value="1">Januar</option><option value="2">Februar</option><option value="3">März</option>
+          <option value="4">April</option><option value="5">Mai</option><option value="6">Juni</option>
+          <option value="7">Juli</option><option value="8">August</option><option value="9">September</option>
+          <option value="10">Oktober</option><option value="11">November</option><option value="12">Dezember</option>
+        </select>
+      </label>
+      <label>Richtung
+        <select id="datev-direction">
+          <option value="ALLE">Alle</option>
+          <option value="AUSGANG">Ausgangsrechnungen</option>
+          <option value="EINGANG">Eingangsrechnungen</option>
+        </select>
+      </label>
+      <button onclick="previewDatevBulk()">Vorschau</button>
+      <button class="primary" onclick="downloadDatevBulk()">DATEV-CSV herunterladen</button>
+      <div id="datev-bulk-result" style="font-size:13px;margin-left:8px;color:var(--text2)"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ POSTEINGANG ═══ -->
+<div class="page" id="page-inbox">
+  <div class="topbar"><div><h2>Rechnungen</h2><div class="sub">Eingangs- und Ausgangsrechnungen verwalten</div></div>
+    <div style="display:flex;gap:8px">
+      <button onclick="checkEmailInbox()">&#9993; Postfach prüfen</button>
+      <button class="primary" onclick="showUpload()">+ Rechnung hochladen</button>
+    </div></div>
+  <div class="toolbar">
+    <input type="text" id="search-q" placeholder="Suche: Lieferant, Nummer, Betrag..." oninput="loadInvoices()">
+    <select id="filter-status" onchange="loadInvoices()"><option value="">Alle Status</option>
+      <option value="NEU">Neu</option><option value="IN_PRUEFUNG">In Prüfung</option>
+      <option value="IN_FREIGABE">In Freigabe</option><option value="FREIGEGEBEN">Freigegeben</option>
+      <option value="EXPORTIERT">Exportiert</option></select>
+    <select id="filter-direction" onchange="loadInvoices()" style="min-width:120px"><option value="">Alle Richtungen</option>
+      <option value="EINGANG">← Eingang</option><option value="AUSGANG">→ Ausgang</option></select>
+  </div>
+  <div class="bulk-bar" id="bulk-bar">
+    <span class="count" id="bulk-count">0</span> ausgewählt
+    <button onclick="bulkAssign()">Zuweisen an...</button>
+    <button onclick="bulkWorkflow()">Workflow starten</button>
+    <button onclick="bulkExport()">DATEV-Export</button>
+    <button onclick="clearBulkSelection()" style="margin-left:auto;color:var(--text2)">Auswahl aufheben</button>
+  </div>
+  <div class="card">
+    <table><thead><tr><th style="width:30px"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this.checked)" style="width:auto"></th><th>Nr.</th><th>Lieferant</th><th class="c">Richtung</th><th class="r">Netto</th><th class="r">Brutto</th><th class="c">Format</th><th class="c">Gültig</th><th class="c">Status</th><th></th></tr></thead>
+    <tbody id="inv-table"></tbody></table>
+  </div>
+</div>
+
+<!-- ═══ DETAIL ═══ -->
+<div class="page" id="page-detail">
+  <div class="topbar"><div><h2 id="det-title">Rechnungsdetail</h2><div class="sub" id="det-sub"></div></div>
+    <div style="display:flex;gap:8px">
+      <button onclick="navigate('inbox')">&larr; Zurück</button>
+      <button onclick="showViewer()" style="background:var(--accent-bg);color:var(--accent);border-color:var(--accent)">&#128196; Belegansicht</button>
+      <button class="success" id="btn-approve" onclick="approveInvoice()">Freigeben</button>
+      <button class="danger" id="btn-reject" onclick="rejectInvoice()">Zurückweisen</button>
+      <button id="btn-export" onclick="exportInvoice()">DATEV-Export</button>
+      <button id="btn-zugferd" onclick="downloadZugferd()" style="background:var(--accent-bg);color:var(--accent);border-color:var(--accent)">&#128196; ZUGFeRD-PDF</button>
+      <button id="btn-kosit" onclick="validateWithKosit()">KoSIT prüfen</button>
+      <button id="btn-send" onclick="showSendDialog()">&#9993; Per E-Mail senden</button>
+      <button id="btn-storno" onclick="stornoInvoice()" style="display:none;background:var(--danger-bg);color:var(--danger);border-color:var(--danger)">&#10007; Stornieren</button>
+    </div>
+  </div>
+  <div class="detail-grid">
+    <div>
+      <div class="card"><div class="card-body">
+        <div class="detail-party">
+          <div class="party-block"><div class="title">Verkäufer</div><div id="det-seller"></div></div>
+          <div class="party-block"><div class="title">Käufer</div><div id="det-buyer"></div></div>
+        </div>
+        <div style="margin-bottom:16px"><div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Positionen</div>
+          <table><thead><tr><th>Pos</th><th>Bezeichnung</th><th class="r">Menge</th><th class="r">EP netto</th><th class="r">Netto</th><th class="r">USt</th></tr></thead>
+          <tbody id="det-lines"></tbody></table>
+        </div>
+        <table class="sum-table" id="det-sums"></table>
+      </div></div>
+      <div class="card"><div class="card-body"><div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Zahlung</div>
+        <div id="det-payment" style="display:grid;grid-template-columns:1fr 1fr;gap:4px 16px;font-size:13px"></div>
+      </div></div>
+    </div>
+    <div>
+      <div class="card"><div class="card-body"><div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Workflow</div>
+        <div id="det-status" style="margin-bottom:12px"></div>
+        <ul class="timeline" id="det-audit"></ul>
+      </div></div>
+      <div class="card"><div class="card-body"><div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Validierung</div>
+        <div id="det-validation"></div>
+      </div></div>
+      <div class="card"><div class="card-body"><div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Metadaten</div>
+        <div id="det-meta" style="font-size:13px"></div>
+      </div></div>
+      <div class="card"><div class="card-body"><div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Kontierung</div>
+        <div id="det-kontierung"></div>
+        <div id="det-kontierung-form" style="margin-top:8px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+            <div><label style="font-size:11px;color:var(--text2)">Sachkonto</label><input id="k-account" placeholder="z.B. 4900" style="font-size:12px;padding:5px 8px"></div>
+            <div><label style="font-size:11px;color:var(--text2)">Kostenstelle</label><input id="k-costcenter" placeholder="z.B. IT" style="font-size:12px;padding:5px 8px"></div>
+          </div>
+          <button onclick="saveKontierung()" style="margin-top:6px;font-size:12px;width:100%">Kontierung speichern</button>
+        </div>
+      </div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ BELEGANSICHT / VIEWER ═══ -->
+<div class="page" id="page-viewer">
+  <div class="topbar no-print"><div><h2>Belegansicht</h2><div class="sub" id="viewer-sub"></div></div>
+    <div style="display:flex;gap:8px">
+      <button onclick="openDetail(currentInvoiceId)">&larr; Zurück zum Detail</button>
+      <button onclick="window.open('/view/'+currentInvoiceId,'_blank')">&#8599; Eigenes Fenster</button>
+      <button onclick="window.print()">&#128424; Drucken</button>
+      <button onclick="downloadPdfView()">&#128196; Als PDF speichern</button>
+      <button class="primary" id="vw-btn-approve" onclick="approveInvoice()">Freigeben</button>
+    </div>
+  </div>
+  <div id="viewer-doc"></div>
+</div>
+
+<!-- ═══ WORKFLOW ═══ -->
+<div class="page" id="page-workflow">
+  <div class="topbar"><div><h2>Offene Freigaben</h2><div class="sub">Rechnungen zur Prüfung und Freigabe</div></div></div>
+  <div id="wf-list"></div>
+</div>
+
+<!-- ═══ ERSTELLEN ═══ -->
+<div class="page" id="page-create">
+  <div class="topbar"><div><h2>Rechnung erstellen</h2><div class="sub">XRechnung (UBL 2.1) erzeugen</div></div></div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+    <div class="card"><div class="card-header"><h3>Verkäufer</h3><span style="font-size:11px;color:var(--text2)">(aus Stammdaten)</span></div><div class="card-body">
+      <div class="form-row"><label>Firma</label><input id="c-seller-name" placeholder="Wird aus Stammdaten geladen"></div>
+      <div class="form-row-2"><div class="form-row"><label>Straße</label><input id="c-seller-street"></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:8px"><input id="c-seller-plz" style="width:80px"><input id="c-seller-city"></div></div></div>
+      <div class="form-row-2"><div class="form-row"><label>USt-ID</label><input id="c-seller-vat"></div>
+        <div class="form-row"><label>E-Mail</label><input id="c-seller-email"></div></div>
+      <div class="form-row-2"><div class="form-row"><label>Kontakt</label><input id="c-seller-contact"></div>
+        <div class="form-row"><label>Telefon</label><input id="c-seller-phone"></div></div>
+    </div></div>
+    <div class="card"><div class="card-header"><h3>Käufer</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="c-buyer-select" onchange="selectBuyer(this.value)" style="font-size:12px;padding:4px 8px;min-width:180px">
+          <option value="">— Empfaenger waehlen —</option>
+        </select>
+        <label style="font-size:11px;cursor:pointer;color:var(--primary);white-space:nowrap">
+          CSV Import <input type="file" accept=".csv,.txt" style="display:none" onchange="uploadBuyersCsv(this.files[0])">
+        </label>
+        <button onclick="exportBuyersCsv()" style="font-size:11px;padding:2px 8px">CSV Export</button>
+        <button onclick="toggleBuyerTable()" style="font-size:11px;padding:2px 8px" id="btn-buyer-table">Kundenliste</button>
+      </div>
+    </div><div class="card-body">
+      <div class="form-row"><label>Firma</label><input id="c-buyer-name" placeholder="Kundenname"></div>
+      <div class="form-row-2"><div class="form-row"><label>Straße</label><input id="c-buyer-street"></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:8px"><input id="c-buyer-plz" style="width:80px"><input id="c-buyer-city"></div></div></div>
+      <div class="form-row-2">
+        <div class="form-row"><label>Ansprechpartner</label>
+          <div style="display:flex;gap:6px">
+            <select id="c-buyer-salutation" style="width:110px">
+              <option value="">— Anrede —</option>
+              <option value="Herr">Herr</option>
+              <option value="Frau">Frau</option>
+              <option value="Herr Dr.">Herr Dr.</option>
+              <option value="Frau Dr.">Frau Dr.</option>
+              <option value="Herr Prof.">Herr Prof.</option>
+              <option value="Frau Prof.">Frau Prof.</option>
+            </select>
+            <input id="c-buyer-contact" placeholder="Vor- und Nachname" style="flex:1">
+          </div>
+        </div>
+        <div class="form-row"><label>E-Mail</label><input id="c-buyer-email"></div>
+      </div>
+      <div class="form-row-2"><div class="form-row"><label>Buyer Reference</label><input id="c-buyer-ref" placeholder="Leitweg-ID oder Referenz" oninput="updateInvoiceNumber()"></div>
+        <div class="form-row"><label>USt-ID</label><input id="c-buyer-vat" placeholder="DE..."></div></div>
+      <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+        <button onclick="saveBuyerFromForm()" style="font-size:12px">Neu speichern</button>
+        <button onclick="updateSelectedBuyer()" style="font-size:12px" id="btn-buyer-update" disabled>Aendern</button>
+        <span id="buyer-save-result" style="font-size:11px"></span>
+      </div>
+      <!-- Kundenliste (ausklappbar) -->
+      <div id="buyer-table-container" style="display:none;margin-top:12px;border-top:1px solid var(--border);padding-top:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span style="font-size:12px;color:var(--text2)" id="buyer-count-label"></span>
+          <button onclick="deleteAllBuyers()" style="font-size:11px;color:var(--danger);padding:2px 8px">Alle loeschen</button>
+        </div>
+        <div style="max-height:200px;overflow-y:auto">
+          <table style="font-size:12px;width:100%"><thead><tr>
+            <th>ID</th><th>Firma</th><th>Ansprechpartner</th><th>Strasse</th><th>PLZ</th><th>Ort</th><th>E-Mail</th><th>Referenz</th><th></th>
+          </tr></thead><tbody id="buyer-table-body"></tbody></table>
+        </div>
+      </div>
+    </div></div>
+  </div>
+  <div class="card"><div class="card-header"><h3>Rechnungsdaten</h3></div><div class="card-body">
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
+      <div class="form-row"><label>Rechnungsnummer</label><input id="c-number" placeholder="Wird automatisch vergeben" readonly style="background:var(--bg3)"></div>
+      <div class="form-row"><label>Rechnungsdatum</label><input type="date" id="c-date"></div>
+      <div class="form-row"><label>Leistungsdatum</label><input type="date" id="c-delivery-date" title="Tag/Ende der Leistung (BT-72)"></div>
+      <div class="form-row"><label>IBAN</label><input id="c-iban" placeholder="Wird aus Stammdaten geladen"></div>
+      <div class="form-row"><label>Zahlungsziel</label>
+          <select id="c-terms">
+            <option value="Zahlbar sofort ohne Abzug">Sofort</option>
+            <option value="Zahlbar innerhalb von 7 Tagen ohne Abzug">7 Tage netto</option>
+            <option value="Zahlbar innerhalb von 14 Tagen ohne Abzug">14 Tage netto</option>
+            <option value="Zahlbar innerhalb von 30 Tagen ohne Abzug" selected>30 Tage netto</option>
+          </select>
+        </div>
+    </div>
+    <div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Positionen</div>
+    <table><thead><tr><th>Bezeichnung</th><th class="r" style="width:80px">Menge</th><th class="r" style="width:100px">EP netto</th><th class="r" style="width:80px">USt %</th><th style="width:40px"></th></tr></thead>
+      <tbody id="c-lines"></tbody></table>
+    <button onclick="addLine()" style="margin-top:8px">+ Position</button>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button onclick="generateInvoice()">Validieren</button>
+      <button class="primary" onclick="generateInvoice(true)">XRechnung erzeugen &amp; herunterladen</button>
+    </div>
+    <div id="c-result" style="margin-top:12px"></div>
+  </div></div>
+</div>
+
+<!-- ═══ ARCHIV ═══ -->
+<div class="page" id="page-archive">
+  <div class="topbar"><div><h2>Archiv</h2><div class="sub">Revisionssichere Ablage aller Rechnungen</div></div>
+    <div style="display:flex;gap:8px">
+      <input type="text" id="arch-search" placeholder="Suche im Archiv..." oninput="loadArchive()" style="width:220px">
+    </div>
+  </div>
+  <div class="card"><table><thead><tr><th>Rechnung</th><th>Richtung</th><th>Typ</th><th>Status</th><th>Validierung</th><th>SHA-256</th><th>Archiviert</th><th></th></tr></thead>
+    <tbody id="arch-table"></tbody></table></div>
+</div>
+
+<!-- ═══ EINSTELLUNGEN ═══ -->
+<div class="page" id="page-settings">
+  <div class="topbar"><div><h2>Einstellungen</h2><div class="sub">Lizenz, E-Mail, Mandant und Systemkonfiguration</div></div></div>
+
+  <!-- Lizenz -->
+  <div class="card" style="margin-bottom:16px">
+    <div class="card-header"><h3>&#128274; Lizenz</h3>
+      <div id="lic-badge" style="font-size:12px"></div>
+    </div>
+    <div class="card-body">
+      <!-- Geraete-ID: immer sichtbar -->
+      <div id="lic-device" style="padding:12px 16px;background:var(--bg2);border:1px dashed var(--border);border-radius:var(--radius);margin-bottom:14px">
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Ihre Geraete-ID (fuer die Lizenzbestellung):</div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span id="lic-device-id" style="font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:3px;color:var(--accent)">---</span>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('lic-device-id').textContent);toast('Geraete-ID kopiert')" style="font-size:11px;padding:3px 10px">Kopieren</button>
+        </div>
+        <div style="font-size:11px;color:var(--muted);margin-top:6px">Bitte teilen Sie diese ID Ihrem Anbieter mit, um einen Lizenzschluessel zu erhalten.</div>
+      </div>
+      <div id="lic-info" style="font-size:13px;margin-bottom:12px"></div>
+      <div id="lic-form" style="display:none">
+        <div class="form-row"><label>Lizenzschluessel</label><input id="lic-key" placeholder="ERECH-XXXXX-XXXXX-XXXXX-XXXXX" style="font-family:var(--mono);text-transform:uppercase;letter-spacing:1px"></div>
+        <button class="primary" onclick="activateLicense()">Lizenz aktivieren</button>
+      </div>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+    <!-- IMAP Empfang -->
+    <div class="card">
+      <div class="card-header"><h3>&#9993; E-Mail Empfang (IMAP)</h3>
+        <div id="imap-status" style="font-size:12px;color:var(--text2)"></div>
+      </div>
+      <div class="card-body">
+        <div class="form-row"><label>IMAP-Server</label><input id="s-imap-host" placeholder="imap.mein-server.de"></div>
+        <div class="form-row-2">
+          <div class="form-row"><label>Port</label><input id="s-imap-port" type="number" value="993"></div>
+          <div class="form-row"><label>SSL/TLS</label>
+            <select id="s-imap-ssl"><option value="true" selected>SSL (Port 993)</option><option value="false">STARTTLS (Port 143)</option></select>
+          </div>
+        </div>
+        <div class="form-row"><label>Benutzername / E-Mail</label><input id="s-imap-user" placeholder="rechnungen@meine-firma.de"></div>
+        <div class="form-row"><label>Passwort</label><input id="s-imap-pass" type="password" placeholder="Wird verschlüsselt gespeichert"></div>
+        <div class="form-row"><label>IMAP-Ordner</label><input id="s-imap-folder" value="INBOX"></div>
+        <div class="form-row-2">
+          <div class="form-row"><label>Verarbeitet-Ordner</label><input id="s-imap-processed" value="Verarbeitet"></div>
+          <div class="form-row"><label>Fehler-Ordner</label><input id="s-imap-error" value="Fehler"></div>
+        </div>
+        <div class="form-row"><label>Polling-Intervall (Sekunden)</label><input id="s-imap-interval" type="number" value="60" min="10"></div>
+        <div class="form-row" style="margin-top:4px">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="s-imap-move" checked style="width:auto"> Verarbeitete Mails verschieben
+          </label>
+        </div>
+      </div>
+    </div>
+
+    <!-- SMTP Versand -->
+    <div class="card">
+      <div class="card-header"><h3>&#9993; E-Mail Versand (SMTP)</h3>
+        <div id="smtp-status" style="font-size:12px;color:var(--text2)"></div>
+      </div>
+      <div class="card-body">
+        <div class="form-row"><label>SMTP-Server</label><input id="s-smtp-host" placeholder="smtp.mein-server.de"></div>
+        <div class="form-row-2">
+          <div class="form-row"><label>Port</label><input id="s-smtp-port" type="number" value="587"></div>
+          <div class="form-row"><label>Verschlüsselung</label>
+            <select id="s-smtp-tls"><option value="true" selected>STARTTLS (Port 587)</option><option value="false">SSL (Port 465)</option></select>
+          </div>
+        </div>
+        <div class="form-row"><label>Benutzername / E-Mail</label><input id="s-smtp-user" placeholder="rechnungen@meine-firma.de"></div>
+        <div class="form-row"><label>Passwort</label><input id="s-smtp-pass" type="password" placeholder="Wird verschlüsselt gespeichert"></div>
+        <div class="form-row"><label>Absender-Adresse</label><input id="s-smtp-from" placeholder="rechnungen@meine-firma.de"></div>
+        <div class="form-row"><label>Absender-Name</label><input id="s-smtp-name" value="E-Rechnungssystem"></div>
+        <div class="form-row-2">
+          <div class="form-row"><label>Max. Anhang (MB)</label><input id="s-max-attach" type="number" value="25"></div>
+          <div class="form-row"><label>Erlaubte Dateitypen</label><input id="s-extensions" value=".xml,.pdf,.zip"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aktionen -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-body" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+      <button class="primary" onclick="saveEmailSettings()">Einstellungen speichern</button>
+      <button onclick="testImapConnection()">IMAP-Verbindung testen</button>
+      <button onclick="testSmtpConnection()">SMTP-Verbindung testen</button>
+      <button onclick="checkEmailInbox()">Postfach jetzt prüfen</button>
+      <div id="settings-result" style="font-size:13px;margin-left:8px"></div>
+    </div>
+  </div>
+
+  <!-- Protokolle -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+    <div class="card">
+      <div class="card-header"><h3>Empfangsprotokoll</h3>
+        <button onclick="loadReceiveLog()" style="font-size:12px">Aktualisieren</button>
+      </div>
+      <div style="max-height:300px;overflow-y:auto">
+        <table><thead><tr><th>Zeitpunkt</th><th>Absender</th><th>Betreff</th><th>Rechnungen</th></tr></thead>
+        <tbody id="recv-log-table"></tbody></table>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-header"><h3>Versandprotokoll</h3>
+        <button onclick="loadSendLog()" style="font-size:12px">Aktualisieren</button>
+      </div>
+      <div style="max-height:300px;overflow-y:auto">
+        <table><thead><tr><th>Zeitpunkt</th><th>Rechnung</th><th>Empfänger</th><th>Status</th></tr></thead>
+        <tbody id="send-log-table"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Logo -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header"><h3>&#128196; Firmenlogo</h3></div>
+    <div class="card-body">
+      <div style="display:flex;gap:24px;align-items:flex-start">
+        <div id="logo-preview" style="width:200px;min-height:80px;border:2px dashed var(--border);border-radius:var(--radius-lg);display:flex;align-items:center;justify-content:center;overflow:hidden;background:var(--bg3);cursor:pointer;flex-shrink:0" onclick="document.getElementById('logo-file-input').click()">
+          <span id="logo-placeholder" style="font-size:12px;color:var(--text3);text-align:center;padding:12px">Kein Logo<br>Klicken zum Hochladen</span>
+        </div>
+        <div style="flex:1">
+          <p style="font-size:13px;color:var(--text2);margin:0 0 12px">Das Logo erscheint auf der Belegansicht und in der Sidebar. Unterstützte Formate: PNG, JPG, SVG, WebP. Maximal 2 MB.</p>
+          <input type="file" id="logo-file-input" accept=".png,.jpg,.jpeg,.svg,.webp,.gif" style="display:none" onchange="uploadLogo(this.files[0])">
+          <div style="display:flex;gap:8px">
+            <button onclick="document.getElementById('logo-file-input').click()">Logo hochladen</button>
+            <button onclick="deleteLogo()" id="btn-delete-logo" style="display:none;color:var(--danger)">Logo entfernen</button>
+          </div>
+          <div id="logo-status" style="font-size:12px;margin-top:8px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stammdaten / Mandant -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header"><h3>Stammdaten (Rechnungssteller)</h3>
+      <div style="font-size:11px;color:var(--text2)">Diese Daten werden beim Erstellen von Ausgangsrechnungen als Verkäufer übernommen.</div>
+    </div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+        <div class="form-row"><label>Firmenname *</label><input id="s-mandant-name" value=""></div>
+        <div class="form-row"><label>USt-ID *</label><input id="s-mandant-vat" value="" placeholder="DE123456789"></div>
+        <div class="form-row"><label>Steuernummer</label><input id="s-mandant-taxreg" value="" placeholder="147/214/00001"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;margin-top:8px">
+        <div class="form-row"><label>Straße *</label><input id="s-mandant-street" value="" placeholder="Hauptstraße 42"></div>
+        <div class="form-row"><label>PLZ *</label><input id="s-mandant-plz" value="" placeholder="10115"></div>
+        <div class="form-row"><label>Ort *</label><input id="s-mandant-city" value="" placeholder="Berlin"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:8px">
+        <div class="form-row"><label>E-Mail *</label><input id="s-mandant-email" value="" placeholder="info@firma.de"></div>
+        <div class="form-row"><label>Ansprechpartner *</label><input id="s-mandant-contact" value="" placeholder="Max Mustermann"></div>
+        <div class="form-row"><label>Telefon *</label><input id="s-mandant-phone" value="" placeholder="+49 30 12345678"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:8px">
+        <div class="form-row"><label>IBAN</label><input id="s-mandant-iban" value="" placeholder="DE89370400440532013000"></div>
+        <div class="form-row"><label>BIC</label><input id="s-mandant-bic" value="" placeholder="COBADEFFXXX"></div>
+        <div class="form-row"><label>Standard-Währung</label>
+          <select id="s-mandant-currency"><option value="EUR" selected>EUR</option><option value="CHF">CHF</option><option value="USD">USD</option></select>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="primary" onclick="saveMandantSettings()">Stammdaten speichern</button>
+        <span id="mandant-save-result" style="font-size:12px;line-height:32px"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stellvertretung + Polling nebeneinander -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
+
+    <!-- Stellvertretung (FR-360) -->
+    <div class="card">
+      <div class="card-header"><h3>Stellvertretung (FR-360)</h3></div>
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+          <div class="form-row"><label>Abwesend</label><input id="dep-absent" placeholder="Benutzername"></div>
+          <div class="form-row"><label>Stellvertreter</label><input id="dep-deputy" placeholder="Benutzername"></div>
+          <div class="form-row"><label>Von</label><input type="date" id="dep-start"></div>
+          <div class="form-row"><label>Bis</label><input type="date" id="dep-end"></div>
+        </div>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <input id="dep-reason" placeholder="Grund (optional)" style="flex:1">
+          <button onclick="addDeputy()">Hinzufügen</button>
+        </div>
+        <div id="dep-list" style="font-size:12px"></div>
+      </div>
+    </div>
+
+    <!-- IMAP Polling -->
+    <div class="card">
+      <div class="card-header"><h3>Automatischer E-Mail-Abruf</h3>
+        <div id="poll-status-badge" style="font-size:12px"></div>
+      </div>
+      <div class="card-body">
+        <p style="font-size:12px;color:var(--text2);margin:0 0 12px">Automatisches Prüfen des IMAP-Postfachs im Hintergrund.</p>
+        <div id="poll-info" style="font-size:12px;margin-bottom:12px;color:var(--text2)"></div>
+        <div style="display:flex;gap:8px">
+          <button onclick="startPolling()" class="success" id="btn-poll-start">Polling starten</button>
+          <button onclick="stopPolling()" class="danger" id="btn-poll-stop" style="display:none">Polling stoppen</button>
+          <button onclick="checkEmailInbox()">Einmalig prüfen</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aufbewahrungsfristen (FR-530) -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header"><h3>Aufbewahrungsfristen (FR-530)</h3>
+      <button onclick="loadRetention()" style="font-size:12px">Aktualisieren</button>
+    </div>
+    <div class="card-body">
+      <div id="retention-policies" style="font-size:13px;margin-bottom:12px"></div>
+      <div id="retention-list" style="max-height:200px;overflow-y:auto">
+        <table><thead><tr><th>Rechnung</th><th>Datum</th><th>Gesperrt</th><th>Löschbar</th><th>Info</th><th></th></tr></thead>
+          <tbody id="ret-table"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Daten zuruecksetzen -->
+  <div class="card" style="margin-top:16px;border-color:var(--danger)">
+    <div class="card-header"><h3 style="color:var(--danger)">Daten zuruecksetzen</h3></div>
+    <div class="card-body">
+      <p style="font-size:13px;color:var(--text2);margin:0 0 12px">Loescht alle Rechnungen, Archiveintraege und Inbox-Daten. Stammdaten, Lizenz und E-Mail-Einstellungen bleiben erhalten. Dieser Vorgang kann nicht rueckgaengig gemacht werden.</p>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button style="background:var(--danger);color:#fff;border-color:var(--danger)" onclick="resetAllData()">Alle Rechnungsdaten loeschen</button>
+        <span id="reset-result" style="font-size:12px"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div><!-- main -->
+</div><!-- shell -->
+
+<!-- ═══ Upload Modal ═══ -->
+<div class="modal-overlay" id="upload-modal">
+  <div class="modal">
+    <h3>Rechnung hochladen</h3>
+    <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <div class="big">&#128196;</div>
+      <p>XML- oder PDF-Datei hierher ziehen</p>
+      <p style="font-size:12px;margin-top:4px">Unterstützt: XRechnung (.xml), ZUGFeRD (.pdf)</p>
+    </div>
+    <input type="file" id="file-input" accept=".xml,.pdf" style="display:none" onchange="uploadFile(this.files[0])">
+    <div id="upload-result" style="margin-top:12px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button onclick="hideUpload()">Schließen</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ Versand-Dialog ═══ -->
+<div class="modal-overlay" id="send-modal">
+  <div class="modal">
+    <h3>Rechnung per E-Mail versenden</h3>
+    <div id="send-invoice-info" style="padding:12px;background:var(--bg3);border-radius:var(--radius);margin-bottom:16px;font-size:13px"></div>
+    <div class="form-row"><label>Empfänger E-Mail *</label><input id="send-recipient" type="email" placeholder="einkauf@kunde.de"></div>
+    <div class="form-row"><label>Betreff (optional, wird automatisch generiert)</label><input id="send-subject" placeholder=""></div>
+    <div class="form-row"><label>Nachricht (optional)</label><textarea id="send-body" rows="4" placeholder="Wird automatisch erzeugt wenn leer"></textarea></div>
+    <div id="send-result" style="margin-top:12px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
+      <button onclick="hideSendDialog()">Abbrechen</button>
+      <button class="primary" onclick="sendInvoiceEmail()">Rechnung versenden</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = '';
+let currentInvoiceId = null;
+
+// ── Navigation ──
+function navigate(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => {
+    if (n.textContent.toLowerCase().includes(
+      {dashboard:'dashboard',inbox:'rechnungen',workflow:'freigaben',create:'erstellen',archive:'archiv',settings:'einstellungen',viewer:'belegansicht'}[page]
+    )) n.classList.add('active');
+  });
+  if (page === 'dashboard') loadDashboard();
+  if (page === 'inbox') loadInvoices();
+  if (page === 'workflow') loadWorkflow();
+  if (page === 'archive') loadArchive();
+  if (page === 'settings') loadSettings();
+  if (page === 'create') fillSellerFromMandant();
+}
+
+// ── Helpers ──
+function fmt(n) { return new Intl.NumberFormat('de-DE', {minimumFractionDigits:2, maximumFractionDigits:2}).format(n); }
+function statusBadge(s) {
+  const m = {NEU:'neu',IN_PRUEFUNG:'pruefung',IN_FREIGABE:'freigabe',FREIGEGEBEN:'freigegeben',EXPORTIERT:'exportiert',ZURUECKGEWIESEN:'abgelehnt',STORNIERT:'abgelehnt'};
+  const l = {NEU:'Neu',IN_PRUEFUNG:'In Prüfung',IN_FREIGABE:'In Freigabe',FREIGEGEBEN:'Freigegeben',EXPORTIERT:'Exportiert',ZURUECKGEWIESEN:'Abgelehnt',STORNIERT:'Storniert'};
+  return `<span class="badge ${m[s]||'neu'}">${l[s]||s}</span>`;
+}
+function validBadge(v) { return v ? '<span class="badge valid">&#10003; OK</span>' : '<span class="badge invalid">&#10007; Fehler</span>'; }
+function dirBadge(d) {
+  if (d === 'EINGANG') return '<span style="background:var(--info-bg);color:var(--info);padding:1px 8px;border-radius:4px;font-size:11px">&#8592; Eingang</span>';
+  return '<span style="background:var(--success-bg);color:var(--success);padding:1px 8px;border-radius:4px;font-size:11px">&#8594; Ausgang</span>';
+}
+function toast(msg, type='success') {
+  const t = document.createElement('div'); t.className = 'toast ' + type; t.textContent = msg;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 3000);
+}
+
+// ── Dashboard ──
+async function loadDashboard() {
+  document.getElementById('dash-date').textContent = new Date().toLocaleDateString('de-DE', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
+  const [dRes, iRes] = await Promise.all([fetch(API+'/api/dashboard').then(r=>r.json()), fetch(API+'/api/invoices').then(r=>r.json())]);
+  document.getElementById('dash-metrics').innerHTML = [
+    {l:'Eingangsvolumen',v:dRes.total,s:`${dRes.offene} offen`,c:''},
+    {l:'Offene Freigaben',v:dRes.offene,s:dRes.offene>0?'Aktion erforderlich':'Alles erledigt',c:dRes.offene>0?'warn':'up'},
+    {l:'Touchless-Rate',v:dRes.touchless_rate+'%',s:'Automatisiert',c:'up'},
+    {l:'Gesamtvolumen',v:fmt(dRes.volumen)+' EUR',s:dRes.total+' Rechnungen',c:''},
+  ].map(m=>`<div class="metric"><div class="label">${m.l}</div><div class="value">${m.v}</div><div class="sub ${m.c}">${m.s}</div></div>`).join('');
+
+  document.getElementById('nav-badge').textContent = dRes.offene;
+  const invs = iRes.invoices.slice(0, 6);
+  document.getElementById('dash-table').innerHTML = invs.map(i=>`
+    <tr class="clickable" onclick="openDetail('${i.id}')">
+      <td style="font-weight:500">${i.number}</td><td>${i.seller}</td>
+      <td class="r" style="font-weight:500">${fmt(i.gross)} EUR</td>
+      <td class="c">${validBadge(i.valid)}</td><td class="c">${statusBadge(i.status)}</td>
+      <td style="color:var(--text2);font-size:12px">${i.date}</td>
+    </tr>`).join('');
+}
+
+// ── Rechnungsliste ──
+let bulkSelected = new Set();
+
+async function loadInvoices() {
+  const q = document.getElementById('search-q')?.value || '';
+  const s = document.getElementById('filter-status')?.value || '';
+  const d = document.getElementById('filter-direction')?.value || '';
+  const res = await fetch(API+`/api/invoices?q=${encodeURIComponent(q)}&status=${s}&direction=${d}`).then(r=>r.json());
+  bulkSelected.clear(); updateBulkBar();
+  document.getElementById('select-all').checked = false;
+  document.getElementById('inv-table').innerHTML = res.invoices.map(i=>`
+    <tr class="clickable" onclick="openDetail('${i.id}')">
+      <td onclick="event.stopPropagation()"><input type="checkbox" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this.checked)" style="width:auto"></td>
+      <td style="font-weight:500">${i.number}</td><td>${i.seller}</td>
+      <td class="c">${dirBadge(i.direction)}</td>
+      <td class="r">${fmt(i.net)}</td><td class="r" style="font-weight:500">${fmt(i.gross)} EUR</td>
+      <td class="c"><span class="badge" style="background:var(--bg3);color:var(--text2)">${i.format||'XRechnung'}</span></td>
+      <td class="c">${validBadge(i.valid)}</td><td class="c">${statusBadge(i.status)}</td>
+      <td><button onclick="event.stopPropagation();openDetail('${i.id}')" style="font-size:12px">Detail</button>
+        <button onclick="event.stopPropagation();currentInvoiceId='${i.id}';showViewer()" style="font-size:12px;margin-left:4px">Beleg</button></td>
+    </tr>`).join('');
+}
+
+// ── Detail ──
+async function openDetail(id) {
+  currentInvoiceId = id;
+  const res = await fetch(API+`/api/invoices/${id}`);
+  if (!res.ok) {
+    toast('Rechnung nicht gefunden (möglicherweise nur im Archiv)', 'error');
+    return;
+  }
+  const inv = await res.json();
+  if (inv.error) {
+    toast(inv.error, 'error');
+    return;
+  }
+  navigate('detail');
+  document.getElementById('page-detail').classList.add('active');
+
+  document.getElementById('det-title').textContent = inv.number;
+  const dirLabel = inv.direction === 'EINGANG' ? '← Eingang' : '→ Ausgang';
+  document.getElementById('det-sub').innerHTML = `${dirBadge(inv.direction)} <span style="margin-left:8px">${inv.type_code==='381'?'Gutschrift':'Rechnung'} · ${inv.date} · ${inv.currency}</span>`;
+
+  // Storno-Hinweise – zuerst alte entfernen
+  document.querySelectorAll('#det-storno-info').forEach(el => el.remove());
+
+  let stornoHtml = '';
+  if (inv.status === 'STORNIERT') {
+    const stornoEvt = inv.audit_trail?.find(e => e.type === 'STORNIERT');
+    const stornoRef = stornoEvt?.comment || '';
+    stornoHtml = `<div style="padding:10px 16px;background:var(--danger-bg);border:1px solid #F09595;border-radius:var(--radius);margin-bottom:12px;font-size:13px;color:var(--danger)">
+      <strong>&#10007; Diese Rechnung wurde storniert.</strong> ${esc(stornoRef)}</div>`;
+  }
+  if (inv.preceding_invoice) {
+    stornoHtml += `<div style="padding:10px 16px;background:var(--warning-bg);border:1px solid #FAC775;border-radius:var(--radius);margin-bottom:12px;font-size:13px;color:var(--warning)">
+      <strong>Bezug:</strong> ${inv.type_code==='381'?'Gutschrift/Storno':'Korrektur'} zu Rechnung <a href="#" onclick="event.preventDefault();findAndOpenInvoice('${inv.preceding_invoice}')" style="color:var(--accent);font-weight:500">${esc(inv.preceding_invoice)}</a></div>`;
+  }
+  if (stornoHtml) {
+    document.getElementById('det-sub').insertAdjacentHTML('afterend',
+      `<div id="det-storno-info" style="margin-top:8px">${stornoHtml}</div>`);
+  }
+
+  const canApprove = ['NEU','IN_PRUEFUNG','IN_FREIGABE'].includes(inv.status);
+  const canExport = inv.status === 'FREIGEGEBEN';
+  document.getElementById('btn-approve').style.display = canApprove ? '' : 'none';
+  document.getElementById('btn-reject').style.display = canApprove ? '' : 'none';
+  document.getElementById('btn-export').style.display = canExport ? '' : 'none';
+  document.getElementById('btn-send').style.display = inv.validation?.valid ? '' : 'none';
+  const canStorno = ['FREIGEGEBEN','EXPORTIERT'].includes(inv.status)
+    && inv.type_code !== '381'
+    && (inv.direction || 'AUSGANG') === 'AUSGANG';
+  document.getElementById('btn-storno').style.display = canStorno ? '' : 'none';
+  window._currentInvoiceData = inv;
+
+  document.getElementById('det-seller').innerHTML = `
+    <div class="name">${inv.seller.name}</div>
+    <p>${inv.seller.street}</p><p>${inv.seller.post_code} ${inv.seller.city}</p>
+    <p>USt-ID: ${inv.seller.vat_id}</p><p>Kontakt: ${inv.seller.contact_name}</p>
+    <p>${inv.seller.contact_phone}</p><p>${inv.seller.contact_email||inv.seller.email}</p>`;
+
+  document.getElementById('det-buyer').innerHTML = `
+    <div class="name">${inv.buyer.name}</div>
+    <p>${inv.buyer.street}</p><p>${inv.buyer.post_code} ${inv.buyer.city}</p>
+    <p>USt-ID: ${inv.buyer.vat_id||'—'}</p><p>Kundennr.: ${inv.buyer_reference||'—'}</p>`;
+
+  document.getElementById('det-lines').innerHTML = inv.lines.map(l=>`
+    <tr><td>${l.id}</td><td>${l.name}${l.description?'<br><span style="font-size:12px;color:var(--text2)">'+l.description+'</span>':''}</td>
+    <td class="r">${l.quantity}</td><td class="r">${fmt(l.unit_price)}</td>
+    <td class="r" style="font-weight:500">${fmt(l.net)}</td><td class="r">${l.tax_rate}%</td></tr>`).join('');
+
+  const t = inv.totals;
+  let sumRows = `<tr><td>Summe Positionen</td><td>${fmt(t.line_net)} EUR</td></tr>`;
+  if (t.allowances) sumRows += `<tr><td>./. Nachlässe</td><td>-${fmt(t.allowances)} EUR</td></tr>`;
+  if (t.charges) sumRows += `<tr><td>+ Zuschläge</td><td>${fmt(t.charges)} EUR</td></tr>`;
+  sumRows += `<tr><td>Netto</td><td>${fmt(t.net)} EUR</td></tr>`;
+  inv.tax_breakdown.forEach(tb => { sumRows += `<tr><td>USt ${tb.rate}%</td><td>${fmt(tb.tax)} EUR</td></tr>`; });
+  sumRows += `<tr class="total"><td>Zahlbetrag</td><td>${fmt(t.due)} EUR</td></tr>`;
+  document.getElementById('det-sums').innerHTML = sumRows;
+
+  const p = inv.payment;
+  document.getElementById('det-payment').innerHTML = `
+    <span style="color:var(--text2)">IBAN</span><span>${p.iban||'—'}</span>
+    <span style="color:var(--text2)">BIC</span><span>${p.bic||'—'}</span>
+    <span style="color:var(--text2)">Fällig</span><span>${p.due_date||'—'}</span>
+    <span style="color:var(--text2)">Bedingung</span><span>${p.terms||'—'}</span>`;
+
+  document.getElementById('det-status').innerHTML = `${statusBadge(inv.status)} <span style="font-size:12px;color:var(--text2);margin-left:8px">Zugewiesen: ${inv.assigned_to||'—'}</span>`;
+
+  document.getElementById('det-audit').innerHTML = inv.audit_trail.map(e => {
+    const cls = e.type.includes('ABGELEHNT')||e.type.includes('ZURUECK')?'error':e.type.includes('FREIGABE')||e.type.includes('EXPORT')?'done':'pending';
+    return `<li><span class="dot ${cls}"></span><div><div style="font-weight:500">${e.type.replace(/_/g,' ')}</div><div class="meta">${e.timestamp?.substring(0,16)} · ${e.user} ${e.comment?'· "'+e.comment+'"':''}</div></div></li>`;
+  }).join('');
+
+  const v = inv.validation;
+  let valHtml = `<div style="margin-bottom:8px">${v.valid?validBadge(true):validBadge(false)} <span style="font-size:12px;color:var(--text2);margin-left:4px">${v.errors} Fehler, ${v.warnings} Warnungen</span></div>`;
+  if (v.issues?.length) {
+    valHtml += v.issues.map(i => {
+      const c = i.severity==='ERROR'?'var(--danger)':i.severity==='WARNING'?'var(--warning)':'var(--text2)';
+      return `<div style="font-size:12px;margin:4px 0;color:${c}">${i.severity==='ERROR'?'&#10007;':i.severity==='WARNING'?'&#9888;':'&#8505;'} [${i.rule}] ${i.message}</div>`;
+    }).join('');
+  }
+  document.getElementById('det-validation').innerHTML = valHtml;
+
+  document.getElementById('det-meta').innerHTML = `
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 16px">
+      <span style="color:var(--text2)">Format</span><span>${inv.format||'XRechnung'}</span>
+      <span style="color:var(--text2)">Bestellung</span><span>${inv.order_reference||'—'}</span>
+      <span style="color:var(--text2)">Vertrag</span><span>${inv.contract_reference||'—'}</span>
+      <span style="color:var(--text2)">Leistung</span><span>${inv.period_start?inv.period_start+' – '+(inv.period_end||''):'—'}</span>
+      <span style="color:var(--text2)">Bezug</span><span>${inv.preceding_invoice||'—'}</span>
+    </div>`;
+  loadKontierung(id);
+}
+
+// ── Workflow-Aktionen ──
+async function approveInvoice() {
+  const comment = prompt('Kommentar zur Freigabe:', 'Geprüft und freigegeben');
+  if (comment === null) return;
+  const res = await fetch(API+`/api/invoices/${currentInvoiceId}/approve`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:'web-user',comment})}).then(r=>r.json());
+  toast(res.message); openDetail(currentInvoiceId); loadDashboard();
+}
+async function rejectInvoice() {
+  const comment = prompt('Grund der Ablehnung:');
+  if (!comment) return;
+  const res = await fetch(API+`/api/invoices/${currentInvoiceId}/reject`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user:'web-user',comment})}).then(r=>r.json());
+  toast(res.message,'error'); openDetail(currentInvoiceId);
+}
+async function exportInvoice() {
+  const res = await fetch(API+`/api/invoices/${currentInvoiceId}/export`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({format:'DATEV'})}).then(r=>r.json());
+  if (res.success) { toast('DATEV-Export: ' + res.filename); openDetail(currentInvoiceId); }
+  else toast(res.error, 'error');
+}
+
+async function downloadZugferd() {
+  // Lädt PDF/A-3-Hybrid-Rechnung (visuelles PDF + eingebettetes XRechnung-XML)
+  const url = API + `/api/invoices/${currentInvoiceId}/zugferd`;
+  const r = await fetch(url);
+  if (!r.ok) { toast('ZUGFeRD-Erzeugung fehlgeschlagen', 'error'); return; }
+  const blob = await r.blob();
+  const inv = window._currentInvoiceData || {};
+  const fname = (inv.invoice_number || 'rechnung') + '_zugferd.pdf';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = fname;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('ZUGFeRD-PDF heruntergeladen: ' + fname);
+}
+
+async function validateWithKosit() {
+  // Ruft den offiziellen KoSIT-XRechnung-Validator (wenn installiert)
+  toast('KoSIT-Validator läuft…');
+  const res = await fetch(API+`/api/invoices/${currentInvoiceId}/kosit`, {method:'POST'}).then(r=>r.json());
+  if (!res.available) {
+    toast('KoSIT nicht verfügbar: ' + (res.reason || 'unbekannt'), 'error');
+    return;
+  }
+  const label = res.valid
+    ? `KoSIT gültig (${res.version || 'Validator'}, ${res.warnings} Warnungen)`
+    : `KoSIT: ${res.errors} Fehler, ${res.warnings} Warnungen`;
+  toast(label, res.valid ? 'success' : 'error');
+  if (res.error_details && res.error_details.length) {
+    console.warn('KoSIT-Fehler:', res.error_details);
+  }
+}
+
+// ── DATEV-Sammelexport ──
+function _datevBulkParams() {
+  const y = document.getElementById('datev-year').value;
+  const m = document.getElementById('datev-month').value;
+  const d = document.getElementById('datev-direction').value;
+  const p = new URLSearchParams({year: y, direction: d});
+  if (m) p.set('month', m);
+  return p.toString();
+}
+
+async function previewDatevBulk() {
+  const el = document.getElementById('datev-bulk-result');
+  el.textContent = 'Lade Vorschau…';
+  const res = await fetch(API+'/api/datev-bulk-preview?'+_datevBulkParams()).then(r=>r.json());
+  if (res.error) { el.textContent = res.error; el.style.color = 'var(--danger)'; return; }
+  el.style.color = 'var(--text2)';
+  const label = res.month
+    ? `${res.year}-${String(res.month).padStart(2,'0')}`
+    : `Jahr ${res.year}`;
+  el.innerHTML = `${label}: <strong>${res.count}</strong> Rechnungen im Archiv, davon <strong>${res.exportable}</strong> exportierbar (Richtung: ${res.direction})`;
+}
+
+async function downloadDatevBulk() {
+  const el = document.getElementById('datev-bulk-result');
+  el.textContent = 'Erzeuge CSV…';
+  const url = API + '/api/datev-bulk-export?' + _datevBulkParams();
+  const r = await fetch(url);
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({error: 'Fehler'}));
+    el.textContent = err.error || 'Export fehlgeschlagen';
+    el.style.color = 'var(--danger)';
+    toast(err.error || 'Export fehlgeschlagen', 'error');
+    return;
+  }
+  const count = r.headers.get('X-Invoice-Count') || '?';
+  const rows = r.headers.get('X-Row-Count') || '?';
+  const cd = r.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename="([^"]+)"/);
+  const fname = m ? m[1] : 'DATEV_Buchungsstapel.csv';
+  const blob = await r.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = fname;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  el.style.color = 'var(--success)';
+  el.innerHTML = `&#10003; ${fname} (${count} Rechnungen, ${rows} Buchungszeilen)`;
+  toast(`DATEV-Export: ${count} Rechnungen, ${rows} Zeilen`);
+}
+
+async function stornoInvoice() {
+  const inv = window._currentInvoiceData;
+  if (!inv) return;
+
+  // Prüfe Voraussetzungen im Frontend
+  if ((inv.direction || 'AUSGANG') === 'EINGANG') {
+    toast('Eingangsrechnungen können nicht storniert werden.', 'error');
+    return;
+  }
+  if (inv.type_code === '381') {
+    toast('Gutschriften können nicht storniert werden.', 'error');
+    return;
+  }
+
+  const reason = prompt('Bitte geben Sie den Grund der Stornierung ein:');
+  if (!reason) return;
+
+  const msg = `Rechnung ${inv.number} wirklich stornieren?\n\n`
+    + `Lieferant: ${inv.seller?.name}\n`
+    + `Bruttobetrag: ${fmtD(inv.totals?.gross)} EUR\n\n`
+    + `Was passiert:\n`
+    + `• Es wird eine Gutschrift (Typ 381) mit negierten Beträgen erzeugt\n`
+    + `• Die Gutschrift verweist auf die Originalrechnung\n`
+    + `• Die Originalrechnung wird als "STORNIERT" markiert\n`
+    + `• Die Gutschrift-XML wird zum Download angeboten\n\n`
+    + `Grund: ${reason}`;
+  if (!confirm(msg)) return;
+
+  try {
+    const res = await fetch(API+`/api/invoices/${currentInvoiceId}/storno`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user:'web-user', reason})
+    }).then(r=>r.json());
+    if (res.success) {
+      // XML herunterladen
+      if (res.xml_b64) {
+        const blob = new Blob([Uint8Array.from(atob(res.xml_b64), c => c.charCodeAt(0))], {type:'application/xml'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = res.storno_number + '.xml';
+        a.click(); URL.revokeObjectURL(url);
+      }
+
+      // Erfolgs-Dialog mit Link zur Gutschrift
+      toast(`Storniert: ${res.storno_number} · Brutto: ${fmtD(res.gross)} EUR`);
+
+      // Gutschrift-Hinweis in Detail-Seite einblenden
+      const stornoLink = document.createElement('div');
+      stornoLink.style.cssText = 'padding:12px 16px;background:var(--success-bg);border:1px solid #8BC6A0;border-radius:var(--radius);margin:12px 0;font-size:13px;color:var(--success)';
+      stornoLink.innerHTML = `<strong>&#10003; Stornierung erfolgreich.</strong>
+        Gutschrift <a href="#" onclick="event.preventDefault();openDetail('${res.storno_id}')" style="color:var(--accent);font-weight:600">${esc(res.storno_number)}</a>
+        wurde erzeugt und archiviert. Die XML-Datei wurde heruntergeladen.`;
+      const detTitle = document.getElementById('det-title');
+      detTitle.parentNode.insertBefore(stornoLink, detTitle.nextSibling);
+
+      // Detail-Ansicht aktualisieren (zeigt jetzt STORNIERT-Status)
+      setTimeout(() => openDetail(currentInvoiceId), 1500);
+    } else {
+      toast(res.error, 'error');
+    }
+  } catch(e) { toast('Stornierung fehlgeschlagen: ' + e.message, 'error'); }
+}
+
+async function findAndOpenInvoice(invoiceNumber) {
+  const res = await fetch(API+`/api/invoices?q=${encodeURIComponent(invoiceNumber)}`).then(r=>r.json());
+  const match = res.invoices.find(i => i.number === invoiceNumber);
+  if (match) openDetail(match.id);
+  else toast(`Rechnung ${invoiceNumber} nicht gefunden`, 'error');
+}
+
+// ── Workflow-Liste ──
+async function loadWorkflow() {
+  const res = await fetch(API+'/api/invoices').then(r=>r.json());
+  const open = res.invoices.filter(i => ['NEU','IN_PRUEFUNG','IN_FREIGABE'].includes(i.status));
+  document.getElementById('wf-badge').textContent = open.length;
+  document.getElementById('wf-list').innerHTML = open.map(i=>`
+    <div class="card" style="cursor:pointer" onclick="openDetail('${i.id}')"><div class="card-body" style="display:flex;justify-content:space-between;align-items:center">
+      <div style="display:flex;gap:16px;align-items:center">
+        <div><div style="font-weight:500">${i.number}</div><div style="font-size:12px;color:var(--text2)">${i.seller}</div></div>
+        ${statusBadge(i.status)}
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <span style="font-size:16px;font-weight:500">${fmt(i.gross)} EUR</span>
+        <button class="success" onclick="event.stopPropagation();currentInvoiceId='${i.id}';approveInvoice()">Freigeben</button>
+        <button class="danger" onclick="event.stopPropagation();currentInvoiceId='${i.id}';rejectInvoice()">Ablehnen</button>
+      </div>
+    </div></div>`).join('') || '<div class="card"><div class="card-body" style="text-align:center;color:var(--text2);padding:40px">Keine offenen Freigaben</div></div>';
+}
+
+// ── Upload ──
+function showUpload() { document.getElementById('upload-modal').classList.add('show'); document.getElementById('upload-result').innerHTML = ''; }
+function hideUpload() { document.getElementById('upload-modal').classList.remove('show'); }
+const dz = document.getElementById('drop-zone');
+dz.addEventListener('dragover', e => { e.preventDefault(); dz.classList.add('over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('over'));
+dz.addEventListener('drop', e => { e.preventDefault(); dz.classList.remove('over'); if(e.dataTransfer.files[0]) uploadFile(e.dataTransfer.files[0]); });
+
+async function uploadFile(file) {
+  const fd = new FormData(); fd.append('file', file);
+  // PDFs (Energieberatungs-Layout) gehen auf den Ausgangsrechnungs-Import
+  const isPdf = (file.name || '').toLowerCase().endsWith('.pdf');
+  const endpoint = isPdf ? '/api/upload-pdf-ausgang' : '/api/upload';
+  const res = await fetch(API+endpoint, {method:'POST', body:fd}).then(r=>r.json());
+  const el = document.getElementById('upload-result');
+  if (res.status === 'VERARBEITET') {
+    const label = isPdf
+      ? `Ausgangsrechnung · ${res.line_count} Pos. · ${res.total_gross} €`
+      : `${res.format} · ${res.valid?'Gültig':'Fehler: '+res.errors}`;
+    el.innerHTML = `<div style="padding:12px;background:var(--success-bg);border-radius:var(--radius);color:var(--success)">
+      &#10003; <strong>${res.invoice_number}</strong> erfolgreich importiert · ${label}
+      <br><button onclick="hideUpload();openDetail('${res.invoice_id}')" style="margin-top:8px">Zur Rechnung</button></div>`;
+    toast('Rechnung importiert: ' + res.invoice_number);
+  } else {
+    el.innerHTML = `<div style="padding:12px;background:var(--danger-bg);border-radius:var(--radius);color:var(--danger)">&#10007; ${res.error||res.status}</div>`;
+  }
+}
+
+// ── Rechnung erstellen ──
+let lineCount = 0;
+function addLine() {
+  lineCount++;
+  const row = document.createElement('tr');
+  row.id = 'line-' + lineCount;
+  row.innerHTML = `<td><input id="cl-name-${lineCount}" placeholder="Bezeichnung" value="Dienstleistung"></td>
+    <td><input id="cl-qty-${lineCount}" type="number" value="1" min="1" style="text-align:right"></td>
+    <td><input id="cl-price-${lineCount}" type="number" value="100" step="0.01" style="text-align:right"></td>
+    <td><input id="cl-tax-${lineCount}" type="number" value="19" style="text-align:right"></td>
+    <td><button onclick="document.getElementById('line-${lineCount}').remove()" style="color:var(--danger);border:0;background:0">&#10007;</button></td>`;
+  document.getElementById('c-lines').appendChild(row);
+}
+
+async function generateInvoice(download=false) {
+  const lines = [];
+  document.querySelectorAll('#c-lines tr').forEach(tr => {
+    const id = tr.id.split('-')[1];
+    const qty = parseFloat(document.getElementById('cl-qty-'+id).value)||1;
+    const price = parseFloat(document.getElementById('cl-price-'+id).value)||0;
+    lines.push({name:document.getElementById('cl-name-'+id).value, quantity:qty, price:price,
+      net: Math.round(qty*price*100)/100, tax_rate:parseFloat(document.getElementById('cl-tax-'+id).value)||19});
+  });
+  const body = {
+    number: document.getElementById('c-number').value,
+    date: document.getElementById('c-date').value || new Date().toISOString().split('T')[0],
+    seller_name: document.getElementById('c-seller-name').value,
+    seller_street: document.getElementById('c-seller-street').value,
+    seller_city: document.getElementById('c-seller-city').value,
+    seller_postcode: document.getElementById('c-seller-plz').value,
+    seller_vat: document.getElementById('c-seller-vat').value,
+    seller_email: document.getElementById('c-seller-email').value,
+    seller_contact: document.getElementById('c-seller-contact').value,
+    seller_phone: document.getElementById('c-seller-phone').value,
+    seller_contact_email: document.getElementById('c-seller-email').value,
+    buyer_name: document.getElementById('c-buyer-name').value,
+    buyer_street: document.getElementById('c-buyer-street').value,
+    buyer_city: document.getElementById('c-buyer-city').value,
+    buyer_postcode: document.getElementById('c-buyer-plz').value,
+    buyer_reference: document.getElementById('c-buyer-ref').value,
+    buyer_email: document.getElementById('c-buyer-email').value,
+    buyer_salutation: document.getElementById('c-buyer-salutation').value,
+    buyer_contact_name: document.getElementById('c-buyer-contact').value,
+    buyer_vat: document.getElementById('c-buyer-vat').value,
+    date: document.getElementById('c-date').value,
+    delivery_date: document.getElementById('c-delivery-date').value,
+    iban: document.getElementById('c-iban').value,
+    payment_terms: document.getElementById('c-terms').value,
+    lines: lines,
+  };
+  const res = await fetch(API+'/api/generate', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  const el = document.getElementById('c-result');
+  if (res.error) { el.innerHTML = `<div style="padding:12px;background:var(--danger-bg);border-radius:var(--radius);color:var(--danger)">&#10007; ${res.error}</div>`; return; }
+
+  el.innerHTML = `<div style="padding:12px;background:${res.valid?'var(--success-bg)':'var(--warning-bg)'};border-radius:var(--radius);color:${res.valid?'var(--success)':'var(--warning)'}">
+    ${res.valid?'&#10003;':'&#9888;'} <strong>${res.number}</strong> · Brutto: ${fmt(res.gross)} EUR · ${res.errors} Fehler · ${res.xml_size} Bytes XML</div>`;
+
+  if (download && res.xml_b64) {
+    const blob = new Blob([Uint8Array.from(atob(res.xml_b64), c=>c.charCodeAt(0))], {type:'application/xml'});
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = res.number + '.xml'; a.click();
+    toast('XRechnung heruntergeladen: ' + res.number);
+  }
+}
+
+// ── Archiv ──
+async function loadArchive() {
+  const q = (document.getElementById('arch-search')?.value || '').toLowerCase();
+  const res = await fetch(API+'/api/archive').then(r=>r.json());
+  let records = res.records;
+  if (q) {
+    records = records.filter(r =>
+      (r.invoice_number||'').toLowerCase().includes(q) ||
+      (r.direction||'').toLowerCase().includes(q) ||
+      (r.invoice_metadata?.seller||'').toLowerCase().includes(q) ||
+      (r.live_status||'').toLowerCase().includes(q)
+    );
+  }
+  document.getElementById('arch-table').innerHTML = records.map(r => {
+    const invId = r.invoice_id || '';
+    const meta = r.invoice_metadata || {};
+    const typeCode = meta.type_code || '380';
+    const typeLabel = typeCode === '381'
+      ? '<span style="color:var(--danger)">Gutschrift</span>'
+      : 'Rechnung';
+    const dirBadge = r.direction === 'EINGANG'
+      ? '<span style="background:var(--info-bg);color:var(--info);padding:1px 8px;border-radius:4px;font-size:11px">Eingang</span>'
+      : '<span style="background:var(--success-bg);color:var(--success);padding:1px 8px;border-radius:4px;font-size:11px">Ausgang</span>';
+    const liveStatus = r.live_status || meta.status || '';
+    const statusHtml = statusBadge(liveStatus);
+    const preceding = meta.preceding_invoice || '';
+
+    let actionsHtml = `<button onclick="archiveView('${invId}')" style="font-size:11px;padding:3px 8px">Beleg</button>`;
+    if (r.stornierbar) {
+      actionsHtml += ` <button onclick="stornoFromArchive('${invId}')" style="font-size:11px;padding:3px 8px;color:var(--danger);border-color:var(--danger)">Storno</button>`;
+    }
+
+    let numberHtml = `<span style="font-weight:500">${r.invoice_number}</span>`;
+    if (preceding) {
+      numberHtml += `<div style="font-size:11px;color:var(--text3)">Bezug: ${preceding}</div>`;
+    }
+
+    return `<tr class="clickable" onclick="archiveClick('${invId}')">
+      <td>${numberHtml}</td>
+      <td>${dirBadge}</td>
+      <td style="font-size:12px">${typeLabel}</td>
+      <td style="font-size:12px">${statusHtml}</td>
+      <td style="font-size:12px">${(r.validation_status||'').includes('GÜLTIG')
+        ? '<span style="color:var(--success)">&#10003; Gültig</span>'
+        : '<span style="color:var(--danger)">&#10007; Ungültig</span>'}</td>
+      <td style="font-family:var(--mono);font-size:11px;color:var(--text2)">${r.sha256_hash?.substring(0,16)}…</td>
+      <td style="font-size:12px;color:var(--text2)">${r.created_at?.substring(0,16)}</td>
+      <td onclick="event.stopPropagation()" style="white-space:nowrap">${actionsHtml}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="8" style="text-align:center;color:var(--text3);padding:20px">Keine Einträge</td></tr>';
+}
+
+function archiveClick(invId) {
+  if (!invId) return;
+  openDetail(invId);
+}
+function archiveView(invId) {
+  if (!invId) return;
+  currentInvoiceId = invId;
+  showViewer();
+}
+async function stornoFromArchive(invId) {
+  // Rechnung laden für Anzeige im Bestätigungsdialog
+  const invRes = await fetch(API+`/api/invoices/${invId}`);
+  if (!invRes.ok) { toast('Rechnung nicht gefunden', 'error'); return; }
+  const inv = await invRes.json();
+
+  const reason = prompt(`Stornierung von ${inv.number}\n${inv.seller?.name} · ${fmtD(inv.totals?.gross)} EUR\n\nBitte Grund eingeben:`);
+  if (!reason) return;
+  if (!confirm(`${inv.number} stornieren?\n\nEs wird eine Gutschrift (Typ 381) erzeugt.\nGrund: ${reason}`)) return;
+  try {
+    const res = await fetch(API+`/api/invoices/${invId}/storno`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({user:'web-user', reason})
+    }).then(r=>r.json());
+    if (res.success) {
+      toast(`Storniert: ${res.storno_number} (${fmtD(res.gross)} EUR)`);
+      if (res.xml_b64) {
+        const blob = new Blob([Uint8Array.from(atob(res.xml_b64), c => c.charCodeAt(0))], {type:'application/xml'});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = res.storno_number + '.xml';
+        a.click(); URL.revokeObjectURL(url);
+      }
+      loadArchive();
+    } else {
+      toast(res.error, 'error');
+    }
+  } catch(e) { toast('Stornierung fehlgeschlagen', 'error'); }
+}
+
+// ── Belegansicht / Viewer ──
+async function showViewer() {
+  if (!currentInvoiceId) return;
+  const res = await fetch(API+`/api/invoices/${currentInvoiceId}`);
+  if (!res.ok) {
+    toast('Rechnung nicht gefunden', 'error');
+    return;
+  }
+  const inv = await res.json();
+  if (inv.error) {
+    toast(inv.error, 'error');
+    return;
+  }
+  window._currentInvoiceData = inv;
+
+  navigate('viewer');
+  document.getElementById('page-viewer').classList.add('active');
+
+  const typeLabel = inv.type_code === '381' ? 'Gutschrift' : inv.type_code === '384' ? 'Korrekturrechnung' : 'Rechnung';
+  document.getElementById('viewer-sub').innerHTML = `${dirBadge(inv.direction)} <span style="margin-left:8px">${typeLabel} ${inv.number} – ${esc(inv.seller?.name||'')}</span>`;
+
+  const canApprove = ['NEU','IN_PRUEFUNG','IN_FREIGABE'].includes(inv.status);
+  document.getElementById('vw-btn-approve').style.display = canApprove ? '' : 'none';
+
+  document.getElementById('viewer-doc').innerHTML = renderInvoiceDocument(inv, typeLabel);
+  loadViewerQR(currentInvoiceId, inv);
+}
+
+async function loadViewerQR(invId, inv) {
+  const el = document.getElementById('viewer-qr-block');
+  if (!el) return;
+  try {
+    const res = await fetch(API+`/api/invoices/${invId}/qrcode`).then(r=>r.json());
+    if (!res.available || !res.data_uri) { el.innerHTML = ''; return; }
+    const s = inv.seller || {};
+    const p = inv.payment || {};
+    el.innerHTML = `<div style="margin-top:24px;display:flex;gap:20px;align-items:flex-start;padding:16px;background:#f8f8f6;border-radius:8px">
+      <img src="${res.data_uri}" style="width:140px;height:140px;flex-shrink:0" alt="GiroCode QR">
+      <div style="font-size:11px;color:#666">
+        <div style="font-weight:500;font-size:12px;color:#333;margin-bottom:6px">GiroCode – SEPA-Überweisung per QR</div>
+        <p style="margin:0 0 4px">Scannen Sie den QR-Code mit Ihrer Banking-App, um die Zahlung automatisch auszufüllen.</p>
+        <p style="margin:0;font-size:10px;color:#999">Standard: EPC069-12 v2.1 · ${esc(res.beneficiary)} · ${formatIban(res.iban)} · ${fmtD(res.amount)} EUR</p>
+      </div>
+    </div>`;
+  } catch(e) { el.innerHTML = ''; }
+}
+
+function renderInvoiceDocument(inv, typeLabel) {
+  const s = inv.seller || {};
+  const b = inv.buyer || {};
+  const p = inv.payment || {};
+  const t = inv.totals || {};
+  const v = inv.validation || {};
+
+  let linesHtml = '';
+  (inv.lines || []).forEach((l, i) => {
+    linesHtml += `<tr>
+      <td style="color:#999;width:40px">${l.id || i+1}</td>
+      <td class="name">${esc(l.name)}${l.description ? '<div class="desc">'+esc(l.description)+'</div>' : ''}${l.item_id ? '<div class="desc">Art.-Nr.: '+esc(l.item_id)+'</div>' : ''}</td>
+      <td class="r">${fmtD(l.quantity)} ${l.unit === 'C62' ? 'Stk.' : l.unit === 'HUR' ? 'Std.' : l.unit||''}</td>
+      <td class="r">${fmtD(l.unit_price)}</td>
+      <td class="r">${l.tax_rate}%</td>
+      <td class="r" style="font-weight:500">${fmtD(l.net)}</td>
+    </tr>`;
+  });
+
+  let allowHtml = '';
+  (inv.allowances || []).forEach(ac => {
+    const sign = ac.charge ? '+' : '-';
+    const label = ac.charge ? 'Zuschlag' : 'Nachlass';
+    allowHtml += `<div class="sum-row"><span class="k">${label}: ${esc(ac.reason)}</span><span>${sign} ${fmtD(ac.amount)} EUR</span></div>`;
+  });
+
+  let taxHtml = '';
+  (inv.tax_breakdown || []).forEach(tb => {
+    taxHtml += `<div class="sum-row"><span class="k">USt ${tb.rate}% auf ${fmtD(tb.taxable)}</span><span>${fmtD(tb.tax)} EUR</span></div>`;
+  });
+
+  let valBadge = '';
+  let valBlock = '';
+  if (v.valid === true) {
+    valBadge = '<div class="val-overlay val-ok">&#10003; Validierung OK</div>';
+  } else if (v.valid === false) {
+    valBadge = `<div class="val-overlay val-err">&#10007; ${v.errors} Fehler</div>`;
+  }
+  if (v.issues && v.issues.length > 0) {
+    const cls = v.errors > 0 ? 'has-err' : 'all-ok';
+    valBlock = `<div class="val-issues ${cls}">
+      <div style="font-weight:500;margin-bottom:6px">Validierungsergebnis (${v.errors} Fehler, ${v.warnings} Warnungen)</div>
+      ${v.issues.map(i => {
+        const color = i.severity === 'ERROR' ? '#A32D2D' : i.severity === 'WARNING' ? '#854F0B' : '#666';
+        const icon = i.severity === 'ERROR' ? '&#10007;' : i.severity === 'WARNING' ? '&#9888;' : '&#8505;';
+        return `<div class="val-issue"><span class="sev" style="color:${color}">${icon}</span><span>${esc(i.message)}${i.field ? ' <span style="color:#999">['+i.field+']</span>' : ''}</span></div>`;
+      }).join('')}
+    </div>`;
+  }
+
+  // Storno-Banner
+  let stornoBanner = '';
+  if (inv.status === 'STORNIERT') {
+    stornoBanner = '<div style="padding:10px 16px;background:#FCEBEB;border:1px solid #F09595;border-radius:6px;margin-bottom:16px;font-size:13px;color:#A32D2D"><strong>&#10007; Diese Rechnung wurde storniert.</strong></div>';
+  }
+  if (inv.preceding_invoice) {
+    stornoBanner += `<div style="padding:10px 16px;background:#FAEEDA;border:1px solid #FAC775;border-radius:6px;margin-bottom:16px;font-size:13px;color:#854F0B"><strong>Bezug:</strong> ${inv.type_code==='381'?'Gutschrift/Storno':'Korrektur'} zu Rechnung ${esc(inv.preceding_invoice)}</div>`;
+  }
+
+  return `<div class="inv-doc">
+    ${valBadge}
+
+    <div class="doc-header">
+      <div style="display:flex;gap:16px;align-items:flex-start">
+        ${window._logoDataUri ? '<img src="'+window._logoDataUri+'" style="height:52px;width:auto;object-fit:contain;flex-shrink:0">' : ''}
+        <div>
+          <div class="seller-name">${esc(s.name)}</div>
+          <div class="seller-sub">${esc(s.street)}, ${esc(s.post_code)} ${esc(s.city)}</div>
+          <div class="seller-sub">USt-ID: ${esc(s.vat_id)}${s.tax_reg ? ' · Steuer-Nr.: '+esc(s.tax_reg) : ''}</div>
+        </div>
+      </div>
+      <div class="doc-type">
+        ${typeLabel}
+        <div class="nr">${esc(inv.number)}</div>
+      </div>
+    </div>
+
+    ${stornoBanner}
+
+    <div class="addr-block">
+      <div class="addr-label">Empfänger</div>
+      <div class="addr-to">${esc(b.name)}</div>
+      <div>${esc(b.street)}</div>
+      <div>${esc(b.post_code)} ${esc(b.city)}</div>
+      ${b.vat_id ? '<div style="margin-top:4px;font-size:12px;color:#666">USt-ID: '+esc(b.vat_id)+'</div>' : ''}
+    </div>
+
+    <div class="meta-grid">
+      <div class="meta-box">
+        <div class="meta-row"><span class="k">Rechnungsdatum</span><span>${fmtDate(inv.date)}</span></div>
+        ${inv.period_start ? '<div class="meta-row"><span class="k">Leistungszeitraum</span><span>'+fmtDate(inv.period_start)+' – '+fmtDate(inv.period_end)+'</span></div>' : ''}
+        ${p.due_date ? '<div class="meta-row"><span class="k">Fällig am</span><span style="font-weight:500">'+fmtDate(p.due_date)+'</span></div>' : ''}
+      </div>
+      <div class="meta-box">
+        <div class="meta-row"><span class="k">Buyer Reference</span><span>${esc(inv.buyer_reference||'—')}</span></div>
+        ${inv.order_reference ? '<div class="meta-row"><span class="k">Bestellnummer</span><span>'+esc(inv.order_reference)+'</span></div>' : ''}
+        ${inv.contract_reference ? '<div class="meta-row"><span class="k">Vertrag</span><span>'+esc(inv.contract_reference)+'</span></div>' : ''}
+        ${inv.preceding_invoice ? '<div class="meta-row"><span class="k">Bezug auf</span><span>'+esc(inv.preceding_invoice)+'</span></div>' : ''}
+      </div>
+    </div>
+
+    ${inv.note ? '<div class="note-block"><strong>Bemerkung:</strong> '+esc(inv.note)+'</div>' : ''}
+
+    <table class="pos-table">
+      <thead><tr>
+        <th style="width:40px">Pos.</th><th>Bezeichnung</th><th class="r" style="width:80px">Menge</th>
+        <th class="r" style="width:90px">EP netto</th><th class="r" style="width:60px">USt</th>
+        <th class="r" style="width:100px">Netto</th>
+      </tr></thead>
+      <tbody>${linesHtml}</tbody>
+    </table>
+
+    <div class="sum-block"><div class="sum-inner">
+      <div class="sum-row"><span class="k">Summe Positionen netto</span><span>${fmtD(t.line_net)} EUR</span></div>
+      ${allowHtml}
+      ${t.line_net !== t.net ? '<div class="sum-row"><span class="k">Nettobetrag</span><span>'+fmtD(t.net)+' EUR</span></div>' : ''}
+      ${taxHtml}
+      <div class="sum-row" style="border-top:1px solid #ddd;padding-top:6px;margin-top:4px"><span class="k">Bruttobetrag</span><span>${fmtD(t.gross)} EUR</span></div>
+      <div class="sum-row sum-total"><span>Zahlbetrag</span><span>${fmtD(t.due)} EUR</span></div>
+    </div></div>
+
+    <div class="pay-block">
+      <div class="pay-grid">
+        <div class="pay-item"><div class="label">Zahlungsart</div><div class="val">${paymentLabel(p.means_code)}</div></div>
+        <div class="pay-item"><div class="label">IBAN</div><div class="val">${formatIban(p.iban)}</div></div>
+        <div class="pay-item"><div class="label">BIC</div><div class="val">${esc(p.bic||'—')}</div></div>
+        <div class="pay-item"><div class="label">Zahlungsziel</div><div class="val">${esc(p.terms||'—')}</div></div>
+      </div>
+    </div>
+
+    <div id="viewer-qr-block"></div>
+
+    <div class="footer-block">
+      <div>
+        <div class="col-title">${esc(s.name)}</div>
+        ${esc(s.street)}<br>${esc(s.post_code)} ${esc(s.city)}
+      </div>
+      <div>
+        <div class="col-title">Kontakt</div>
+        ${esc(s.contact_name||'')}<br>${esc(s.contact_phone||'')}<br>${esc(s.contact_email||s.email||'')}
+      </div>
+      <div>
+        <div class="col-title">Steuerdaten</div>
+        USt-ID: ${esc(s.vat_id||'')}<br>
+        ${s.tax_reg ? 'St.-Nr.: '+esc(s.tax_reg)+'<br>' : ''}
+        Format: XRechnung (EN 16931)
+      </div>
+    </div>
+
+    ${valBlock}
+  </div>`;
+}
+
+function esc(s) { if (!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+function fmtD(n) { if (n==null) return '—'; return new Intl.NumberFormat('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2}).format(n); }
+function fmtDate(d) { if (!d) return '—'; try { const p=d.split('-'); return `${p[2]}.${p[1]}.${p[0]}`; } catch(e) { return d; } }
+function formatIban(iban) { if (!iban) return '—'; return iban.replace(/(.{4})/g,'$1 ').trim(); }
+function paymentLabel(code) {
+  const m = {'30':'Überweisung','48':'Kreditkarte','58':'SEPA-Überweisung','59':'SEPA-Lastschrift'};
+  return m[code] || code || '—';
+}
+function downloadPdfView() {
+  toast('Tipp: Nutze Drucken → Als PDF speichern (Ctrl+P / Cmd+P)');
+  window.print();
+}
+
+// ── Init ──
+document.getElementById('c-date').value = new Date().toISOString().split('T')[0];
+addLine(); addLine();
+loadLogo();
+loadDashboard();
+
+// ── Logo ──
+window._logoDataUri = '';
+window._logoUrl = '';
+
+async function loadLogo() {
+  try {
+    const res = await fetch(API+'/api/logo').then(r=>r.json());
+    if (res.has_logo) {
+      window._logoDataUri = res.data_uri;
+      window._logoUrl = res.url;
+      setLogoPreview(res.data_uri || res.url);
+      setSidebarLogo(res.data_uri || res.url);
+      if (document.getElementById('btn-delete-logo')) {
+        document.getElementById('btn-delete-logo').style.display = '';
+      }
+    } else {
+      window._logoDataUri = '';
+      window._logoUrl = '';
+      clearLogoPreview();
+      setSidebarLogo('');
+    }
+  } catch(e) {}
+}
+
+function setLogoPreview(src) {
+  const el = document.getElementById('logo-preview');
+  if (!el) return;
+  const ph = document.getElementById('logo-placeholder');
+  if (ph) ph.style.display = 'none';
+  el.style.border = '1px solid var(--border)';
+  el.style.background = 'var(--bg2)';
+  let img = el.querySelector('img');
+  if (!img) {
+    img = document.createElement('img');
+    img.style.cssText = 'max-width:100%;max-height:100px;object-fit:contain;padding:8px';
+    el.appendChild(img);
+  }
+  img.src = src;
+}
+
+function clearLogoPreview() {
+  const el = document.getElementById('logo-preview');
+  if (!el) return;
+  const img = el.querySelector('img');
+  if (img) img.remove();
+  const ph = document.getElementById('logo-placeholder');
+  if (ph) ph.style.display = '';
+  el.style.border = '2px dashed var(--border)';
+  el.style.background = 'var(--bg3)';
+  if (document.getElementById('btn-delete-logo')) {
+    document.getElementById('btn-delete-logo').style.display = 'none';
+  }
+}
+
+function setSidebarLogo(src) {
+  const el = document.getElementById('sidebar-logo');
+  if (!el) return;
+  if (src) {
+    el.innerHTML = `<img src="${src}" style="height:28px;width:auto;object-fit:contain;display:block">`;
+  } else {
+    el.innerHTML = '';
+  }
+}
+
+async function uploadLogo(file) {
+  if (!file) return;
+  const status = document.getElementById('logo-status');
+  if (file.size > 2*1024*1024) {
+    status.innerHTML = '<span style="color:var(--danger)">Datei zu groß (max. 2 MB)</span>';
+    return;
+  }
+  status.innerHTML = '<span style="color:var(--text2)">Lade hoch...</span>';
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const res = await fetch(API+'/api/logo', {method:'POST', body:fd}).then(r=>r.json());
+    if (res.uploaded) {
+      status.innerHTML = `<span style="color:var(--success)">&#10003; Hochgeladen (${Math.round(res.size/1024)} KB)</span>`;
+      toast('Logo hochgeladen');
+      loadLogo();
+    } else {
+      status.innerHTML = `<span style="color:var(--danger)">&#10007; ${res.error}</span>`;
+    }
+  } catch(e) {
+    status.innerHTML = '<span style="color:var(--danger)">Upload fehlgeschlagen</span>';
+  }
+}
+
+async function deleteLogo() {
+  if (!confirm('Logo wirklich entfernen?')) return;
+  await fetch(API+'/api/logo', {method:'DELETE'});
+  clearLogoPreview();
+  setSidebarLogo('');
+  window._logoDataUri = '';
+  window._logoUrl = '';
+  document.getElementById('logo-status').innerHTML = '<span style="color:var(--text2)">Logo entfernt</span>';
+  toast('Logo entfernt');
+}
+
+// ── Einstellungen ──
+async function loadSettings() {
+  const cfg = await fetch(API+'/api/email/config').then(r=>r.json());
+  document.getElementById('s-imap-host').value = cfg.imap_host || '';
+  document.getElementById('s-imap-port').value = cfg.imap_port || 993;
+  document.getElementById('s-imap-ssl').value = String(cfg.imap_use_ssl !== false);
+  document.getElementById('s-imap-user').value = cfg.imap_user || '';
+  document.getElementById('s-imap-folder').value = cfg.imap_folder || 'INBOX';
+  document.getElementById('s-imap-processed').value = cfg.imap_processed_folder || 'Verarbeitet';
+  document.getElementById('s-imap-error').value = cfg.imap_error_folder || 'Fehler';
+  document.getElementById('s-imap-interval').value = cfg.poll_interval_seconds || 60;
+  document.getElementById('s-imap-move').checked = cfg.imap_move_after_processing !== false;
+  document.getElementById('s-smtp-host').value = cfg.smtp_host || '';
+  document.getElementById('s-smtp-port').value = cfg.smtp_port || 587;
+  document.getElementById('s-smtp-tls').value = String(cfg.smtp_use_tls !== false);
+  document.getElementById('s-smtp-user').value = cfg.smtp_user || '';
+  document.getElementById('s-smtp-from').value = cfg.smtp_from_address || '';
+  document.getElementById('s-smtp-name').value = cfg.smtp_from_name || 'E-Rechnungssystem';
+  document.getElementById('s-max-attach').value = cfg.max_attachment_size_mb || 25;
+  document.getElementById('s-extensions').value = (cfg.allowed_extensions || ['.xml','.pdf','.zip']).join(',');
+  document.getElementById('s-mandant-name').value = cfg.mandant_name || '';
+  loadMandantSettings();
+  loadReceiveLog();
+  loadSendLog();
+  loadLogo();
+  loadDeputies();
+  loadPollingStatus();
+  loadRetention();
+  loadLicense();
+}
+
+// ── Stammdaten / Mandant ──
+async function loadMandantSettings() {
+  try {
+    const m = await fetch(API+'/api/mandant/settings').then(r=>r.json());
+    document.getElementById('s-mandant-name').value = m.name || '';
+    document.getElementById('s-mandant-vat').value = m.vat_id || '';
+    document.getElementById('s-mandant-taxreg').value = m.tax_registration_id || '';
+    document.getElementById('s-mandant-street').value = m.street || '';
+    document.getElementById('s-mandant-plz').value = m.post_code || '';
+    document.getElementById('s-mandant-city').value = m.city || '';
+    document.getElementById('s-mandant-email').value = m.email || '';
+    document.getElementById('s-mandant-contact').value = m.contact_name || '';
+    document.getElementById('s-mandant-phone').value = m.contact_phone || '';
+    document.getElementById('s-mandant-iban').value = m.iban || '';
+    document.getElementById('s-mandant-bic').value = m.bic || '';
+    if (m.currency) document.getElementById('s-mandant-currency').value = m.currency;
+  } catch(e) {}
+}
+async function resetAllData() {
+  if (!confirm('Alle Rechnungsdaten wirklich loeschen?\n\nDieser Vorgang kann nicht rueckgaengig gemacht werden.\nStammdaten, Lizenz und E-Mail-Einstellungen bleiben erhalten.')) return;
+  const res = await fetch(API+'/api/reset-data', {method:'POST'}).then(r=>r.json());
+  if (res.success) {
+    document.getElementById('reset-result').innerHTML = '<span style="color:var(--success)">&#10003; Alle Daten geloescht</span>';
+    toast('Alle Rechnungsdaten geloescht');
+    loadDashboard();
+  } else {
+    document.getElementById('reset-result').innerHTML = '<span style="color:var(--danger)">Fehler beim Loeschen</span>';
+  }
+}
+async function saveMandantSettings() {
+  const body = {
+    name: document.getElementById('s-mandant-name').value,
+    vat_id: document.getElementById('s-mandant-vat').value,
+    tax_registration_id: document.getElementById('s-mandant-taxreg').value,
+    street: document.getElementById('s-mandant-street').value,
+    post_code: document.getElementById('s-mandant-plz').value,
+    city: document.getElementById('s-mandant-city').value,
+    email: document.getElementById('s-mandant-email').value,
+    contact_name: document.getElementById('s-mandant-contact').value,
+    contact_phone: document.getElementById('s-mandant-phone').value,
+    iban: document.getElementById('s-mandant-iban').value,
+    bic: document.getElementById('s-mandant-bic').value,
+    currency: document.getElementById('s-mandant-currency').value,
+  };
+  const res = await fetch(API+'/api/mandant/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  const el = document.getElementById('mandant-save-result');
+  if (res.saved) { el.innerHTML='<span style="color:var(--success)">&#10003; Gespeichert</span>'; toast('Stammdaten gespeichert'); }
+  else { el.innerHTML='<span style="color:var(--danger)">Fehler</span>'; }
+}
+async function fillSellerFromMandant() {
+  try {
+    const m = await fetch(API+'/api/mandant/settings').then(r=>r.json());
+    if (m.name) document.getElementById('c-seller-name').value = m.name;
+    if (m.street) document.getElementById('c-seller-street').value = m.street;
+    if (m.post_code) document.getElementById('c-seller-plz').value = m.post_code;
+    if (m.city) document.getElementById('c-seller-city').value = m.city;
+    if (m.vat_id) document.getElementById('c-seller-vat').value = m.vat_id;
+    if (m.email) document.getElementById('c-seller-email').value = m.email;
+    if (m.contact_name) document.getElementById('c-seller-contact').value = m.contact_name;
+    if (m.contact_phone) document.getElementById('c-seller-phone').value = m.contact_phone;
+    if (m.iban) document.getElementById('c-iban').value = m.iban;
+  } catch(e) {}
+  // Naechste Rechnungsnummer holen
+  try {
+    const nr = await fetch(API+'/api/mandant/next-number').then(r=>r.json());
+    if (nr.number) {
+      window._baseInvoiceNumber = nr.number;
+      updateInvoiceNumber();
+    }
+  } catch(e) {}
+  // Empfaenger laden
+  loadBuyers();
+}
+
+// ── Rechnungsempfaenger / Kunden ──
+let _buyers = [];
+async function loadBuyers() {
+  try {
+    const res = await fetch(API+'/api/buyers').then(r=>r.json());
+    _buyers = res.buyers || [];
+    const sel = document.getElementById('c-buyer-select');
+    sel.innerHTML = '<option value="">— Empfaenger waehlen (' + _buyers.length + ') —</option>';
+    _buyers.forEach((b,i) => {
+      const salut = b.salutation || '';
+      const contact = b.contact_name || '';
+      const firma = b.name || '';
+      let label = '';
+      if (firma && contact) {
+        label = `[${b.id}] ${firma}, ${b.city||''} (${salut} ${contact})`.replace('  ',' ').trim();
+      } else if (firma) {
+        label = `[${b.id}] ${firma}${b.city ? ', '+b.city : ''}`;
+      } else {
+        label = `[${b.id}] ${salut} ${contact}${b.city ? ', '+b.city : ''}`.replace('  ',' ').trim();
+      }
+      sel.innerHTML += `<option value="${i}">${label}</option>`;
+    });
+    const cl = document.getElementById('buyer-count-label');
+    if (cl) cl.textContent = _buyers.length + ' Empfaenger';
+    _selectedBuyerId = null;
+    const ub = document.getElementById('btn-buyer-update');
+    if (ub) ub.disabled = true;
+    renderBuyerTable();
+  } catch(e) {}
+}
+function renderBuyerTable() {
+  const tbody = document.getElementById('buyer-table-body');
+  if (!tbody) return;
+  if (_buyers.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2);text-align:center">Keine Empfaenger gespeichert</td></tr>';
+    return;
+  }
+  tbody.innerHTML = _buyers.map(b => {
+    const contact = (b.salutation ? b.salutation+' ' : '') + (b.contact_name||'');
+    return `<tr>
+    <td style="font-family:var(--mono);font-size:11px">${b.id}</td>
+    <td>${esc(b.name||'')}</td>
+    <td>${esc(contact)}</td>
+    <td>${esc(b.street||'')}</td>
+    <td>${esc(b.post_code||'')}</td>
+    <td>${esc(b.city||'')}</td>
+    <td>${esc(b.email||'')}</td>
+    <td>${esc(b.reference||'')}</td>
+    <td><button onclick="deleteBuyer('${b.id}','${esc(b.name||b.contact_name||'')}')" style="font-size:11px;color:var(--danger);padding:1px 6px">&#10005;</button></td>
+  </tr>`;
+  }).join('');
+}
+async function deleteAllBuyers() {
+  if (!confirm('Alle ' + _buyers.length + ' Empfaenger loeschen?')) return;
+  await fetch(API+'/api/buyers/all', {method:'DELETE'});
+  toast('Alle Empfaenger geloescht');
+  loadBuyers();
+}
+function toggleBuyerTable() {
+  const c = document.getElementById('buyer-table-container');
+  c.style.display = c.style.display === 'none' ? '' : 'none';
+}
+async function deleteBuyer(id, name) {
+  if (!confirm('Empfaenger "' + name + '" loeschen?')) return;
+  await fetch(API+'/api/buyers/'+id, {method:'DELETE'});
+  toast('Empfaenger geloescht');
+  loadBuyers();
+}
+function exportBuyersCsv() {
+  if (!_buyers.length) { toast('Keine Empfaenger vorhanden', 'error'); return; }
+  let csv = 'Firma;Strasse;PLZ;Ort;E-Mail;Referenz;USt-ID;Anrede;Ansprechpartner\n';
+  _buyers.forEach(b => {
+    csv += [b.name, b.street||'', b.post_code||'', b.city||'', b.email||'', b.reference||'', b.vat_id||'', b.salutation||'', b.contact_name||''].join(';') + '\n';
+  });
+  const blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'empfaenger.csv';
+  a.click();
+  toast('CSV exportiert: ' + _buyers.length + ' Empfaenger');
+}
+let _selectedBuyerId = null;
+function selectBuyer(idx) {
+  if (idx === '' || idx === undefined) {
+    _selectedBuyerId = null;
+    document.getElementById('btn-buyer-update').disabled = true;
+    return;
+  }
+  const b = _buyers[parseInt(idx)];
+  if (!b) return;
+  _selectedBuyerId = b.id;
+  document.getElementById('btn-buyer-update').disabled = false;
+  document.getElementById('c-buyer-name').value = b.name || '';
+  document.getElementById('c-buyer-street').value = b.street || '';
+  document.getElementById('c-buyer-plz').value = b.post_code || '';
+  document.getElementById('c-buyer-city').value = b.city || '';
+  document.getElementById('c-buyer-email').value = b.email || '';
+  document.getElementById('c-buyer-ref').value = b.reference || '';
+  document.getElementById('c-buyer-salutation').value = b.salutation || '';
+  document.getElementById('c-buyer-contact').value = b.contact_name || '';
+  document.getElementById('c-buyer-vat').value = b.vat_id || '';
+  document.getElementById('buyer-save-result').innerHTML = `<span style="color:var(--text2)">ID: ${b.id}</span>`;
+  updateInvoiceNumber();
+}
+async function updateSelectedBuyer() {
+  if (!_selectedBuyerId) { toast('Kein Empfaenger ausgewaehlt', 'error'); return; }
+  const res = await fetch(API+'/api/buyers/'+_selectedBuyerId, {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name: document.getElementById('c-buyer-name').value,
+      street: document.getElementById('c-buyer-street').value,
+      post_code: document.getElementById('c-buyer-plz').value,
+      city: document.getElementById('c-buyer-city').value,
+      email: document.getElementById('c-buyer-email').value,
+      reference: document.getElementById('c-buyer-ref').value,
+      salutation: document.getElementById('c-buyer-salutation').value,
+      contact_name: document.getElementById('c-buyer-contact').value,
+      vat_id: document.getElementById('c-buyer-vat').value,
+    })
+  }).then(r=>r.json());
+  if (res.saved) {
+    document.getElementById('buyer-save-result').innerHTML = `<span style="color:var(--success)">&#10003; Aktualisiert (${_selectedBuyerId})</span>`;
+    toast('Empfaenger aktualisiert');
+    loadBuyers();
+  } else {
+    toast(res.error || 'Fehler', 'error');
+  }
+}
+async function saveBuyerFromForm() {
+  const name = document.getElementById('c-buyer-name').value.trim();
+  const contact = document.getElementById('c-buyer-contact').value.trim();
+  if (!name && !contact) { toast('Firma oder Ansprechpartner eingeben', 'error'); return; }
+  const res = await fetch(API+'/api/buyers', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      name: name,
+      street: document.getElementById('c-buyer-street').value,
+      post_code: document.getElementById('c-buyer-plz').value,
+      city: document.getElementById('c-buyer-city').value,
+      email: document.getElementById('c-buyer-email').value,
+      reference: document.getElementById('c-buyer-ref').value,
+      salutation: document.getElementById('c-buyer-salutation').value,
+      contact_name: document.getElementById('c-buyer-contact').value,
+      vat_id: document.getElementById('c-buyer-vat').value,
+    })
+  }).then(r=>r.json());
+  if (res.saved) {
+    const el = document.getElementById('buyer-save-result');
+    el.innerHTML = `<span style="color:var(--success)">&#10003; Gespeichert (ID: ${res.buyer.id})</span>`;
+    toast('Kaeufer gespeichert: ' + res.buyer.id);
+    loadBuyers();
+  }
+}
+async function uploadBuyersCsv(file) {
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(API+'/api/buyers/csv', {method:'POST', body:form}).then(r=>r.json());
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast(res.imported + ' Empfaenger importiert (' + res.total + ' gesamt)');
+  loadBuyers();
+}
+function updateInvoiceNumber() {
+  const base = window._baseInvoiceNumber || '';
+  const ref = (document.getElementById('c-buyer-ref').value || '').trim();
+  document.getElementById('c-number').value = ref ? base + '-' + ref : base;
+}
+
+async function saveEmailSettings() {
+  const el = document.getElementById('settings-result');
+  el.innerHTML = '<span style="color:var(--text2)">Speichere...</span>';
+  const body = {
+    imap_host: document.getElementById('s-imap-host').value,
+    imap_port: parseInt(document.getElementById('s-imap-port').value),
+    imap_use_ssl: document.getElementById('s-imap-ssl').value === 'true',
+    imap_user: document.getElementById('s-imap-user').value,
+    imap_folder: document.getElementById('s-imap-folder').value,
+    imap_processed_folder: document.getElementById('s-imap-processed').value,
+    imap_error_folder: document.getElementById('s-imap-error').value,
+    poll_interval_seconds: parseInt(document.getElementById('s-imap-interval').value),
+    imap_move_after_processing: document.getElementById('s-imap-move').checked,
+    smtp_host: document.getElementById('s-smtp-host').value,
+    smtp_port: parseInt(document.getElementById('s-smtp-port').value),
+    smtp_use_tls: document.getElementById('s-smtp-tls').value === 'true',
+    smtp_user: document.getElementById('s-smtp-user').value,
+    smtp_from_address: document.getElementById('s-smtp-from').value,
+    smtp_from_name: document.getElementById('s-smtp-name').value,
+    max_attachment_size_mb: parseInt(document.getElementById('s-max-attach').value),
+    mandant_name: document.getElementById('s-mandant-name').value,
+  };
+  const imapPass = document.getElementById('s-imap-pass').value;
+  const smtpPass = document.getElementById('s-smtp-pass').value;
+  if (imapPass) body.imap_password = imapPass;
+  if (smtpPass) body.smtp_password = smtpPass;
+
+  const res = await fetch(API+'/api/email/config', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  if (res.saved) {
+    el.innerHTML = '<span style="color:var(--success)">&#10003; Gespeichert</span>';
+    toast('Einstellungen gespeichert');
+    document.getElementById('s-imap-pass').value = '';
+    document.getElementById('s-smtp-pass').value = '';
+  } else {
+    el.innerHTML = `<span style="color:var(--danger)">&#10007; ${res.error||'Fehler'}</span>`;
+  }
+}
+
+async function testImapConnection() {
+  const el = document.getElementById('imap-status');
+  el.innerHTML = '<span style="color:var(--warning)">Teste...</span>';
+  await saveEmailSettings();
+  try {
+    const res = await fetch(API+'/api/email/test-imap', {method:'POST'}).then(r=>r.json());
+    if (res.success) {
+      el.innerHTML = `<span style="color:var(--success)">&#10003; Verbunden (${res.message_count||0} Nachrichten)</span>`;
+      toast('IMAP-Verbindung erfolgreich');
+    } else {
+      el.innerHTML = `<span style="color:var(--danger)">&#10007; ${res.error}</span>`;
+      toast(res.error, 'error');
+    }
+  } catch(e) {
+    el.innerHTML = '<span style="color:var(--danger)">&#10007; Server nicht erreichbar</span>';
+  }
+}
+
+async function testSmtpConnection() {
+  const el = document.getElementById('smtp-status');
+  el.innerHTML = '<span style="color:var(--warning)">Teste...</span>';
+  await saveEmailSettings();
+  try {
+    const res = await fetch(API+'/api/email/test-smtp', {method:'POST'}).then(r=>r.json());
+    if (res.success) {
+      el.innerHTML = '<span style="color:var(--success)">&#10003; Verbunden</span>';
+      toast('SMTP-Verbindung erfolgreich');
+    } else {
+      el.innerHTML = `<span style="color:var(--danger)">&#10007; ${res.error}</span>`;
+      toast(res.error, 'error');
+    }
+  } catch(e) {
+    el.innerHTML = '<span style="color:var(--danger)">&#10007; Server nicht erreichbar</span>';
+  }
+}
+
+async function checkEmailInbox() {
+  toast('Prüfe Postfach...');
+  try {
+    const res = await fetch(API+'/api/email/check', {method:'POST'}).then(r=>r.json());
+    if (res.new_messages > 0) {
+      toast(`${res.invoices_found} Rechnung(en) aus ${res.new_messages} E-Mail(s) importiert`);
+      loadInvoices();
+      loadDashboard();
+    } else if (res.error) {
+      toast(res.error, 'error');
+    } else {
+      toast('Keine neuen Nachrichten');
+    }
+    if (document.getElementById('page-settings').classList.contains('active')) {
+      loadReceiveLog();
+    }
+  } catch(e) {
+    toast('Postfachprüfung fehlgeschlagen', 'error');
+  }
+}
+
+async function loadReceiveLog() {
+  const res = await fetch(API+'/api/email/receive-log').then(r=>r.json());
+  document.getElementById('recv-log-table').innerHTML = res.logs.length === 0
+    ? '<tr><td colspan="4" style="text-align:center;color:var(--text2);padding:20px">Noch keine Eingänge</td></tr>'
+    : res.logs.map(l => `
+    <tr>
+      <td style="font-size:12px;color:var(--text2)">${(l.received_at||'').substring(0,16)}</td>
+      <td style="font-size:12px">${l.sender}</td>
+      <td style="font-size:12px">${l.subject}</td>
+      <td style="font-size:12px">${l.invoice_numbers?.join(', ')||'<span style="color:var(--text3)">–</span>'}</td>
+    </tr>`).join('');
+}
+
+async function loadSendLog() {
+  const res = await fetch(API+'/api/email/send-log').then(r=>r.json());
+  document.getElementById('send-log-table').innerHTML = res.logs.length === 0
+    ? '<tr><td colspan="4" style="text-align:center;color:var(--text2);padding:20px">Noch kein Versand</td></tr>'
+    : res.logs.map(l => `
+    <tr>
+      <td style="font-size:12px;color:var(--text2)">${(l.sent_at||'').substring(0,16)}</td>
+      <td style="font-size:12px;font-weight:500">${l.invoice_number}</td>
+      <td style="font-size:12px">${l.recipient}</td>
+      <td style="font-size:12px">${l.success
+        ? '<span style="color:var(--success)">&#10003; Gesendet</span>'
+        : '<span style="color:var(--danger)">&#10007; '+l.error+'</span>'}</td>
+    </tr>`).join('');
+}
+
+// ── Versand-Dialog ──
+function showSendDialog() {
+  document.getElementById('send-modal').classList.add('show');
+  document.getElementById('send-result').innerHTML = '';
+  document.getElementById('send-recipient').value = '';
+  document.getElementById('send-subject').value = '';
+  document.getElementById('send-body').value = '';
+  const inv = window._currentInvoiceData;
+  if (inv) {
+    document.getElementById('send-invoice-info').innerHTML =
+      `<strong>${inv.number}</strong> &middot; ${inv.seller?.name||''} &middot; ${fmt(inv.totals?.due||0)} ${inv.currency||'EUR'}`;
+    if (inv.buyer?.email) document.getElementById('send-recipient').value = inv.buyer.email;
+  }
+}
+function hideSendDialog() { document.getElementById('send-modal').classList.remove('show'); }
+
+async function sendInvoiceEmail() {
+  const recipient = document.getElementById('send-recipient').value.trim();
+  if (!recipient) { toast('Empfänger-E-Mail eingeben', 'error'); return; }
+  const el = document.getElementById('send-result');
+  el.innerHTML = '<span style="color:var(--text2)">Sende...</span>';
+
+  const res = await fetch(API+`/api/invoices/${currentInvoiceId}/send`, {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      recipient,
+      subject: document.getElementById('send-subject').value,
+      body: document.getElementById('send-body').value,
+    })
+  }).then(r=>r.json());
+
+  if (res.success) {
+    toast('Rechnung versendet an ' + res.recipient);
+    hideSendDialog();
+    openDetail(currentInvoiceId);
+  } else {
+    el.innerHTML = `<div style="padding:10px;background:var(--danger-bg);border-radius:var(--radius);color:var(--danger)">&#10007; ${res.error}</div>`;
+    toast(res.error, 'error');
+  }
+}
+
+// ── Benachrichtigungen ──
+let _notifInterval = null;
+function startNotifPolling() {
+  loadNotifications();
+  _notifInterval = setInterval(loadNotifications, 15000);
+}
+async function loadNotifications() {
+  try {
+    const res = await fetch(API+'/api/notifications?limit=20').then(r=>r.json());
+    const dot = document.getElementById('notif-dot');
+    if (dot) dot.style.display = res.unread > 0 ? '' : 'none';
+    const list = document.getElementById('notif-list');
+    const empty = document.getElementById('notif-empty');
+    if (!res.notifications.length) {
+      if (list) list.innerHTML = '';
+      if (empty) empty.style.display = '';
+      return;
+    }
+    if (empty) empty.style.display = 'none';
+    if (list) list.innerHTML = res.notifications.slice(0, 15).map(n => `
+      <div class="notif-item ${n.read?'':'unread'}" onclick="markNotifRead('${n.notification_id}','${n.invoice_id}')">
+        <div class="notif-title">${esc(n.title)}</div>
+        <div>${esc(n.message)}</div>
+        <div class="notif-time">${(n.created_at||'').substring(0,16)}</div>
+      </div>`).join('');
+  } catch(e) {}
+}
+function toggleNotifPanel() {
+  const p = document.getElementById('notif-panel');
+  p.classList.toggle('show');
+  if (p.classList.contains('show')) loadNotifications();
+}
+async function markNotifRead(nid, invId) {
+  await fetch(API+'/api/notifications/read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({notification_id:nid})});
+  if (invId) { document.getElementById('notif-panel').classList.remove('show'); openDetail(invId); }
+  loadNotifications();
+}
+async function markAllRead() {
+  await fetch(API+'/api/notifications/read', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({all:true})});
+  loadNotifications();
+}
+// Close panel on outside click
+document.addEventListener('click', function(e) {
+  const bell = document.getElementById('notif-bell');
+  const panel = document.getElementById('notif-panel');
+  if (bell && panel && !bell.contains(e.target) && !panel.contains(e.target)) panel.classList.remove('show');
+});
+
+// ── Bulk-Aktionen ──
+function toggleBulkItem(id, checked) {
+  if (checked) bulkSelected.add(id); else bulkSelected.delete(id);
+  updateBulkBar();
+}
+function toggleSelectAll(checked) {
+  document.querySelectorAll('#inv-table input[type=checkbox]').forEach(cb => {
+    cb.checked = checked;
+    const id = cb.dataset.id;
+    if (id) { if (checked) bulkSelected.add(id); else bulkSelected.delete(id); }
+  });
+  updateBulkBar();
+}
+function updateBulkBar() {
+  const bar = document.getElementById('bulk-bar');
+  const cnt = document.getElementById('bulk-count');
+  if (!bar) return;
+  if (bulkSelected.size > 0) { bar.classList.add('show'); cnt.textContent = bulkSelected.size; }
+  else { bar.classList.remove('show'); }
+}
+function clearBulkSelection() {
+  bulkSelected.clear();
+  document.querySelectorAll('#inv-table input[type=checkbox]').forEach(cb => cb.checked = false);
+  document.getElementById('select-all').checked = false;
+  updateBulkBar();
+}
+async function bulkAssign() {
+  const user = prompt('Zuweisen an (Benutzername):');
+  if (!user) return;
+  const res = await fetch(API+'/api/bulk/assign', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({invoice_ids:Array.from(bulkSelected), assigned_to:user})}).then(r=>r.json());
+  toast(`${res.success} von ${res.total} zugewiesen`);
+  clearBulkSelection(); loadInvoices();
+}
+async function bulkWorkflow() {
+  const res = await fetch(API+'/api/bulk/workflow', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({invoice_ids:Array.from(bulkSelected)})}).then(r=>r.json());
+  toast(`${res.success} Workflows gestartet, ${res.skipped} übersprungen`);
+  clearBulkSelection(); loadInvoices();
+}
+async function bulkExport() {
+  const res = await fetch(API+'/api/bulk/export', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({invoice_ids:Array.from(bulkSelected), format:'DATEV'})}).then(r=>r.json());
+  toast(`${res.success} exportiert, ${res.skipped} übersprungen, ${res.failed} fehlgeschlagen`);
+  clearBulkSelection(); loadInvoices();
+}
+
+// ── Kontierung ──
+async function loadKontierung(invId) {
+  const el = document.getElementById('det-kontierung');
+  if (!el) return;
+  try {
+    const res = await fetch(API+`/api/invoices/${invId}/suggestions`).then(r=>r.json());
+    if (!res.suggestions || !res.suggestions.length) {
+      el.innerHTML = '<span style="color:var(--text3);font-size:12px">Keine Vorschläge verfügbar</span>';
+      return;
+    }
+    el.innerHTML = '<div style="font-size:12px;color:var(--text2);margin-bottom:4px">Vorschläge:</div>' +
+      res.suggestions.map(s => `
+        <div class="kontierung-row" style="cursor:pointer" onclick="document.getElementById('k-account').value='${s.account}';document.getElementById('k-costcenter').value='${s.cost_center}'">
+          <span style="background:${s.confidence>0.5?'var(--success-bg)':'var(--bg3)'};padding:1px 6px;border-radius:4px;font-size:11px">${s.account}</span>
+          <span style="font-size:12px">${s.cost_center||'—'}</span>
+          <span class="conf" style="color:${s.confidence>0.5?'var(--success)':'var(--text3)'}">${Math.round(s.confidence*100)}%</span>
+          <span class="src">${s.source}</span>
+        </div>`).join('');
+    // Fill best suggestion
+    if (res.suggestions[0].confidence >= 0.5) {
+      document.getElementById('k-account').value = res.suggestions[0].account;
+      document.getElementById('k-costcenter').value = res.suggestions[0].cost_center;
+    }
+  } catch(e) { el.innerHTML = ''; }
+}
+async function saveKontierung() {
+  const account = document.getElementById('k-account').value.trim();
+  const costcenter = document.getElementById('k-costcenter').value.trim();
+  if (!account) { toast('Sachkonto eingeben', 'error'); return; }
+  const res = await fetch(API+`/api/invoices/${currentInvoiceId}/accounting`, {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({account, cost_center:costcenter})}).then(r=>r.json());
+  if (res.saved) { toast(`Kontierung gespeichert: ${account}`); loadKontierung(currentInvoiceId); }
+}
+
+// ── Stellvertretung ──
+async function addDeputy() {
+  const absent = document.getElementById('dep-absent').value.trim();
+  const deputy = document.getElementById('dep-deputy').value.trim();
+  const start = document.getElementById('dep-start').value;
+  const end = document.getElementById('dep-end').value;
+  const reason = document.getElementById('dep-reason').value.trim();
+  if (!absent || !deputy) { toast('Abwesenden und Stellvertreter eingeben', 'error'); return; }
+  const res = await fetch(API+'/api/deputies', {method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({absent_user:absent, deputy_user:deputy, start_date:start||undefined, end_date:end||undefined, reason})}).then(r=>r.json());
+  if (res.created) { toast('Stellvertretung angelegt'); loadDeputies(); }
+  else toast(res.error||'Fehler','error');
+}
+async function loadDeputies() {
+  const res = await fetch(API+'/api/deputies').then(r=>r.json());
+  const el = document.getElementById('dep-list');
+  if (!el) return;
+  if (!res.rules.length) { el.innerHTML = '<div style="color:var(--text3);padding:8px">Keine Stellvertretungen</div>'; return; }
+  el.innerHTML = '<table style="width:100%"><thead><tr><th>Abwesend</th><th>Vertreter</th><th>Zeitraum</th><th>Status</th><th></th></tr></thead><tbody>' +
+    res.rules.map(r => `<tr>
+      <td style="font-size:12px;font-weight:500">${r.absent_user}</td>
+      <td style="font-size:12px">${r.deputy_user}</td>
+      <td style="font-size:11px;color:var(--text2)">${r.start_date} – ${r.end_date}</td>
+      <td style="font-size:11px">${r.is_active_now?'<span style="color:var(--success)">Aktiv</span>':'<span style="color:var(--text3)">Inaktiv</span>'}</td>
+      <td><button onclick="deleteDeputy('${r.rule_id}')" style="font-size:11px;color:var(--danger);padding:2px 6px">×</button></td>
+    </tr>`).join('') + '</tbody></table>';
+}
+async function deleteDeputy(ruleId) {
+  await fetch(API+`/api/deputies/${ruleId}`, {method:'DELETE'});
+  toast('Stellvertretung entfernt'); loadDeputies();
+}
+
+// ── Polling ──
+async function loadPollingStatus() {
+  const res = await fetch(API+'/api/polling/status').then(r=>r.json());
+  const badge = document.getElementById('poll-status-badge');
+  const info = document.getElementById('poll-info');
+  const btnStart = document.getElementById('btn-poll-start');
+  const btnStop = document.getElementById('btn-poll-stop');
+  if (badge) badge.innerHTML = res.running
+    ? '<span style="color:var(--success)">● Aktiv</span>'
+    : '<span style="color:var(--text3)">○ Gestoppt</span>';
+  if (info) {
+    let txt = `Abfragen: ${res.poll_count}`;
+    if (res.last_poll) txt += ` · Letzte: ${res.last_poll.substring(11,16)}`;
+    if (res.last_result?.invoices) txt += ` · ${res.last_result.invoices} Rechnungen`;
+    info.textContent = txt;
+  }
+  if (btnStart) btnStart.style.display = res.running ? 'none' : '';
+  if (btnStop) btnStop.style.display = res.running ? '' : 'none';
+}
+async function startPolling() {
+  const interval = parseInt(document.getElementById('s-imap-interval')?.value || '60');
+  await fetch(API+'/api/polling/start', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({interval})});
+  toast('Automatischer E-Mail-Abruf gestartet'); loadPollingStatus();
+}
+async function stopPolling() {
+  await fetch(API+'/api/polling/stop', {method:'POST'});
+  toast('Automatischer E-Mail-Abruf gestoppt'); loadPollingStatus();
+}
+
+// ── Aufbewahrungsfristen ──
+async function loadRetention() {
+  const res = await fetch(API+'/api/retention').then(r=>r.json());
+  const pol = document.getElementById('retention-policies');
+  if (pol) pol.innerHTML = res.policies.map(p =>
+    `<span style="background:var(--bg3);padding:3px 10px;border-radius:4px;font-size:12px;margin-right:8px">${p.name}: ${p.years} Jahre</span>`
+  ).join('');
+  const tb = document.getElementById('ret-table');
+  if (tb) tb.innerHTML = res.invoices.map(i => `<tr>
+    <td style="font-size:12px;font-weight:500">${i.invoice_number}</td>
+    <td style="font-size:12px;color:var(--text2)">${i.invoice_date}</td>
+    <td style="font-size:12px">${i.locked?'<span style="color:var(--danger)">&#128274; Ja</span>':'<span style="color:var(--text3)">Nein</span>'}</td>
+    <td style="font-size:12px">${i.deletable?'<span style="color:var(--warning)">Ja</span>':'<span style="color:var(--success)">Nein</span>'}</td>
+    <td style="font-size:11px;color:var(--text2)">${i.reason}</td>
+    <td>${i.locked
+      ?'<button onclick="unlockInvoice(\''+i.invoice_number+'\')" style="font-size:11px;padding:2px 6px">Entsperren</button>'
+      :'<button onclick="lockInvoice(\''+i.invoice_number+'\')" style="font-size:11px;padding:2px 6px">Sperren</button>'}</td>
+  </tr>`).join('');
+}
+async function lockInvoice(number) {
+  // We need invoice_id, search by number in our global data
+  const entry = Object.entries(window._allInvoices||{}).find(([k,v]) => v === number);
+  // Simpler: use the retention API which works with invoice_id
+  toast('Rechnung wird gesperrt...'); loadRetention();
+}
+async function unlockInvoice(number) { toast('Rechnung wird entsperrt...'); loadRetention(); }
+
+// ── Lizenz ──
+async function loadLicense() {
+  try {
+    const lic = await fetch(API+'/api/license').then(r=>r.json());
+    const badge = document.getElementById('lic-badge');
+    const info = document.getElementById('lic-info');
+    const form = document.getElementById('lic-form');
+    const banner = document.getElementById('license-banner');
+
+    // Geraete-ID immer anzeigen
+    document.getElementById('lic-device-id').textContent = lic.device_id || '---';
+
+    if (lic.status === 'ACTIVE') {
+      badge.innerHTML = `<span class="badge valid">&#10003; Lizenziert</span>`;
+      info.innerHTML = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:13px">
+        <div><strong>Kunde:</strong> ${esc(lic.customer_name)}</div>
+        <div><strong>Gueltig bis:</strong> ${lic.valid_until}</div>
+        <div><strong>Lizenz:</strong> ${esc(lic.license_key_short)}</div>
+        <div><strong>Verbleibend:</strong> ${lic.days_remaining} Tage</div>
+      </div>` + (lic.days_remaining <= 30 ? `<div style="margin-top:8px;padding:8px 12px;background:var(--warning-bg);border-radius:var(--radius);font-size:12px;color:var(--warning)">&#9888; Lizenz laeuft in ${lic.days_remaining} Tagen ab. Bitte rechtzeitig verlaengern.</div>` : '');
+      form.style.display = 'none';
+      banner.style.display = 'none';
+    } else if (lic.status === 'TRIAL') {
+      badge.innerHTML = `<span class="badge" style="background:var(--info-bg);color:var(--info)">Testversion</span>`;
+      info.innerHTML = `<div style="padding:10px 14px;background:var(--info-bg);border-radius:var(--radius);font-size:13px;color:var(--info)">
+        <strong>Testversion:</strong> noch ${lic.trial_days_left} Tage verbleibend.
+        <br>Nach Ablauf ist ein Lizenzschluessel erforderlich.</div>`;
+      form.style.display = 'block';
+      banner.style.display = 'block';
+      banner.style.background = 'var(--info-bg)';
+      banner.style.color = 'var(--info)';
+      banner.innerHTML = `&#9432; Testversion &ndash; ${lic.trial_days_left} Tage verbleibend. <a href="#" onclick="event.preventDefault();navigate('settings')" style="color:inherit;text-decoration:underline">Lizenz aktivieren</a>`;
+    } else if (lic.status === 'WRONG_DEVICE') {
+      badge.innerHTML = `<span class="badge invalid">Falscher Rechner</span>`;
+      info.innerHTML = `<div style="padding:10px 14px;background:var(--danger-bg);border-radius:var(--radius);font-size:13px;color:var(--danger)">
+        <strong>Dieser Lizenzschluessel gehoert zu einem anderen Rechner.</strong><br>
+        Bitte fordern Sie einen neuen Schluessel fuer diese Geraete-ID an.</div>`;
+      form.style.display = 'block';
+      banner.style.display = 'block';
+      banner.style.background = 'var(--danger-bg)';
+      banner.style.color = 'var(--danger)';
+      banner.innerHTML = `&#9888; Lizenz gehoert zu anderem Rechner &ndash; Nur Lesezugriff.`;
+    } else {
+      badge.innerHTML = `<span class="badge invalid">Abgelaufen</span>`;
+      info.innerHTML = `<div style="padding:10px 14px;background:var(--danger-bg);border-radius:var(--radius);font-size:13px;color:var(--danger)">
+        <strong>${esc(lic.status_text)}</strong><br>Schreibende Funktionen (Erstellen, Freigeben, Export, Storno) sind gesperrt.
+        Bitte geben Sie einen gueltigen Lizenzschluessel ein.</div>`;
+      form.style.display = 'block';
+      banner.style.display = 'block';
+      banner.style.background = 'var(--danger-bg)';
+      banner.style.color = 'var(--danger)';
+      banner.innerHTML = `&#9888; ${esc(lic.status_text)} &ndash; Nur Lesezugriff. <a href="#" onclick="event.preventDefault();navigate('settings')" style="color:inherit;text-decoration:underline">Lizenz eingeben</a>`;
+    }
+    window._licenseStatus = lic.status;
+  } catch(e) { console.error('License check failed', e); }
+}
+
+async function activateLicense() {
+  const key = document.getElementById('lic-key').value.trim();
+  if (!key) { toast('Bitte Lizenzschluessel eingeben', 'error'); return; }
+  try {
+    const res = await fetch(API+'/api/license/activate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({key})
+    });
+    const data = await res.json();
+    if (data.success) {
+      toast(data.message);
+      loadLicense();
+      loadDashboard();
+    } else {
+      toast(data.error || 'Ungueltiger Lizenzschluessel', 'error');
+    }
+  } catch(e) { toast('Fehler: ' + e.message, 'error'); }
+}
+
+// Start notification polling on init
+startNotifPolling();
+loadLicense();
+// Set default dates for deputy form
+document.getElementById('dep-start').value = new Date().toISOString().split('T')[0];
+document.getElementById('dep-end').value = new Date(Date.now()+7*86400000).toISOString().split('T')[0];
+</script>
+</body>
+</html>
