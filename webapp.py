@@ -44,12 +44,31 @@ from licensing import LicenseManager
 from pdf_import import parse_energieberatung_pdf
 from zugferd_writer import generate_zugferd_pdf
 from kosit_validator import validate_with_kosit, is_available as kosit_available
+from suppliers import SupplierManager
+from transactions import (TransactionManager, STEP_KEYS, STEP_LABELS,
+                           DOC_PREFIXES, make_position, calc_step_totals)
+from doc_generator import DocumentGenerator
+from dunning import DunningManager
+from products import ProductManager, create_demo_products
 
 # ── App ────────────────────────────────────────────────────────────────
 
 app = Flask(__name__,
             static_folder=str(_BASE / "static"),
             static_url_path="/static")
+
+
+# JSON-Fehlerseiten statt HTML für API-Routen
+@app.errorhandler(404)
+def handle_404(e):
+    if request.path.startswith("/api/"):
+        return _json({"error": "Endpoint nicht gefunden", "path": request.path}, 404)
+    return send_from_directory(str(_BASE / "static"), "index.html")
+
+
+@app.errorhandler(500)
+def handle_500(e):
+    return _json({"error": f"Interner Serverfehler: {e}"}, 500)
 
 # Globaler State
 inbox = Inbox()
@@ -68,7 +87,7 @@ mandant_mgr.mandanten[demo_mandant.mandant_id] = demo_mandant
 email_config = EmailConfig(
     imap_host="imap.example.com", imap_user="rechnungen@demo-gmbh.de",
     smtp_host="smtp.example.com", smtp_from_address="rechnungen@demo-gmbh.de",
-    smtp_from_name="Demo GmbH Rechnungswesen", mandant_name="Demo GmbH",
+    smtp_from_name="EBRK UG Rechnungswesen", mandant_name="EBRK UG",
 )
 email_sender = MockEmailSender(email_config, str(_DATA / "data" / "sent_mails"))
 email_receiver = MockEmailReceiver(email_config, inbox, str(_DATA / "data" / "test_mails"))
@@ -84,6 +103,13 @@ poller = BackgroundPoller(email_receiver)
 # Persistenz
 store = InvoiceStore(str(_DATA / "data"))
 lic_mgr = LicenseManager(str(_DATA / "data"))
+
+# Auftragsmanagement (Phase 1)
+supplier_mgr = SupplierManager(str(_DATA / "data"))
+txn_mgr = TransactionManager(str(_DATA / "data"))
+doc_gen = DocumentGenerator(str(_DATA / "data"))
+dunning_mgr = DunningManager(str(_DATA / "data"))
+product_mgr = ProductManager(str(_DATA / "data"))
 
 
 def auto_save():
@@ -260,13 +286,20 @@ def _check_license():
         return None
     if path.startswith("/api/notifications"):
         return None
+    # Produkte, Lieferanten, Vorgänge, Mahnungen, Dokumente erlauben (eigene Schreiblogik)
+    if any(path.startswith(p) for p in ("/api/suppliers", "/api/transactions",
+           "/api/products", "/api/dunning", "/api/documents", "/api/mandant")):
+        return None
     # Schreibende Operationen pruefen
-    block = lic_mgr.check_or_block()
-    if block:
-        return app.response_class(
-            json.dumps(block, ensure_ascii=False),
-            status=403, mimetype="application/json"
-        )
+    try:
+        block = lic_mgr.check_or_block()
+        if block:
+            return app.response_class(
+                json.dumps(block, ensure_ascii=False),
+                status=403, mimetype="application/json"
+            )
+    except Exception as e:
+        print(f"  WARNUNG: Lizenzprüfung fehlgeschlagen: {e}")
     return None
 
 
@@ -331,10 +364,28 @@ def api_mandant_settings_save():
     data = request.get_json(silent=True) or {}
     settings = _load_mandant_settings()  # Bestehende Settings laden (inkl. Zaehler)
     allowed = ["name", "vat_id", "tax_registration_id", "street", "post_code",
-               "city", "email", "contact_name", "contact_phone", "iban", "bic", "currency"]
+               "city", "email", "contact_name", "contact_phone", "iban", "bic", "currency",
+               "stb_email", "stb_name"]
     for k in allowed:
         if k in data:
             settings[k] = data[k]
+    _save_mandant_settings(settings)
+    return _json({"saved": True})
+
+
+@app.route("/api/mandant/templates")
+def api_mandant_templates():
+    """Gibt Dokumentvorlagen zurück."""
+    settings = _load_mandant_settings()
+    return _json(settings.get("doc_templates", {}))
+
+
+@app.route("/api/mandant/templates", methods=["POST"])
+def api_mandant_templates_save():
+    """Speichert Dokumentvorlagen."""
+    data = request.get_json(silent=True) or {}
+    settings = _load_mandant_settings()
+    settings["doc_templates"] = data
     _save_mandant_settings(settings)
     return _json({"saved": True})
 
@@ -577,6 +628,1057 @@ def api_buyers_csv_upload():
     return _json({"imported": added, "total": len(buyers)})
 
 
+@app.route("/api/buyers/csv/export")
+def api_buyers_csv_export():
+    """Exportiert alle Kunden als CSV."""
+    import csv, io
+    buyers = _load_buyers()
+    out = io.StringIO()
+    out.write("\ufeff")
+    w = csv.writer(out, delimiter=";")
+    w.writerow(["Firma", "Strasse", "PLZ", "Ort", "E-Mail", "Referenz", "USt-ID", "Anrede", "Ansprechpartner"])
+    for b in buyers:
+        w.writerow([b.get("name",""), b.get("street",""), b.get("post_code",""),
+                    b.get("city",""), b.get("email",""), b.get("reference",""),
+                    b.get("vat_id",""), b.get("salutation",""), b.get("contact_name","")])
+    return app.response_class(out.getvalue(), mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=kunden_export.csv"})
+
+
+# ── API: Lieferanten (Auftragsmanagement) ─────────────────────────────
+
+@app.route("/api/suppliers")
+def api_suppliers_list():
+    return _json(supplier_mgr.list_all())
+
+
+@app.route("/api/suppliers", methods=["POST"])
+def api_suppliers_add():
+    data = request.json or {}
+    try:
+        supplier = supplier_mgr.add(data)
+        return _json({"saved": True, "supplier": supplier})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/suppliers/<sid>", methods=["PUT"])
+def api_suppliers_update(sid):
+    data = request.json or {}
+    result = supplier_mgr.update(sid, data)
+    if result:
+        return _json({"saved": True, "supplier": result})
+    return _json({"error": "Lieferant nicht gefunden"}, 404)
+
+
+@app.route("/api/suppliers/<sid>", methods=["DELETE"])
+def api_suppliers_delete(sid):
+    if supplier_mgr.delete(sid):
+        return _json({"deleted": True})
+    return _json({"error": "Lieferant nicht gefunden"}, 404)
+
+
+@app.route("/api/suppliers/all", methods=["DELETE"])
+def api_suppliers_delete_all():
+    count = supplier_mgr.delete_all()
+    return _json({"deleted": count})
+
+
+@app.route("/api/suppliers/<sid>/approve", methods=["POST"])
+def api_suppliers_approve(sid):
+    data = request.json or {}
+    result = supplier_mgr.approve(sid, data.get("user", "system"), data.get("comment", ""))
+    if result:
+        return _json({"approved": True, "supplier": result})
+    return _json({"error": "Lieferant nicht gefunden"}, 404)
+
+
+@app.route("/api/suppliers/<sid>/unapprove", methods=["POST"])
+def api_suppliers_unapprove(sid):
+    result = supplier_mgr.unapprove(sid)
+    if result:
+        return _json({"approved": False, "supplier": result})
+    return _json({"error": "Lieferant nicht gefunden"}, 404)
+
+
+@app.route("/api/suppliers/csv", methods=["POST"])
+def api_suppliers_csv_upload():
+    file = request.files.get("file")
+    if not file:
+        return _json({"error": "Keine Datei hochgeladen"}, 400)
+    result = supplier_mgr.import_csv(file.read())
+    return _json(result)
+
+
+@app.route("/api/suppliers/csv/export")
+def api_suppliers_csv_export():
+    csv_str = supplier_mgr.export_csv()
+    return app.response_class(csv_str, mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=lieferanten_export.csv"})
+
+
+# ── API: Vorgänge / Auftragsmanagement ────────────────────────────────
+
+@app.route("/api/transactions")
+def api_txn_list():
+    return _json(txn_mgr.list_all(
+        status=request.args.get("status"),
+        supplier_id=request.args.get("supplier_id"),
+        buyer_id=request.args.get("buyer_id"),
+    ))
+
+
+@app.route("/api/transactions/stats")
+def api_txn_stats():
+    return _json(txn_mgr.stats())
+
+
+@app.route("/api/transactions", methods=["POST"])
+def api_txn_create():
+    data = request.json or {}
+    txn = txn_mgr.create(data)
+    return _json({"created": True, "transaction": txn})
+
+
+@app.route("/api/transactions/<tid>")
+def api_txn_get(tid):
+    txn = txn_mgr.get(tid)
+    if txn:
+        txn["_current_step"] = txn_mgr.current_step(txn)
+        return _json(txn)
+    return _json({"error": "Vorgang nicht gefunden"}, 404)
+
+
+@app.route("/api/transactions/<tid>", methods=["PUT"])
+def api_txn_update(tid):
+    data = request.json or {}
+    result = txn_mgr.update(tid, data)
+    if result:
+        return _json({"saved": True, "transaction": result})
+    return _json({"error": "Vorgang nicht gefunden"}, 404)
+
+
+@app.route("/api/transactions/<tid>", methods=["DELETE"])
+def api_txn_delete(tid):
+    if txn_mgr.delete(tid):
+        return _json({"deleted": True})
+    return _json({"error": "Vorgang nicht gefunden"}, 404)
+
+
+@app.route("/api/transactions/<tid>/steps/<step_key>", methods=["PUT"])
+def api_txn_step_update(tid, step_key):
+    data = request.json or {}
+    try:
+        txn = txn_mgr.update_step(tid, step_key, data, data.get("_user", "system"))
+        return _json({"saved": True, "transaction": txn})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/approve", methods=["POST"])
+def api_txn_step_approve(tid, step_key):
+    data = request.json or {}
+    try:
+        txn = txn_mgr.approve_step(tid, step_key,
+                                    data.get("user", "system"),
+                                    data.get("comment", ""))
+        return _json({"approved": True, "transaction": txn})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/unapprove", methods=["POST"])
+def api_txn_step_unapprove(tid, step_key):
+    data = request.json or {}
+    try:
+        txn = txn_mgr.unapprove_step(tid, step_key, data.get("user", "system"))
+        return _json({"unapproved": True, "transaction": txn})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/skip", methods=["POST"])
+def api_txn_step_skip(tid, step_key):
+    data = request.json or {}
+    try:
+        txn = txn_mgr.skip_step(tid, step_key,
+                                 data.get("user", "system"),
+                                 data.get("reason", ""))
+        return _json({"skipped": True, "transaction": txn})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/transactions/<tid>/deliveries", methods=["POST"])
+def api_txn_add_delivery(tid):
+    data = request.json or {}
+    try:
+        txn = txn_mgr.add_delivery(tid, data, data.get("_user", "system"))
+        return _json({"added": True, "transaction": txn})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/transactions/<tid>/deliveries/<did>/approve", methods=["POST"])
+def api_txn_approve_delivery(tid, did):
+    data = request.json or {}
+    try:
+        txn = txn_mgr.approve_delivery(tid, did, data.get("user", "system"))
+        return _json({"approved": True, "transaction": txn})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/transactions/<tid>/timeline")
+def api_txn_timeline(tid):
+    return _json(txn_mgr.get_timeline(tid))
+
+
+@app.route("/api/transactions/step-labels")
+def api_txn_step_labels():
+    return _json({"keys": STEP_KEYS, "labels": STEP_LABELS, "prefixes": DOC_PREFIXES})
+
+
+# ── API: Dokument-Erzeugung (Phase 2) ────────────────────────────────
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/generate-pdf", methods=["POST"])
+def api_txn_generate_pdf(tid, step_key):
+    """Erzeugt ein PDF-Dokument für einen Workflow-Step."""
+    txn = txn_mgr.get(tid)
+    if not txn:
+        return _json({"error": "Vorgang nicht gefunden"}, 404)
+
+    step = txn["steps"].get(step_key, {})
+    data = request.json or {}
+
+    # Empfänger bestimmen
+    if step_key in ("supplier_quote", "purchase_order"):
+        # Dokumente an Lieferant
+        sup = supplier_mgr.get(txn.get("supplier_id", ""))
+        recipient = sup if sup else {"name": txn.get("supplier_name", "")}
+    else:
+        # Dokumente an Kunde
+        buyers = _load_buyers()
+        buyer = next((b for b in buyers if b.get("id") == txn.get("buyer_id")), None)
+        recipient = buyer if buyer else {"name": txn.get("buyer_name", "")}
+
+    # Referenz – entweder schon vorhanden oder neu generieren
+    ref = step.get("reference") or ""
+    if not ref:
+        prefix = DOC_PREFIXES.get(step_key, "DOK")
+        ref = txn_mgr.numbers.next(prefix)
+        # Step aktualisieren
+        txn_mgr.update_step(tid, step_key, {"reference": ref})
+
+    # Dunning-Sonderdaten
+    dunning_level = data.get("dunning_level", 1)
+    inv_ref = data.get("original_invoice_ref", "")
+    inv_amount = float(data.get("original_invoice_amount", 0))
+    dunning_fee = float(data.get("dunning_fee", 0))
+
+    # Dokumentvorlagen laden
+    templates = _load_mandant_settings().get("doc_templates", {})
+    tpl_key = f"dunning_{dunning_level}" if step_key == "dunning" else step_key
+    intro = data.get("intro_text", "") or templates.get(f"{tpl_key}_intro", "")
+    closing = data.get("closing_text", "") or templates.get(f"{tpl_key}_closing", "")
+
+    try:
+        doc_entry = doc_gen.generate(
+            doc_type=step_key if step_key != "dunning" else "dunning",
+            recipient=recipient,
+            positions=step.get("positions", []),
+            step=step,
+            reference=ref,
+            subject=txn.get("subject", ""),
+            doc_date=step.get("date") or data.get("date", ""),
+            due_date=step.get("due_date") or data.get("due_date", ""),
+            transaction_id=tid,
+            step_key=step_key,
+            dunning_level=dunning_level,
+            original_invoice_ref=inv_ref,
+            original_invoice_amount=inv_amount,
+            dunning_fee=dunning_fee,
+            intro_text=intro,
+            closing_text=closing,
+        )
+
+        # Step mit Dokument-ID verknüpfen
+        txn_mgr.update_step(tid, step_key, {
+            "document_id": doc_entry["id"],
+            "reference": ref,
+        })
+
+        return _json({
+            "generated": True,
+            "document": doc_entry,
+            "download_url": f"/api/documents/{doc_entry['filename']}",
+        })
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return _json({"error": f"PDF-Erzeugung fehlgeschlagen: {e}"}, 500)
+
+
+@app.route("/api/documents/<filename>")
+def api_document_download(filename):
+    """Liefert eine erzeugte PDF-Datei zum Download."""
+    from flask import send_from_directory
+    docs_dir = _DATA / "data" / "documents"
+    filepath = docs_dir / filename
+    if not filepath.exists():
+        return _json({"error": "Dokument nicht gefunden"}, 404)
+    return send_from_directory(str(docs_dir), filename, as_attachment=False)
+
+
+@app.route("/api/documents")
+def api_documents_list():
+    """Liste aller erzeugten Dokumente, optional nach Vorgang gefiltert."""
+    tid = request.args.get("transaction_id", "")
+    return _json(doc_gen.list_docs(tid))
+
+
+# ── API: Dokument-Upload pro Step ─────────────────────────────────────
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/attachments", methods=["POST"])
+def api_txn_step_upload(tid, step_key):
+    """Lädt ein Dokument hoch und verknüpft es mit einem Step."""
+    txn = txn_mgr.get(tid)
+    if not txn:
+        return _json({"error": "Vorgang nicht gefunden"}, 404)
+
+    file = request.files.get("file")
+    if not file or not file.filename:
+        return _json({"error": "Keine Datei hochgeladen"}, 400)
+
+    import hashlib
+    # Speichern
+    att_dir = _DATA / "data" / "attachments" / tid / step_key
+    att_dir.mkdir(parents=True, exist_ok=True)
+
+    # Sicherer Dateiname
+    from werkzeug.utils import secure_filename
+    filename = secure_filename(file.filename) or "dokument.pdf"
+    filepath = att_dir / filename
+    # Bei Duplikat: Nummer anhängen
+    counter = 1
+    stem, ext = (filename.rsplit(".", 1) + [""])[:2]
+    while filepath.exists():
+        filename = f"{stem}_{counter}.{ext}" if ext else f"{stem}_{counter}"
+        filepath = att_dir / filename
+        counter += 1
+
+    file_bytes = file.read()
+    filepath.write_bytes(file_bytes)
+    sha = hashlib.sha256(file_bytes).hexdigest()[:16]
+
+    # In Step-Metadaten speichern
+    step = txn["steps"].get(step_key, {})
+    if "attachments" not in step:
+        step["attachments"] = []
+    att_entry = {
+        "filename": filename,
+        "original_name": file.filename,
+        "size": len(file_bytes),
+        "hash": sha,
+        "uploaded_at": date.today().isoformat(),
+        "path": str(filepath),
+    }
+    step["attachments"].append(att_entry)
+    txn_mgr.update_step(tid, step_key, {"attachments": step["attachments"]})
+
+    return _json({"uploaded": True, "attachment": att_entry})
+
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/attachments")
+def api_txn_step_attachments(tid, step_key):
+    """Liste der Anhänge eines Steps."""
+    txn = txn_mgr.get(tid)
+    if not txn:
+        return _json({"error": "Vorgang nicht gefunden"}, 404)
+    step = txn["steps"].get(step_key, {})
+    return _json(step.get("attachments", []))
+
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/attachments/<filename>")
+def api_txn_step_attachment_download(tid, step_key, filename):
+    """Download eines Anhangs."""
+    att_dir = _DATA / "data" / "attachments" / tid / step_key
+    filepath = att_dir / filename
+    if not filepath.exists():
+        return _json({"error": "Datei nicht gefunden"}, 404)
+    from flask import send_from_directory
+    return send_from_directory(str(att_dir), filename)
+
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/attachments/<filename>", methods=["DELETE"])
+def api_txn_step_attachment_delete(tid, step_key, filename):
+    """Löscht einen Anhang."""
+    txn = txn_mgr.get(tid)
+    if not txn:
+        return _json({"error": "Vorgang nicht gefunden"}, 404)
+    att_dir = _DATA / "data" / "attachments" / tid / step_key
+    filepath = att_dir / filename
+    if filepath.exists():
+        filepath.unlink()
+    step = txn["steps"].get(step_key, {})
+    atts = step.get("attachments", [])
+    atts = [a for a in atts if a["filename"] != filename]
+    txn_mgr.update_step(tid, step_key, {"attachments": atts})
+    return _json({"deleted": True})
+
+
+# ── API: E-Rechnung aus Vorgang erzeugen (Phase 3) ───────────────────
+
+@app.route("/api/transactions/<tid>/generate-invoice", methods=["POST"])
+def api_txn_generate_invoice(tid):
+    """Erzeugt eine XRechnung aus den Daten eines Vorgangs (Stufe 7)."""
+    txn = txn_mgr.get(tid)
+    if not txn:
+        return _json({"error": "Vorgang nicht gefunden"}, 404)
+
+    inv_step = txn["steps"].get("invoice", {})
+    data = request.json or {}
+
+    # Verkäufer aus Mandanteneinstellungen
+    ms = _load_mandant_settings()
+
+    # Käufer aus buyers.json
+    buyers = _load_buyers()
+    buyer_data = next((b for b in buyers if b.get("id") == txn.get("buyer_id")), None)
+    if not buyer_data:
+        buyer_data = {"name": txn.get("buyer_name", ""), "street": "", "post_code": "", "city": "", "email": "", "reference": ""}
+
+    # Rechnungsnummer
+    number = inv_step.get("reference", "")
+    if not number:
+        number = _next_invoice_number(advance=True)
+
+    # Positionen aus Step
+    positions = inv_step.get("positions", [])
+    if not positions:
+        return _json({"error": "Keine Positionen in Stufe 7 (E-Rechnung) erfasst."}, 400)
+
+    # Rechnungsdatum / Fälligkeit
+    inv_date_str = inv_step.get("date") or data.get("date", date.today().isoformat())
+    inv_date = date.fromisoformat(inv_date_str[:10])
+    payment_terms = data.get("payment_terms", "Zahlbar innerhalb von 30 Tagen")
+    import re as _re
+    _m = _re.search(r'(\d+)\s*Tag', payment_terms)
+    due_date = inv_date + timedelta(days=int(_m.group(1))) if _m else inv_date + timedelta(days=30)
+
+    try:
+        inv = Invoice(
+            invoice_number=number,
+            invoice_date=inv_date,
+            invoice_type_code=data.get("type", "380"),
+            currency_code="EUR",
+            buyer_reference=buyer_data.get("reference", "") or txn.get("buyer_name", ""),
+            note=data.get("note", f"Vorgang {txn['id']}: {txn.get('subject', '')}"),
+            seller=Seller(
+                name=ms.get("name", ""),
+                address=Address(ms.get("street", ""), ms.get("city", ""), ms.get("post_code", "")),
+                electronic_address=ms.get("email", ""),
+                electronic_address_scheme="EM",
+                contact=Contact(ms.get("contact_name", ""), ms.get("contact_phone", ""), ms.get("email", "")),
+                vat_id=ms.get("vat_id", ""),
+                tax_registration_id=ms.get("tax_registration_id", ""),
+            ),
+            buyer=Buyer(
+                name=buyer_data.get("name", ""),
+                address=Address(buyer_data.get("street", ""), buyer_data.get("city", ""), buyer_data.get("post_code", "")),
+                electronic_address=buyer_data.get("email", "") or "buyer@example.com",
+                electronic_address_scheme="EM",
+                buyer_reference=buyer_data.get("reference", ""),
+                vat_id=buyer_data.get("vat_id", ""),
+            ),
+            payment=PaymentInfo(
+                means_code=data.get("payment_code", "58"),
+                iban=ms.get("iban", ""),
+                payment_terms=payment_terms,
+                due_date=due_date,
+            ),
+        )
+
+        for p in positions:
+            inv.lines.append(InvoiceLine(
+                line_id=str(p.get("pos_nr", 1)),
+                quantity=Decimal(str(p.get("quantity", 1))),
+                item_name=p.get("description", ""),
+                unit_price=Decimal(str(p.get("unit_price", 0))),
+                line_net_amount=Decimal(str(p.get("net_amount", 0))),
+                tax_rate=Decimal(str(p.get("tax_rate", 19))),
+            ))
+
+        # Duplikat-Check
+        if any(v.invoice_number == inv.invoice_number for v in invoices.values()):
+            return _json({"error": f"Rechnungsnummer {inv.invoice_number} existiert bereits."}, 409)
+
+        # Validieren + XML erzeugen
+        report = validate_invoice(inv)
+        xml_bytes = generate_and_serialize(inv)
+        inv._direction = "AUSGANG"
+
+        # Im Rechnungssystem registrieren
+        invoices[inv._id] = inv
+        inbox.duplicates.register(inv, inv._id)
+        archive.archive_invoice(inv, xml_bytes, report, direction="AUSGANG")
+        auto_save()
+
+        # Step im Vorgang aktualisieren
+        txn_mgr.update_step(tid, "invoice", {
+            "reference": number,
+            "date": inv_date_str,
+            "due_date": due_date.isoformat(),
+            "amount": float(inv.tax_inclusive_amount()),
+            "document_id": inv._id,
+        })
+
+        # ZUGFeRD optional
+        zugferd_bytes = None
+        try:
+            zugferd_bytes = generate_zugferd_pdf(inv, xml_bytes)
+        except Exception:
+            pass
+
+        result = {
+            "generated": True,
+            "invoice_id": inv._id,
+            "number": inv.invoice_number,
+            "transaction_id": tid,
+            "valid": report.is_valid,
+            "errors": report.error_count,
+            "gross": float(inv.tax_inclusive_amount()),
+            "xml_size": len(xml_bytes),
+            "xml_b64": __import__("base64").b64encode(xml_bytes).decode(),
+        }
+        if zugferd_bytes:
+            result["zugferd_size"] = len(zugferd_bytes)
+
+        return _json(result)
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return _json({"error": str(e)}, 400)
+
+
+# ── API: Mahnwesen (Phase 3) ─────────────────────────────────────────
+
+@app.route("/api/dunning/rules")
+def api_dunning_rules():
+    return _json(dunning_mgr.get_rules())
+
+
+@app.route("/api/dunning/rules", methods=["PUT"])
+def api_dunning_rules_save():
+    data = request.json or {}
+    dunning_mgr.save_rules(data)
+    return _json({"saved": True})
+
+
+@app.route("/api/dunning/check", methods=["POST"])
+def api_dunning_check():
+    """Prüft alle Vorgänge auf überfällige Rechnungen."""
+    txns = txn_mgr.list_all()
+    summary = dunning_mgr.get_overdue_summary(txns)
+    return _json(summary)
+
+
+@app.route("/api/dunning/overdue")
+def api_dunning_overdue():
+    """Gibt alle überfälligen Rechnungen zurück."""
+    txns = txn_mgr.list_all()
+    invoices_data = dunning_mgr.collect_invoices_from_transactions(txns)
+    overdue = dunning_mgr.check_overdue(invoices_data)
+    return _json(overdue)
+
+
+# ── API: Produktkatalog ───────────────────────────────────────────────
+
+@app.route("/api/products")
+def api_products_list():
+    category = request.args.get("category", "")
+    return _json(product_mgr.list_all(category=category, active_only=False))
+
+
+@app.route("/api/products/categories")
+def api_products_categories():
+    return _json(product_mgr.get_categories())
+
+
+@app.route("/api/products", methods=["POST"])
+def api_products_add():
+    data = request.json or {}
+    try:
+        product = product_mgr.add(data)
+        return _json({"saved": True, "product": product})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/products/<art_nr>", methods=["PUT"])
+def api_products_update(art_nr):
+    data = request.json or {}
+    result = product_mgr.update(art_nr, data)
+    if result:
+        return _json({"saved": True, "product": result})
+    return _json({"error": "Produkt nicht gefunden"}, 404)
+
+
+@app.route("/api/products/<art_nr>", methods=["DELETE"])
+def api_products_delete(art_nr):
+    if product_mgr.delete(art_nr):
+        return _json({"deleted": True})
+    return _json({"error": "Produkt nicht gefunden"}, 404)
+
+
+@app.route("/api/products/all", methods=["DELETE"])
+def api_products_delete_all():
+    count = product_mgr.delete_all()
+    return _json({"deleted": count})
+
+
+@app.route("/api/products/<art_nr>/stock", methods=["POST"])
+def api_products_stock(art_nr):
+    data = request.json or {}
+    delta = int(data.get("delta", 0))
+    result = product_mgr.adjust_stock(art_nr, delta)
+    if result:
+        return _json({"adjusted": True, "product": result})
+    return _json({"error": "Produkt nicht gefunden"}, 404)
+
+
+@app.route("/api/products/csv", methods=["POST"])
+def api_products_csv():
+    file = request.files.get("file")
+    if not file:
+        return _json({"error": "Keine Datei"}, 400)
+    result = product_mgr.import_csv(file.read())
+    return _json(result)
+
+
+@app.route("/api/products/csv/export")
+def api_products_csv_export():
+    csv_str = product_mgr.export_csv()
+    return app.response_class(csv_str, mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=produkte_export.csv"})
+
+
+@app.route("/api/products/demo", methods=["POST"])
+def api_products_demo():
+    count = create_demo_products(str(_DATA / "data"))
+    return _json({"created": count})
+
+
+# ── API: Freigabe + Mail senden ──────────────────────────────────────
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/approve-and-send", methods=["POST"])
+def api_txn_approve_and_send(tid, step_key):
+    """Freigeben + PDF erzeugen + per E-Mail an Empfänger senden."""
+    import smtplib, ssl
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.application import MIMEApplication
+
+    data = request.json or {}
+
+    # 1. Freigeben
+    try:
+        txn = txn_mgr.approve_step(tid, step_key,
+                                    data.get("user", "system"),
+                                    data.get("comment", ""))
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+    # 2. PDF erzeugen
+    step = txn["steps"].get(step_key, {})
+    if step_key in ("supplier_quote", "purchase_order"):
+        sup = supplier_mgr.get(txn.get("supplier_id", ""))
+        recipient = sup if sup else {"name": txn.get("supplier_name", "")}
+    else:
+        buyers = _load_buyers()
+        buyer = next((b for b in buyers if b.get("id") == txn.get("buyer_id")), None)
+        recipient = buyer if buyer else {"name": txn.get("buyer_name", "")}
+
+    ref = step.get("reference", "")
+    # Dokumentvorlagen laden
+    templates = _load_mandant_settings().get("doc_templates", {})
+    tpl_key = step_key
+    intro = step.get("intro_text", "") or templates.get(f"{tpl_key}_intro", "")
+    closing = step.get("closing_text", "") or templates.get(f"{tpl_key}_closing", "")
+    try:
+        doc_type = step_key if step_key != "dunning" else "dunning"
+        doc_entry = doc_gen.generate(
+            doc_type=doc_type, recipient=recipient,
+            positions=step.get("positions", []), step=step,
+            reference=ref, subject=txn.get("subject", ""),
+            doc_date=step.get("date", ""), due_date=step.get("due_date", ""),
+            transaction_id=tid, step_key=step_key,
+            intro_text=intro, closing_text=closing,
+        )
+    except Exception as e:
+        return _json({"approved": True, "sent": False, "error": f"PDF-Fehler: {e}"})
+
+    # 3. E-Mail senden
+    to_email = data.get("to_email", "") or recipient.get("email", "")
+    if not to_email:
+        return _json({"approved": True, "sent": False,
+                       "error": "Keine E-Mail-Adresse beim Empfänger hinterlegt.",
+                       "document": doc_entry})
+
+    ms = _load_mandant_settings()
+    _email_cfg_path = _DATA / "data" / "email_config.json"
+    smtp_cfg = {}
+    if _email_cfg_path.exists():
+        try:
+            smtp_cfg = json.loads(_email_cfg_path.read_text("utf-8"))
+        except Exception:
+            pass
+
+    smtp_host = smtp_cfg.get("smtp_host", "")
+    smtp_port = int(smtp_cfg.get("smtp_port", 587))
+    smtp_user = smtp_cfg.get("smtp_user", "")
+    smtp_pass = smtp_cfg.get("smtp_password", "")
+    from_addr = smtp_cfg.get("smtp_from_address", ms.get("email", ""))
+    from_name = smtp_cfg.get("smtp_from_name", ms.get("name", "E-Rechnungssystem"))
+
+    if not smtp_host or not smtp_user:
+        return _json({"approved": True, "sent": False,
+                       "error": "SMTP nicht konfiguriert. PDF wurde erzeugt.",
+                       "document": doc_entry})
+
+    # Mail bauen
+    doc_titles = {
+        "supplier_quote": "Angebotsanfrage",
+        "purchase_order": "Bestellung",
+        "customer_quote": "Angebot",
+        "order_intake": "Auftragsbestätigung",
+        "delivery_note": "Lieferschein",
+        "invoice": "Rechnung",
+        "dunning": "Zahlungserinnerung",
+    }
+    doc_title = doc_titles.get(step_key, "Dokument")
+    r_name = recipient.get("name", "")
+
+    msg = MIMEMultipart()
+    msg["From"] = f"{from_name} <{from_addr}>"
+    msg["To"] = to_email
+    msg["Subject"] = f"{doc_title} {ref} – {ms.get('name', '')}"
+
+    body = (f"Sehr geehrte Damen und Herren,\n\n"
+            f"anbei erhalten Sie unsere {doc_title} {ref}.\n\n"
+            f"Bei Fragen stehen wir Ihnen gerne zur Verfügung.\n\n"
+            f"Mit freundlichen Grüßen\n{ms.get('name', '')}")
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+
+    # PDF anhängen
+    pdf_path = doc_gen.get_filepath(doc_entry["filename"])
+    if pdf_path:
+        with open(pdf_path, "rb") as f:
+            att = MIMEApplication(f.read(), _subtype="pdf")
+            att.add_header("Content-Disposition", "attachment",
+                           filename=doc_entry["filename"])
+            msg.attach(att)
+
+    try:
+        if smtp_port == 465:
+            ctx = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15, context=ctx)
+        else:
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+        if smtp_pass:
+            server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+        server.quit()
+
+        return _json({"approved": True, "sent": True, "sent_to": to_email,
+                       "document": doc_entry})
+    except Exception as e:
+        return _json({"approved": True, "sent": False,
+                       "error": f"Mail-Versand fehlgeschlagen: {e}",
+                       "document": doc_entry})
+
+
+# ── API: Bestandsbuchung bei Wareneingang/Lieferschein ────────────────
+
+@app.route("/api/transactions/<tid>/stock-in", methods=["POST"])
+def api_txn_stock_in(tid):
+    """Wareneingang: Bestand für alle Positionen mit art_nr erhöhen."""
+    txn = txn_mgr.get(tid)
+    if not txn:
+        return _json({"error": "Vorgang nicht gefunden"}, 404)
+    step = txn["steps"].get("purchase_order", {})
+    items = [{"art_nr": p.get("art_nr",""), "quantity": p.get("quantity",0)}
+             for p in step.get("positions", []) if p.get("art_nr")]
+    if items:
+        product_mgr.bulk_stock_in(items)
+    return _json({"adjusted": len(items)})
+
+
+@app.route("/api/transactions/<tid>/stock-out", methods=["POST"])
+def api_txn_stock_out(tid):
+    """Warenausgang bei Lieferschein: Bestand reduzieren."""
+    txn = txn_mgr.get(tid)
+    if not txn:
+        return _json({"error": "Vorgang nicht gefunden"}, 404)
+    # Positionen aus delivery_note oder invoice
+    step = txn["steps"].get("delivery_note", {})
+    positions = step.get("positions", [])
+    if not positions:
+        step = txn["steps"].get("invoice", {})
+        positions = step.get("positions", [])
+    items = [{"art_nr": p.get("art_nr",""), "quantity": p.get("quantity",0)}
+             for p in positions if p.get("art_nr")]
+    if items:
+        product_mgr.bulk_stock_out(items)
+    return _json({"adjusted": len(items)})
+
+
+# ── API: Steuerberater-Export ──────────────────────────────────────────
+
+@app.route("/api/steuerberater/belege")
+def api_stb_belege():
+    """Sammelt alle Rechnungen für einen Zeitraum."""
+    von = request.args.get("von", "")
+    bis = request.args.get("bis", "")
+
+    belege = []
+
+    # 1. Eingangsrechnungen aus Archiv
+    archiv_dir = _DATA / "data" / "archiv"
+    if archiv_dir.exists():
+        idx_file = archiv_dir / "index.json"
+        if idx_file.exists():
+            try:
+                idx = json.loads(idx_file.read_text("utf-8"))
+                for entry in idx:
+                    inv_date = entry.get("invoice_date", entry.get("archived_at", ""))[:10]
+                    if von and inv_date < von:
+                        continue
+                    if bis and inv_date > bis:
+                        continue
+                    # PDF suchen
+                    inv_id = entry.get("id", "")
+                    inv_dir = archiv_dir / inv_id
+                    pdf_file = None
+                    xml_file = None
+                    if inv_dir.exists():
+                        for f in inv_dir.iterdir():
+                            if f.suffix.lower() == ".pdf":
+                                pdf_file = str(f)
+                            elif f.suffix.lower() == ".xml":
+                                xml_file = str(f)
+                    belege.append({
+                        "typ": "Eingang",
+                        "nummer": entry.get("invoice_number", ""),
+                        "datum": inv_date,
+                        "lieferant": entry.get("seller_name", ""),
+                        "kunde": entry.get("buyer_name", ""),
+                        "betrag": entry.get("total_gross", 0),
+                        "pdf": pdf_file,
+                        "xml": xml_file,
+                        "id": inv_id,
+                    })
+            except Exception:
+                pass
+
+    # 2. Ausgangsrechnungen aus Dokumenten-Index
+    docs_dir = _DATA / "data" / "documents"
+    doc_idx_file = docs_dir / "index.json"
+    if doc_idx_file.exists():
+        try:
+            doc_idx = json.loads(doc_idx_file.read_text("utf-8"))
+            for doc in doc_idx:
+                if doc.get("type") != "invoice":
+                    continue
+                doc_date = doc.get("created_at", "")[:10]
+                if von and doc_date < von:
+                    continue
+                if bis and doc_date > bis:
+                    continue
+                belege.append({
+                    "typ": "Ausgang",
+                    "nummer": doc.get("reference", ""),
+                    "datum": doc_date,
+                    "lieferant": "",
+                    "kunde": doc.get("transaction_id", ""),
+                    "betrag": 0,
+                    "pdf": doc.get("filepath", ""),
+                    "xml": None,
+                    "id": doc.get("id", ""),
+                })
+        except Exception:
+            pass
+
+    # 3. Workflow-Rechnungen (invoice-Steps mit Anhängen)
+    try:
+        txns = txn_mgr.list_all()
+        for txn in txns:
+            inv_step = txn.get("steps", {}).get("invoice", {})
+            if not inv_step.get("approved"):
+                continue
+            inv_date = inv_step.get("date", "")[:10]
+            if von and inv_date < von:
+                continue
+            if bis and inv_date > bis:
+                continue
+            ref = inv_step.get("reference", "")
+            # Prüfen ob schon in der Liste
+            if any(b["nummer"] == ref and b["typ"] == "Ausgang" for b in belege):
+                continue
+            amount = inv_step.get("amount", 0)
+            pdf_path = str(docs_dir / f"{ref}.pdf") if ref else ""
+            belege.append({
+                "typ": "Ausgang",
+                "nummer": ref,
+                "datum": inv_date,
+                "lieferant": "",
+                "kunde": txn.get("buyer_name", ""),
+                "betrag": amount,
+                "pdf": pdf_path if Path(pdf_path).exists() else "",
+                "xml": None,
+                "id": txn.get("id", ""),
+            })
+    except Exception:
+        pass
+
+    belege.sort(key=lambda b: b.get("datum", ""))
+    return _json({"belege": belege, "von": von, "bis": bis, "count": len(belege)})
+
+
+@app.route("/api/steuerberater/export")
+def api_stb_export():
+    """Erzeugt ZIP mit allen PDFs + CSV-Übersicht für einen Zeitraum."""
+    import csv, io, zipfile
+
+    von = request.args.get("von", "")
+    bis = request.args.get("bis", "")
+
+    # Belege sammeln
+    with app.test_request_context(f"/api/steuerberater/belege?von={von}&bis={bis}"):
+        result = json.loads(api_stb_belege().get_data())
+    belege = result.get("belege", [])
+
+    if not belege:
+        return _json({"error": "Keine Belege im gewählten Zeitraum"}, 404)
+
+    # ZIP erstellen
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        # CSV-Übersicht
+        csv_buffer = io.StringIO()
+        csv_buffer.write("\ufeff")
+        w = csv.writer(csv_buffer, delimiter=";")
+        w.writerow(["Typ", "Belegnummer", "Datum", "Lieferant/Kunde", "Betrag", "Datei"])
+        for b in belege:
+            partner = b.get("lieferant") or b.get("kunde") or ""
+            filename = ""
+            if b.get("pdf") and Path(b["pdf"]).exists():
+                fname = Path(b["pdf"]).name
+                sub = "Eingang" if b["typ"] == "Eingang" else "Ausgang"
+                arcname = f"{sub}/{fname}"
+                zf.write(b["pdf"], arcname)
+                filename = arcname
+            if b.get("xml") and Path(b["xml"]).exists():
+                fname = Path(b["xml"]).name
+                sub = "Eingang" if b["typ"] == "Eingang" else "Ausgang"
+                arcname = f"{sub}/{fname}"
+                zf.write(b["xml"], arcname)
+            w.writerow([b["typ"], b.get("nummer",""), b.get("datum",""),
+                        partner, f'{b.get("betrag",0):.2f}'.replace(".",","), filename])
+        zf.writestr("Belegübersicht.csv", csv_buffer.getvalue().encode("utf-8-sig"))
+
+    zip_buffer.seek(0)
+    period = f"{von}_bis_{bis}" if von and bis else "gesamt"
+    filename = f"Belege_Steuerberater_{period}.zip"
+
+    return app.response_class(
+        zip_buffer.getvalue(),
+        mimetype="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+
+@app.route("/api/steuerberater/send", methods=["POST"])
+def api_stb_send():
+    """Sendet das Belegpaket per Mail an den Steuerberater."""
+    import smtplib, ssl
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.application import MIMEApplication
+
+    data = request.json or {}
+    stb_email = data.get("email", "")
+    von = data.get("von", "")
+    bis = data.get("bis", "")
+
+    if not stb_email:
+        return _json({"error": "Keine E-Mail-Adresse angegeben"}, 400)
+
+    # ZIP erzeugen
+    with app.test_request_context(f"/api/steuerberater/export?von={von}&bis={bis}"):
+        zip_resp = api_stb_export()
+    if hasattr(zip_resp, 'status_code') and zip_resp.status_code != 200:
+        return _json({"error": "Keine Belege im Zeitraum"}, 400)
+    zip_bytes = zip_resp.get_data()
+
+    # SMTP
+    ms = _load_mandant_settings()
+    _email_cfg_path = _DATA / "data" / "email_config.json"
+    smtp_cfg = {}
+    if _email_cfg_path.exists():
+        try:
+            smtp_cfg = json.loads(_email_cfg_path.read_text("utf-8"))
+        except Exception:
+            pass
+
+    smtp_host = smtp_cfg.get("smtp_host", "")
+    smtp_port = int(smtp_cfg.get("smtp_port", 587))
+    smtp_user = smtp_cfg.get("smtp_user", "")
+    smtp_pass = smtp_cfg.get("smtp_password", "")
+    from_addr = smtp_cfg.get("smtp_from_address", ms.get("email", ""))
+    from_name = smtp_cfg.get("smtp_from_name", ms.get("name", ""))
+
+    if not smtp_host:
+        return _json({"error": "SMTP nicht konfiguriert"}, 400)
+
+    period = f"{von} bis {bis}" if von and bis else "gesamt"
+    msg = MIMEMultipart()
+    msg["From"] = f"{from_name} <{from_addr}>"
+    msg["To"] = stb_email
+    msg["Subject"] = f"Belege {period} – {ms.get('name', '')}"
+    body = (f"Sehr geehrte Damen und Herren,\n\n"
+            f"anbei erhalten Sie die Belege für den Zeitraum {period}.\n"
+            f"Das ZIP enthält alle Eingangs- und Ausgangsrechnungen als PDF\n"
+            f"sowie eine CSV-Übersicht.\n\n"
+            f"Mit freundlichen Grüßen\n{ms.get('name', '')}")
+    msg.attach(MIMEText(body, "plain", "utf-8"))
+    att = MIMEApplication(zip_bytes, _subtype="zip")
+    att.add_header("Content-Disposition", "attachment",
+                   filename=f"Belege_{period.replace(' ','_')}.zip")
+    msg.attach(att)
+
+    try:
+        if smtp_port == 465:
+            ctx = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15, context=ctx)
+        else:
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+        if smtp_pass:
+            server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+        server.quit()
+        return _json({"sent": True, "to": stb_email, "size": len(zip_bytes)})
+    except Exception as e:
+        return _json({"error": f"Mail-Versand fehlgeschlagen: {e}"}, 500)
+
+
 # ── API: Daten zuruecksetzen ──────────────────────────────────────────
 
 @app.route("/api/reset-data", methods=["POST"])
@@ -621,7 +1723,25 @@ def api_reset_data():
 @app.route("/api/license")
 def api_license():
     """Gibt den aktuellen Lizenzstatus zurueck."""
-    return _json(lic_mgr.get_info().to_dict())
+    try:
+        return _json(lic_mgr.get_info().to_dict())
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        # Fallback: Trial-Modus wenn Lizenzprüfung fehlschlägt
+        return _json({
+            "status": "TRIAL",
+            "is_active": True,
+            "is_trial": True,
+            "trial_days_left": 28,
+            "days_remaining": 28,
+            "status_text": f"Testversion (Lizenzfehler: {e})",
+            "device_id": "unknown",
+            "customer_name": "",
+            "license_key_short": "",
+            "valid_until": "",
+            "trial_start": "",
+        })
 
 
 @app.route("/api/license/activate", methods=["POST"])
@@ -656,12 +1776,144 @@ def api_dashboard():
         e.event_type in ("MANUELLE_KORREKTUR", "FELD_GEAENDERT") for e in i.audit_trail))
     touchless_rate = (touchless / total * 100) if total > 0 else 0
 
+    # Auftragsmanagement-KPIs
+    txn_stats = txn_mgr.stats()
+    txns_all = txn_mgr.list_all()
+
+    # Umsatz aus abgeschlossenen Vorgängen (Stufe 7 approved)
+    umsatz = 0
+    pipeline = 0
+    for t in txns_all:
+        inv_step = t.get("steps", {}).get("invoice", {})
+        if inv_step.get("approved"):
+            umsatz += inv_step.get("amount", 0)
+        elif inv_step.get("amount", 0) > 0:
+            pipeline += inv_step.get("amount", 0)
+        else:
+            # Pipeline aus letztem Step mit Betrag
+            for key in reversed(STEP_KEYS):
+                s = t.get("steps", {}).get(key, {})
+                if s.get("amount", 0) > 0:
+                    pipeline += s["amount"]
+                    break
+
+    # Mahnungen
+    dunning_summary = dunning_mgr.get_overdue_summary(txns_all)
+
     return _json({
         "total": total, "offene": offene, "freigegeben": freigegeben,
         "exportiert": exportiert, "volumen": round(volumen, 2),
         "touchless_rate": round(touchless_rate, 1),
         "inbox_count": len(inbox.items),
         "export_count": len(exporter.get_log()),
+        # Auftragsmanagement
+        "txn_total": txn_stats["total"],
+        "txn_offen": txn_stats["in_bearbeitung"] + txn_stats["neu"],
+        "txn_abgeschlossen": txn_stats["abgeschlossen"],
+        "txn_umsatz": round(umsatz, 2),
+        "txn_pipeline": round(pipeline, 2),
+        # Mahnungen
+        "dunning_overdue": dunning_summary["total_overdue"],
+        "dunning_action": dunning_summary["needs_action"],
+        "dunning_amount": dunning_summary["total_overdue_amount"],
+    })
+
+
+# ── API: Bestellungs-Matching (Phase 4) ──────────────────────────────
+
+@app.route("/api/invoices/<inv_id>/match-order", methods=["POST"])
+def api_match_order(inv_id):
+    """Sucht offene Bestellungen die zu einer Eingangsrechnung passen."""
+    inv = invoices.get(inv_id)
+    if not inv:
+        return _json({"error": "Rechnung nicht gefunden"}, 404)
+
+    if (inv._direction or "") != "EINGANG":
+        return _json({"error": "Nur Eingangsrechnungen können gematcht werden"}, 400)
+
+    txns = txn_mgr.list_all()
+    inv_amount = float(inv.tax_inclusive_amount())
+    inv_seller = inv.seller.name.lower().strip() if inv.seller else ""
+    inv_order_ref = (inv.order_reference or "").strip()
+
+    matches = []
+    for txn in txns:
+        po_step = txn.get("steps", {}).get("purchase_order", {})
+        if not po_step.get("approved"):
+            continue  # Nur freigegebene Bestellungen
+
+        score = 0
+        reasons = []
+
+        # Lieferantenname
+        txn_supplier = txn.get("supplier_name", "").lower().strip()
+        if inv_seller and txn_supplier and (
+            inv_seller in txn_supplier or txn_supplier in inv_seller):
+            score += 40
+            reasons.append("Lieferant passt")
+
+        # Betrag (±5% Toleranz)
+        po_amount = po_step.get("amount", 0)
+        if po_amount > 0 and inv_amount > 0:
+            diff_pct = abs(inv_amount - po_amount) / po_amount * 100
+            if diff_pct < 1:
+                score += 40
+                reasons.append(f"Betrag exakt ({diff_pct:.1f}%)")
+            elif diff_pct < 5:
+                score += 25
+                reasons.append(f"Betrag ähnlich ({diff_pct:.1f}%)")
+
+        # Bestellnummer-Referenz
+        po_ref = po_step.get("reference", "")
+        if inv_order_ref and po_ref and inv_order_ref.lower() == po_ref.lower():
+            score += 50
+            reasons.append("Bestellnummer matcht")
+
+        if score >= 40:
+            matches.append({
+                "transaction_id": txn["id"],
+                "subject": txn.get("subject", ""),
+                "supplier_name": txn.get("supplier_name", ""),
+                "po_reference": po_ref,
+                "po_amount": po_amount,
+                "score": score,
+                "reasons": reasons,
+            })
+
+    matches.sort(key=lambda m: -m["score"])
+    return _json({"invoice_id": inv_id, "matches": matches})
+
+
+@app.route("/api/invoices/<inv_id>/link-order", methods=["POST"])
+def api_link_order(inv_id):
+    """Verknüpft eine Eingangsrechnung mit einem Vorgang."""
+    inv = invoices.get(inv_id)
+    if not inv:
+        return _json({"error": "Rechnung nicht gefunden"}, 404)
+
+    data = request.json or {}
+    txn_id = data.get("transaction_id", "")
+    if not txn_id:
+        return _json({"error": "transaction_id erforderlich"}, 400)
+
+    txn = txn_mgr.get(txn_id)
+    if not txn:
+        return _json({"error": f"Vorgang {txn_id} nicht gefunden"}, 404)
+
+    # Verknüpfung: Rechnungsnummer in Audit-Trail und Note
+    inv.add_audit("BESTELLUNG_VERKNUEPFT", "system",
+                  f"Verknüpft mit Vorgang {txn_id} (Bestellung {txn['steps'].get('purchase_order', {}).get('reference', '')})")
+    if not inv.note:
+        inv.note = f"Vorgang: {txn_id}"
+    else:
+        inv.note += f" | Vorgang: {txn_id}"
+
+    auto_save()
+
+    return _json({
+        "linked": True,
+        "invoice_id": inv_id,
+        "transaction_id": txn_id,
     })
 
 

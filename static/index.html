@@ -16,6 +16,8 @@ button.success{background:var(--success);color:#fff;border-color:var(--success)}
 button.danger{background:var(--danger);color:#fff;border-color:var(--danger)}
 input,select,textarea{font-family:var(--font);font-size:13px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg2);width:100%;outline:none}
 input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+#txn-pos-editor .data-table input,#txn-pos-editor .data-table select{font-size:14px;padding:6px 8px;min-height:36px;box-sizing:border-box}
+#txn-pos-editor .data-table td{vertical-align:middle;padding:4px 3px}
 
 .shell{display:flex;min-height:100vh}
 .sidebar{width:220px;background:var(--bg2);border-right:1px solid var(--border);padding:16px 0;flex-shrink:0}
@@ -27,7 +29,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 .nav-item .icon{width:18px;text-align:center;font-size:15px}
 .nav-item .badge{margin-left:auto;background:var(--warning-bg);color:var(--warning);font-size:11px;padding:1px 7px;border-radius:10px;font-weight:500}
 
-.main{flex:1;padding:24px 32px;max-width:1200px}
+.main{flex:1;padding:24px 32px;max-width:1400px}
 .page{display:none}
 .page.active{display:block}
 
@@ -183,12 +185,19 @@ th.c,td.c{text-align:center}
 <div class="shell">
 
 <div class="sidebar">
-  <h1><span id="sidebar-logo" style="margin-bottom:4px"></span>E-Rechnung<span>Demo GmbH · v1.0</span></h1>
+  <h1><span id="sidebar-logo" style="margin-bottom:4px"></span>E-Rechnung<span>EBRK UG &middot; v2.0</span></h1>
   <div class="nav-item active" onclick="navigate('dashboard')"><span class="icon">&#9632;</span>Dashboard</div>
   <div class="nav-item" onclick="navigate('inbox')"><span class="icon">&#9993;</span>Rechnungen<span class="badge" id="nav-badge">3</span></div>
   <div class="nav-item" onclick="navigate('workflow')"><span class="icon">&#10003;</span>Freigaben<span class="badge" id="wf-badge">2</span></div>
   <div class="nav-item" onclick="navigate('create')"><span class="icon">&#10010;</span>Rechnung erstellen</div>
   <div class="nav-item" onclick="navigate('archive')"><span class="icon">&#9881;</span>Archiv</div>
+  <div style="border-top:1px solid var(--border);margin:12px 0"></div>
+  <div class="nav-item" onclick="navigate('suppliers')"><span class="icon">&#127981;</span>Lieferanten</div>
+  <div class="nav-item" onclick="navigate('customers')"><span class="icon">&#128101;</span>Kunden</div>
+  <div class="nav-item" onclick="navigate('products')"><span class="icon">&#128230;</span>Produkte</div>
+  <div class="nav-item" onclick="navigate('transactions')"><span class="icon">&#128203;</span>Vorg&auml;nge<span class="badge" id="txn-badge" style="display:none">0</span></div>
+  <div class="nav-item" onclick="navigate('dunning')"><span class="icon">&#9888;</span>Mahnungen<span class="badge" id="dun-badge" style="display:none">0</span></div>
+  <div class="nav-item" onclick="navigate('steuerberater')"><span class="icon">&#128188;</span>Steuerberater</div>
   <div style="border-top:1px solid var(--border);margin:12px 0"></div>
   <div class="nav-item" onclick="navigate('settings')"><span class="icon">&#9881;</span>Einstellungen</div>
 </div>
@@ -458,6 +467,323 @@ th.c,td.c{text-align:center}
     <tbody id="arch-table"></tbody></table></div>
 </div>
 
+<!-- ═══ LIEFERANTEN ═══ -->
+<div class="page" id="page-suppliers">
+  <div class="topbar"><div><h2>Lieferanten</h2><div class="sub">Lieferanten-Stammdaten verwalten</div></div></div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap">
+    <!-- Formular -->
+    <div class="card" style="flex:1;min-width:320px">
+      <h3>Lieferant anlegen / bearbeiten</h3>
+      <input type="hidden" id="sup-edit-id">
+      <div class="form-row"><label>Firma / Name *</label><input id="sup-name" placeholder="Muster Bau GmbH"></div>
+      <div class="form-row"><label>Ansprechpartner</label><input id="sup-contact" placeholder="Max Mustermann"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-row"><label>Strasse</label><input id="sup-street" placeholder="Industriestr. 5"></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="sup-plz" placeholder="41379" style="width:80px"><input id="sup-city" placeholder="Brüggen"></div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-row"><label>E-Mail</label><input id="sup-email" type="email" placeholder="info@firma.de"></div>
+        <div class="form-row"><label>Telefon</label><input id="sup-phone" placeholder="02163-12345"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-row"><label>USt-ID</label><input id="sup-vat" placeholder="DE123456789"></div>
+        <div class="form-row"><label>Kategorie</label><input id="sup-category" placeholder="Material / Dienstleistung"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-row"><label>IBAN</label><input id="sup-iban" placeholder="DE89 3704 0044 0532 0130 00"></div>
+        <div class="form-row"><label>BIC</label><input id="sup-bic" placeholder="COBADEFFXXX"></div>
+      </div>
+      <div class="form-row"><label>Notizen</label><textarea id="sup-notes" rows="2" placeholder="Freitext..."></textarea></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button onclick="saveSupplier()" class="btn-primary">Speichern</button>
+        <button onclick="clearSupForm()">Zurücksetzen</button>
+        <span style="margin-left:auto;display:flex;gap:4px;align-items:center">
+          CSV Import <input type="file" accept=".csv,.txt" style="display:none" onchange="uploadSuppliersCsv(this.files[0])">
+          <button onclick="this.previousElementSibling.click()" style="font-size:11px;padding:2px 8px">Datei...</button>
+        </span>
+      </div>
+      <div id="sup-save-result" style="margin-top:6px;font-size:12px"></div>
+    </div>
+    <!-- Liste -->
+    <div class="card" style="flex:2;min-width:400px;overflow-x:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 style="margin:0">Lieferantenliste (<span id="sup-count">0</span>)</h3>
+        <div style="display:flex;gap:6px">
+          <a href="/api/suppliers/csv/export" download style="font-size:11px;padding:2px 8px;text-decoration:none;border:1px solid var(--border);border-radius:var(--radius)">CSV Export</a>
+          <button onclick="deleteAllSuppliers()" style="font-size:11px;padding:2px 8px;color:var(--danger)">Alle l&ouml;schen</button>
+        </div>
+      </div>
+      <table class="data-table"><thead><tr>
+        <th style="width:40px">&#10003;</th><th>ID</th><th>Firma</th><th>Ansprechpartner</th><th>Ort</th><th>Kategorie</th><th>E-Mail</th><th style="width:80px"></th>
+      </tr></thead><tbody id="sup-table-body"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ KUNDEN ═══ -->
+<div class="page" id="page-customers">
+  <div class="topbar"><div><h2>Kunden</h2><div class="sub">Rechnungsempf&auml;nger / K&auml;ufer verwalten</div></div></div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap">
+    <!-- Formular -->
+    <div class="card" style="flex:1;min-width:320px">
+      <h3>Kunde anlegen / bearbeiten</h3>
+      <input type="hidden" id="cust-edit-id">
+      <div style="display:grid;grid-template-columns:80px 1fr;gap:8px">
+        <div class="form-row"><label>Anrede</label><select id="cust-salutation" style="width:100%"><option value="">-</option><option>Herr</option><option>Frau</option><option>Firma</option><option>Familie</option></select></div>
+        <div class="form-row"><label>Firma / Name *</label><input id="cust-name" placeholder="Familie Müller oder Firma GmbH"></div>
+      </div>
+      <div class="form-row"><label>Ansprechpartner</label><input id="cust-contact" placeholder="Stefan Müller"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-row"><label>Strasse</label><input id="cust-street" placeholder="Hauptstr. 12"></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="cust-plz" placeholder="41379" style="width:80px"><input id="cust-city" placeholder="Brüggen"></div></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-row"><label>E-Mail</label><input id="cust-email" type="email" placeholder="kunde@firma.de"></div>
+        <div class="form-row"><label>Referenz (BT-10)</label><input id="cust-ref" placeholder="K-MUE-001"></div>
+      </div>
+      <div class="form-row"><label>USt-ID (bei Firmen)</label><input id="cust-vat" placeholder="DE123456789"></div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button onclick="saveCustomer()" class="btn-primary">Speichern</button>
+        <button onclick="clearCustForm()">Zur&uuml;cksetzen</button>
+        <span style="margin-left:auto;display:flex;gap:4px;align-items:center">
+          CSV <input type="file" accept=".csv,.txt" style="display:none" onchange="uploadCustomersCsv(this.files[0])">
+          <button onclick="this.previousElementSibling.click()" style="font-size:11px;padding:2px 8px">Import</button>
+        </span>
+      </div>
+      <div id="cust-save-result" style="margin-top:6px;font-size:12px"></div>
+    </div>
+    <!-- Liste -->
+    <div class="card" style="flex:2;min-width:400px;overflow-x:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 style="margin:0">Kundenliste (<span id="cust-count">0</span>)</h3>
+        <div style="display:flex;gap:6px">
+          <a href="/api/buyers/csv/export" download style="font-size:11px;padding:2px 8px;text-decoration:none;border:1px solid var(--border);border-radius:var(--radius)">CSV Export</a>
+          <button onclick="deleteAllCustomers()" style="font-size:11px;padding:2px 8px;color:var(--danger)">Alle l&ouml;schen</button>
+        </div>
+      </div>
+      <table class="data-table"><thead><tr>
+        <th>ID</th><th>Name</th><th>Ansprechpartner</th><th>Ort</th><th>E-Mail</th><th>Referenz</th><th style="width:50px"></th>
+      </tr></thead><tbody id="cust-table-body"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ PRODUKTE ═══ -->
+<div class="page" id="page-products">
+  <div class="topbar"><div><h2>Produktkatalog</h2><div class="sub">Dienstleistungen und digitale Produkte – EK/VK getrennt</div></div>
+  <button onclick="loadDemoProducts()" style="font-size:11px;padding:3px 8px;color:var(--text2)">Demo-Produkte laden</button>
+  </div>
+  <div style="display:flex;gap:24px;flex-wrap:wrap">
+    <div class="card" style="flex:1;min-width:300px">
+      <h3>Produkt anlegen / bearbeiten</h3>
+      <input type="hidden" id="prod-edit-nr">
+      <div style="display:grid;grid-template-columns:100px 1fr;gap:8px">
+        <div class="form-row"><label>Art.-Nr.</label><input id="prod-artnr" placeholder="auto"></div>
+        <div class="form-row"><label>Bezeichnung *</label><input id="prod-name" placeholder="Energieausweis Wohngebäude"></div>
+      </div>
+      <div class="form-row"><label>Beschreibung</label><input id="prod-desc" placeholder="Detailbeschreibung..."></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr 80px;gap:8px">
+        <div class="form-row"><label>Kategorie</label><input id="prod-cat" placeholder="Energieberatung" list="prod-cats"></div>
+        <div class="form-row"><label>EK-Preis (netto)</label><input id="prod-ek" type="number" step="0.01" value="0" placeholder="0.00"></div>
+        <div class="form-row"><label>VK-Preis (netto)</label><input id="prod-vk" type="number" step="0.01" value="0" placeholder="0.00"></div>
+        <div class="form-row"><label>Einheit</label><input id="prod-unit" value="Stk" placeholder="Stk"></div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button onclick="saveProduct()" class="btn-primary">Speichern</button>
+        <button onclick="clearProdForm()">Zur&uuml;cksetzen</button>
+        <span style="margin-left:auto;display:flex;gap:4px;align-items:center">
+          CSV <input type="file" accept=".csv,.txt" style="display:none" onchange="uploadProductsCsv(this.files[0])">
+          <button onclick="this.previousElementSibling.click()" style="font-size:11px;padding:2px 8px">Import</button>
+        </span>
+      </div>
+      <datalist id="prod-cats"></datalist>
+      <div id="prod-save-result" style="margin-top:6px;font-size:12px"></div>
+    </div>
+    <div class="card" style="flex:2;min-width:400px;overflow-x:auto">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3 style="margin:0">Produktliste (<span id="prod-count">0</span>)</h3>
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="prod-filter-cat" onchange="filterProducts()" style="font-size:11px;padding:2px 6px">
+            <option value="">Alle Kategorien</option>
+          </select>
+          <a href="/api/products/csv/export" download style="font-size:11px;padding:2px 8px;text-decoration:none;border:1px solid var(--border);border-radius:var(--radius)">CSV Export</a>
+          <button onclick="deleteAllProducts()" style="font-size:11px;padding:2px 8px;color:var(--danger)">Alle l&ouml;schen</button>
+        </div>
+      </div>
+      <table class="data-table"><thead><tr>
+        <th>Art.-Nr.</th><th>Bezeichnung</th><th>Kategorie</th><th style="text-align:right">EK</th><th style="text-align:right">VK</th><th>Einh.</th><th style="text-align:right">Bestand</th><th style="width:50px"></th>
+      </tr></thead><tbody id="prod-table-body"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ VORGÄNGE ═══ -->
+<div class="page" id="page-transactions">
+  <div class="topbar"><div><h2>Vorg&auml;nge</h2><div class="sub">Auftragsmanagement &ndash; vom Angebot bis zur Rechnung</div></div></div>
+  <!-- Statistik -->
+  <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+    <div class="stat"><div class="num" id="txn-stat-total">0</div><div class="lbl">Gesamt</div></div>
+    <div class="stat"><div class="num" id="txn-stat-open">0</div><div class="lbl">In Bearbeitung</div></div>
+    <div class="stat"><div class="num" id="txn-stat-done">0</div><div class="lbl">Abgeschlossen</div></div>
+  </div>
+  <!-- Neuer Vorgang -->
+  <div class="card" style="margin-bottom:16px">
+    <h3>Neuen Vorgang anlegen</h3>
+    <div style="display:grid;grid-template-columns:2fr 1fr 1fr auto;gap:8px;align-items:end">
+      <div class="form-row"><label>Betreff *</label><input id="txn-new-subject" placeholder="Dachsanierung Müller"></div>
+      <div class="form-row"><label>Lieferant</label><select id="txn-new-supplier"><option value="">-- optional --</option></select></div>
+      <div class="form-row"><label>Kunde</label><select id="txn-new-buyer"><option value="">-- optional --</option></select></div>
+      <button onclick="createTransaction()" class="btn-primary" style="height:34px">Anlegen</button>
+    </div>
+  </div>
+  <!-- Liste -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+      <h3 style="margin:0">Vorgangsliste</h3>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="txn-filter-status" onchange="loadTransactions()" style="font-size:12px;padding:2px 6px">
+          <option value="">Alle Status</option>
+          <option value="NEU">Neu</option>
+          <option value="IN_BEARBEITUNG">In Bearbeitung</option>
+          <option value="ABGESCHLOSSEN">Abgeschlossen</option>
+          <option value="STORNIERT">Storniert</option>
+        </select>
+      </div>
+    </div>
+    <table class="data-table"><thead><tr>
+      <th>Nr.</th><th>Betreff</th><th>Lieferant</th><th>Kunde</th><th>Status</th><th>Aktuelle Stufe</th><th>Erstellt</th><th style="width:50px"></th>
+    </tr></thead><tbody id="txn-table-body"></tbody></table>
+  </div>
+</div>
+
+<!-- ═══ VORGANG DETAIL ═══ -->
+<div class="page" id="page-txn-detail">
+  <div class="topbar"><div>
+    <h2 id="txn-detail-title">Vorgang</h2>
+    <div class="sub" id="txn-detail-sub"></div>
+  </div>
+  <button onclick="navigate('transactions')" style="font-size:12px;padding:4px 12px">&larr; Zur&uuml;ck</button>
+  </div>
+  <div style="display:flex;gap:16px;flex-wrap:wrap">
+    <!-- Stepper -->
+    <div class="card" style="flex:0 0 220px;min-width:180px;max-width:240px" id="txn-stepper-card">
+      <h3 style="font-size:13px">Workflow</h3>
+      <div id="txn-stepper"></div>
+    </div>
+    <!-- Positionen / Detail -->
+    <div class="card" style="flex:1;min-width:480px">
+      <h3 id="txn-pos-title">Positionen</h3>
+      <div id="txn-pos-editor">
+        <table class="data-table" style="font-size:14px;width:100%"><thead><tr>
+          <th style="width:35px">Pos</th><th style="min-width:220px">Beschreibung</th><th style="width:90px">Menge</th><th style="width:70px">Einheit</th><th style="width:110px">Einzelpreis</th><th style="width:90px">Rabatt %</th><th style="width:120px;text-align:right">Netto &euro;</th><th style="width:30px"></th>
+        </tr></thead><tbody id="txn-pos-body"></tbody></table>
+        <div style="margin-top:8px;font-size:13px" id="txn-pos-totals"></div>
+      </div>
+      <!-- Timeline -->
+      <div style="margin-top:16px;border-top:1px solid var(--border);padding-top:12px">
+        <h3>Ereignis-Timeline</h3>
+        <div id="txn-timeline" style="font-size:13px"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ MAHNUNGEN ═══ -->
+<div class="page" id="page-dunning">
+  <div class="topbar"><div><h2>Mahnungen</h2><div class="sub">&Uuml;berf&auml;llige Rechnungen und Mahnvorschl&auml;ge</div></div>
+  <button onclick="runDunningCheck()" class="btn-primary" style="font-size:12px;padding:4px 12px">&#128260; Pr&uuml;flauf starten</button>
+  </div>
+  <!-- Statistik -->
+  <div style="display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap">
+    <div class="stat"><div class="num" id="dun-stat-total">0</div><div class="lbl">&Uuml;berf&auml;llig</div></div>
+    <div class="stat"><div class="num" id="dun-stat-action">0</div><div class="lbl">Aktion n&ouml;tig</div></div>
+    <div class="stat"><div class="num" id="dun-stat-amount">0</div><div class="lbl">&euro; offen</div></div>
+  </div>
+  <!-- Mahnregeln -->
+  <div class="card" style="margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer"
+         onclick="document.getElementById('dun-rules-body').style.display=document.getElementById('dun-rules-body').style.display==='none'?'block':'none'">
+      <h3 style="margin:0">&#9881; Mahnregeln</h3><span style="font-size:11px;color:var(--text2)">aufklappen</span>
+    </div>
+    <div id="dun-rules-body" style="display:none;margin-top:12px">
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:13px">
+        <div>
+          <label style="font-size:11px;color:var(--text2)">Stufe 1 – Tage nach F&auml;lligkeit</label>
+          <input id="dun-r1-days" type="number" value="14" style="width:100%">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text2)">Stufe 2 – Tage</label>
+          <input id="dun-r2-days" type="number" value="28" style="width:100%">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text2)">Stufe 3 – Tage</label>
+          <input id="dun-r3-days" type="number" value="42" style="width:100%">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text2)">Geb&uuml;hr Stufe 1 (&euro;)</label>
+          <input id="dun-r1-fee" type="number" step="0.01" value="0" style="width:100%">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text2)">Geb&uuml;hr Stufe 2 (&euro;)</label>
+          <input id="dun-r2-fee" type="number" step="0.01" value="5" style="width:100%">
+        </div>
+        <div>
+          <label style="font-size:11px;color:var(--text2)">Geb&uuml;hr Stufe 3 (&euro;)</label>
+          <input id="dun-r3-fee" type="number" step="0.01" value="10" style="width:100%">
+        </div>
+      </div>
+      <button onclick="saveDunningRules()" style="margin-top:8px;font-size:12px;padding:4px 12px">Regeln speichern</button>
+    </div>
+  </div>
+  <!-- Liste -->
+  <div class="card">
+    <table class="data-table"><thead><tr>
+      <th>Vorgang</th><th>Kunde</th><th>Rechnung</th><th style="text-align:right">Betrag</th><th>F&auml;llig seit</th><th style="text-align:right">Tage</th><th>Letzte Stufe</th><th>N&auml;chste Stufe</th><th style="width:120px"></th>
+    </tr></thead><tbody id="dun-table-body"></tbody></table>
+  </div>
+</div>
+
+<!-- ═══ STEUERBERATER ═══ -->
+<div class="page" id="page-steuerberater">
+  <div class="topbar"><div><h2>&#128188; Steuerberater-Export</h2><div class="sub">Eingangs- &amp; Ausgangsrechnungen f&uuml;r einen Zeitraum als PDF-Paket</div></div></div>
+  <div class="card" style="margin-bottom:16px">
+    <h3>Zeitraum w&auml;hlen</h3>
+    <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+      <div class="form-row" style="margin:0"><label>Von</label><input type="date" id="stb-von"></div>
+      <div class="form-row" style="margin:0"><label>Bis</label><input type="date" id="stb-bis"></div>
+      <button onclick="loadStbBelege()" class="btn-primary">Belege suchen</button>
+      <div style="display:flex;gap:8px;margin-left:auto">
+        <button onclick="stbSetQuartal(-1)" style="font-size:11px;padding:3px 8px">Letztes Quartal</button>
+        <button onclick="stbSetQuartal(0)" style="font-size:11px;padding:3px 8px">Aktuelles Quartal</button>
+        <button onclick="stbSetJahr()" style="font-size:11px;padding:3px 8px">Ganzes Jahr</button>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="margin:0">Belege (<span id="stb-count">0</span>)</h3>
+      <div style="display:flex;gap:8px" id="stb-actions" style="display:none">
+        <a id="stb-download-link" href="#" download style="font-size:12px;padding:6px 14px;text-decoration:none;background:var(--accent);color:#fff;border-radius:var(--radius)">&#128229; ZIP herunterladen</a>
+        <button onclick="stbSendMail()" style="font-size:12px;padding:6px 14px">&#9993; An Steuerberater senden</button>
+      </div>
+    </div>
+    <div id="stb-summary" style="display:flex;gap:24px;margin-bottom:12px;font-size:13px"></div>
+    <table class="data-table"><thead><tr>
+      <th style="width:70px">Typ</th><th>Belegnummer</th><th>Datum</th><th>Lieferant / Kunde</th><th style="text-align:right">Betrag</th><th style="width:60px">PDF</th>
+    </tr></thead><tbody id="stb-table-body">
+      <tr><td colspan="6" style="color:var(--text2);text-align:center">Zeitraum w&auml;hlen und &quot;Belege suchen&quot; klicken</td></tr>
+    </tbody></table>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h3>Steuerberater-Einstellungen</h3>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="form-row"><label>E-Mail Steuerberater</label><input id="stb-email" placeholder="kanzlei@steuerberater.de"></div>
+      <div class="form-row"><label>Name Steuerberater</label><input id="stb-name" placeholder="Steuerberatung Muster"></div>
+    </div>
+    <button onclick="saveStbSettings()" style="margin-top:8px;font-size:12px;padding:4px 12px">Einstellungen speichern</button>
+  </div>
+</div>
+
 <!-- ═══ EINSTELLUNGEN ═══ -->
 <div class="page" id="page-settings">
   <div class="topbar"><div><h2>Einstellungen</h2><div class="sub">Lizenz, E-Mail, Mandant und Systemkonfiguration</div></div></div>
@@ -630,6 +956,94 @@ th.c,td.c{text-align:center}
     </div>
   </div>
 
+  <!-- Dokumentvorlagen -->
+  <div class="card" style="margin-top:16px">
+    <div class="card-header" style="cursor:pointer" onclick="document.getElementById('tpl-body').style.display=document.getElementById('tpl-body').style.display==='none'?'block':'none'">
+      <h3>&#128196; Dokumentvorlagen</h3>
+      <div style="font-size:11px;color:var(--text2)">Standardtexte f&uuml;r Angebot, Bestellung, Lieferschein, Rechnung, Mahnung &ndash; aufklappen</div>
+    </div>
+    <div class="card-body" id="tpl-body" style="display:none">
+      <div style="font-size:12px;color:var(--text2);margin-bottom:12px">Diese Texte werden automatisch in die Dokumente eingesetzt. Sie k&ouml;nnen pro Vorgang &uuml;berschrieben werden.</div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <!-- Angebotsanfrage -->
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-weight:500;margin-bottom:6px">Angebotsanfrage (an Lieferant)</div>
+          <div class="form-row"><label>Einleitungstext</label>
+            <textarea id="tpl-supplier_quote-intro" rows="2" style="font-size:12px" placeholder="Sehr geehrte Damen und Herren, wir bitten um Abgabe eines Angebots..."></textarea></div>
+          <div class="form-row"><label>Schlusstext</label>
+            <textarea id="tpl-supplier_quote-closing" rows="2" style="font-size:12px" placeholder="Bitte senden Sie uns Ihr Angebot bis zum..."></textarea></div>
+        </div>
+        <!-- Bestellung -->
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-weight:500;margin-bottom:6px">Bestellung (an Lieferant)</div>
+          <div class="form-row"><label>Einleitungstext</label>
+            <textarea id="tpl-purchase_order-intro" rows="2" style="font-size:12px" placeholder="Hiermit bestellen wir verbindlich..."></textarea></div>
+          <div class="form-row"><label>Schlusstext</label>
+            <textarea id="tpl-purchase_order-closing" rows="2" style="font-size:12px" placeholder="Mit freundlichen Gr&uuml;&szlig;en..."></textarea></div>
+        </div>
+        <!-- Kundenangebot -->
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-weight:500;margin-bottom:6px">Angebot (an Kunde)</div>
+          <div class="form-row"><label>Einleitungstext</label>
+            <textarea id="tpl-customer_quote-intro" rows="2" style="font-size:12px" placeholder="Vielen Dank f&uuml;r Ihre Anfrage. Gerne unterbreiten wir..."></textarea></div>
+          <div class="form-row"><label>Schlusstext</label>
+            <textarea id="tpl-customer_quote-closing" rows="2" style="font-size:12px" placeholder="Dieses Angebot ist 30 Tage g&uuml;ltig..."></textarea></div>
+          <div class="form-row"><label>G&uuml;ltigkeit (Tage)</label>
+            <input id="tpl-customer_quote-validity" type="number" value="30" style="width:80px"></div>
+        </div>
+        <!-- Auftragsbestätigung -->
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-weight:500;margin-bottom:6px">Auftragsbest&auml;tigung</div>
+          <div class="form-row"><label>Einleitungstext</label>
+            <textarea id="tpl-order_intake-intro" rows="2" style="font-size:12px" placeholder="Vielen Dank f&uuml;r Ihren Auftrag..."></textarea></div>
+          <div class="form-row"><label>Schlusstext</label>
+            <textarea id="tpl-order_intake-closing" rows="2" style="font-size:12px" placeholder="Wir freuen uns auf die Zusammenarbeit..."></textarea></div>
+        </div>
+        <!-- Lieferschein -->
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-weight:500;margin-bottom:6px">Lieferschein</div>
+          <div class="form-row"><label>Einleitungstext</label>
+            <textarea id="tpl-delivery_note-intro" rows="2" style="font-size:12px" placeholder="Hiermit best&auml;tigen wir die Lieferung..."></textarea></div>
+          <div class="form-row"><label>Schlusstext</label>
+            <textarea id="tpl-delivery_note-closing" rows="2" style="font-size:12px" placeholder="Bitte best&auml;tigen Sie den Empfang..."></textarea></div>
+        </div>
+        <!-- Rechnung -->
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px">
+          <div style="font-weight:500;margin-bottom:6px">Rechnung</div>
+          <div class="form-row"><label>Zahlungsbedingung (Standard)</label>
+            <select id="tpl-invoice-payment_terms" style="font-size:12px">
+              <option value="Zahlbar sofort ohne Abzug">Sofort</option>
+              <option value="Zahlbar innerhalb von 7 Tagen">1 Woche</option>
+              <option value="Zahlbar innerhalb von 14 Tagen">2 Wochen</option>
+              <option value="Zahlbar innerhalb von 30 Tagen">4 Wochen</option>
+            </select></div>
+          <div class="form-row"><label>Einleitungstext</label>
+            <textarea id="tpl-invoice-intro" rows="2" style="font-size:12px" placeholder="Wir stellen Ihnen folgende Leistungen in Rechnung..."></textarea></div>
+          <div class="form-row"><label>Schlusstext</label>
+            <textarea id="tpl-invoice-closing" rows="2" style="font-size:12px" placeholder="Bitte &uuml;berweisen Sie den Betrag auf das unten genannte Konto..."></textarea></div>
+        </div>
+        <!-- Mahnung -->
+        <div style="border:1px solid var(--border);border-radius:var(--radius);padding:12px;grid-column:1/-1">
+          <div style="font-weight:500;margin-bottom:6px">Mahnungen (Stufe 1 / 2 / 3)</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+            <div class="form-row"><label>Stufe 1 (Erinnerung)</label>
+              <textarea id="tpl-dunning_1-intro" rows="2" style="font-size:12px" placeholder="Wir m&ouml;chten Sie freundlich an die Zahlung erinnern..."></textarea></div>
+            <div class="form-row"><label>Stufe 2 (1. Mahnung)</label>
+              <textarea id="tpl-dunning_2-intro" rows="2" style="font-size:12px" placeholder="Trotz unserer Erinnerung konnten wir keinen Zahlungseingang feststellen..."></textarea></div>
+            <div class="form-row"><label>Stufe 3 (Letzte Mahnung)</label>
+              <textarea id="tpl-dunning_3-intro" rows="2" style="font-size:12px" placeholder="Wir fordern Sie hiermit letztmalig zur Zahlung auf..."></textarea></div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="primary" onclick="saveDocTemplates()">Vorlagen speichern</button>
+        <button onclick="loadDefaultTemplates()">Standardtexte laden</button>
+        <span id="tpl-save-result" style="font-size:12px;line-height:32px"></span>
+      </div>
+    </div>
+  </div>
+
   <!-- Stellvertretung + Polling nebeneinander -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px">
 
@@ -738,11 +1152,12 @@ let currentInvoiceId = null;
 // ── Navigation ──
 function navigate(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  document.getElementById('page-' + page).classList.add('active');
+  const el = document.getElementById('page-' + page);
+  if (el) el.classList.add('active');
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => {
     if (n.textContent.toLowerCase().includes(
-      {dashboard:'dashboard',inbox:'rechnungen',workflow:'freigaben',create:'erstellen',archive:'archiv',settings:'einstellungen',viewer:'belegansicht'}[page]
+      {dashboard:'dashboard',inbox:'rechnungen',workflow:'freigaben',create:'erstellen',archive:'archiv',settings:'einstellungen',viewer:'belegansicht',suppliers:'lieferanten',customers:'kunden',products:'produkte',transactions:'vorg','txn-detail':'vorg',dunning:'mahnungen',steuerberater:'steuerberater'}[page]||''
     )) n.classList.add('active');
   });
   if (page === 'dashboard') loadDashboard();
@@ -751,6 +1166,12 @@ function navigate(page) {
   if (page === 'archive') loadArchive();
   if (page === 'settings') loadSettings();
   if (page === 'create') fillSellerFromMandant();
+  if (page === 'suppliers') loadSuppliers();
+  if (page === 'customers') loadCustomers();
+  if (page === 'products') loadProducts();
+  if (page === 'transactions') loadTransactions();
+  if (page === 'dunning') loadDunning();
+  if (page === 'steuerberater') loadStbSettings();
 }
 
 // ── Helpers ──
@@ -767,7 +1188,10 @@ function dirBadge(d) {
 }
 function toast(msg, type='success') {
   const t = document.createElement('div'); t.className = 'toast ' + type; t.textContent = msg;
-  document.body.appendChild(t); setTimeout(() => t.remove(), 3000);
+  document.body.appendChild(t);
+  const dur = type === 'error' ? 10000 : 3500;
+  setTimeout(() => t.remove(), dur);
+  if (type === 'error') console.error('TOAST ERROR:', msg);
 }
 
 // ── Dashboard ──
@@ -778,8 +1202,15 @@ async function loadDashboard() {
     {l:'Eingangsvolumen',v:dRes.total,s:`${dRes.offene} offen`,c:''},
     {l:'Offene Freigaben',v:dRes.offene,s:dRes.offene>0?'Aktion erforderlich':'Alles erledigt',c:dRes.offene>0?'warn':'up'},
     {l:'Touchless-Rate',v:dRes.touchless_rate+'%',s:'Automatisiert',c:'up'},
-    {l:'Gesamtvolumen',v:fmt(dRes.volumen)+' EUR',s:dRes.total+' Rechnungen',c:''},
+    {l:'Rechnungsvolumen',v:fmt(dRes.volumen)+' €',s:dRes.total+' Rechnungen',c:''},
+    {l:'Vorgänge',v:dRes.txn_total||0,s:`${dRes.txn_offen||0} offen · ${dRes.txn_abgeschlossen||0} fertig`,c:''},
+    {l:'Umsatz (Vorgänge)',v:fmt(dRes.txn_umsatz||0)+' €',s:'Pipeline: '+fmt(dRes.txn_pipeline||0)+' €',c:dRes.txn_umsatz>0?'up':''},
+    {l:'Überfällige',v:dRes.dunning_overdue||0,s:dRes.dunning_action>0?dRes.dunning_action+' Mahnung(en) fällig':fmt(dRes.dunning_amount||0)+' € offen',c:dRes.dunning_action>0?'warn':''},
   ].map(m=>`<div class="metric"><div class="label">${m.l}</div><div class="value">${m.v}</div><div class="sub ${m.c}">${m.s}</div></div>`).join('');
+
+  // Dunning badge
+  const dunBadge = document.getElementById('dun-badge');
+  if (dunBadge) { dunBadge.textContent = dRes.dunning_action||0; dunBadge.style.display = (dRes.dunning_action||0)>0?'':'none'; }
 
   document.getElementById('nav-badge').textContent = dRes.offene;
   const invs = iRes.invoices.slice(0, 6);
@@ -922,7 +1353,9 @@ async function openDetail(id) {
       <span style="color:var(--text2)">Vertrag</span><span>${inv.contract_reference||'—'}</span>
       <span style="color:var(--text2)">Leistung</span><span>${inv.period_start?inv.period_start+' – '+(inv.period_end||''):'—'}</span>
       <span style="color:var(--text2)">Bezug</span><span>${inv.preceding_invoice||'—'}</span>
-    </div>`;
+    </div>
+    ${inv.direction === 'EINGANG' ? '<button onclick="matchOrder(\''+inv.id+'\')" style="margin-top:8px;font-size:11px;padding:3px 10px">&#128279; Bestellung suchen</button>' : ''}
+    <div id="det-match-result" style="margin-top:6px;font-size:12px"></div>`;
   loadKontierung(id);
 }
 
@@ -1095,6 +1528,42 @@ async function findAndOpenInvoice(invoiceNumber) {
   const match = res.invoices.find(i => i.number === invoiceNumber);
   if (match) openDetail(match.id);
   else toast(`Rechnung ${invoiceNumber} nicht gefunden`, 'error');
+}
+
+// ── Bestellungs-Matching (Phase 4) ──
+async function matchOrder(invId) {
+  const el = document.getElementById('det-match-result');
+  if (!el) return;
+  el.innerHTML = '<span style="color:var(--text2)">Suche passende Bestellungen...</span>';
+  try {
+    const res = await fetch(API+'/api/invoices/'+invId+'/match-order', {method:'POST'}).then(r=>r.json());
+    if (res.error) { el.innerHTML = '<span style="color:var(--danger)">'+esc(res.error)+'</span>'; return; }
+    if (!res.matches || !res.matches.length) {
+      el.innerHTML = '<span style="color:var(--text2)">Keine passenden Bestellungen gefunden.</span>';
+      return;
+    }
+    el.innerHTML = '<div style="margin-top:4px"><strong>Gefundene Bestellungen:</strong></div>' +
+      res.matches.map(m => `<div style="display:flex;gap:8px;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">
+        <span style="font-family:var(--mono);font-size:11px">${m.transaction_id}</span>
+        <span>${esc(m.subject||'')} · ${esc(m.supplier_name||'')}</span>
+        <span style="font-size:11px;color:var(--text2)">${m.po_reference} · ${fmt(m.po_amount)} €</span>
+        <span style="font-size:11px;color:var(--success)">${m.reasons.join(', ')}</span>
+        <button onclick="linkOrder('${invId}','${m.transaction_id}')" style="margin-left:auto;font-size:11px;padding:2px 8px" class="btn-primary">Verknüpfen</button>
+      </div>`).join('');
+  } catch(e) { el.innerHTML = '<span style="color:var(--danger)">Fehler: '+e+'</span>'; }
+}
+
+async function linkOrder(invId, txnId) {
+  const res = await fetch(API+'/api/invoices/'+invId+'/link-order', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({transaction_id: txnId})
+  }).then(r=>r.json());
+  if (res.linked) {
+    toast('Rechnung mit Vorgang '+txnId+' verknüpft');
+    openDetail(invId);
+  } else {
+    toast(res.error || 'Fehler', 'error');
+  }
 }
 
 // ── Workflow-Liste ──
@@ -1646,6 +2115,7 @@ async function loadSettings() {
   loadPollingStatus();
   loadRetention();
   loadLicense();
+  loadDocTemplates();
 }
 
 // ── Stammdaten / Mandant ──
@@ -1888,6 +2358,1291 @@ function updateInvoiceNumber() {
   const base = window._baseInvoiceNumber || '';
   const ref = (document.getElementById('c-buyer-ref').value || '').trim();
   document.getElementById('c-number').value = ref ? base + '-' + ref : base;
+}
+
+// ── Lieferanten ──
+let _suppliers = [];
+
+async function loadSuppliers() {
+  try {
+    _suppliers = await fetch(API+'/api/suppliers').then(r=>r.json());
+    document.getElementById('sup-count').textContent = _suppliers.length;
+    renderSupplierTable();
+  } catch(e) { console.error('loadSuppliers', e); }
+}
+
+function renderSupplierTable() {
+  const tbody = document.getElementById('sup-table-body');
+  if (!tbody) return;
+  if (!_suppliers.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Keine Lieferanten gespeichert</td></tr>';
+    return;
+  }
+  tbody.innerHTML = _suppliers.map(s => {
+    const chk = s.approved
+      ? `<span style="color:var(--success);cursor:pointer" title="Freigabe zurücknehmen" onclick="unapproveSupplier('${s.id}')">&#9745;</span>`
+      : `<span style="color:var(--text2);cursor:pointer" title="Freigeben" onclick="approveSupplier('${s.id}')">&#9744;</span>`;
+    return `<tr>
+      <td style="text-align:center;font-size:16px">${chk}</td>
+      <td style="font-family:var(--mono);font-size:11px">${s.id}</td>
+      <td><a href="#" onclick="editSupplier('${s.id}');return false" style="color:var(--accent)">${esc(s.name)}</a></td>
+      <td>${esc(s.contact_name||'')}</td>
+      <td>${esc((s.post_code||'')+' '+(s.city||''))}</td>
+      <td>${esc(s.category||'')}</td>
+      <td>${esc(s.email||'')}</td>
+      <td><button onclick="deleteSupplier('${s.id}','${esc(s.name)}')" style="font-size:11px;color:var(--danger);padding:1px 6px">&#10005;</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function saveSupplier() {
+  const editId = document.getElementById('sup-edit-id').value;
+  const data = {
+    name: document.getElementById('sup-name').value,
+    contact_name: document.getElementById('sup-contact').value,
+    street: document.getElementById('sup-street').value,
+    post_code: document.getElementById('sup-plz').value,
+    city: document.getElementById('sup-city').value,
+    email: document.getElementById('sup-email').value,
+    phone: document.getElementById('sup-phone').value,
+    vat_id: document.getElementById('sup-vat').value,
+    iban: document.getElementById('sup-iban').value,
+    bic: document.getElementById('sup-bic').value,
+    category: document.getElementById('sup-category').value,
+    notes: document.getElementById('sup-notes').value,
+  };
+  if (!data.name) { toast('Firmenname ist Pflichtfeld', 'error'); return; }
+  let res;
+  if (editId) {
+    res = await fetch(API+'/api/suppliers/'+editId, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(r=>r.json());
+  } else {
+    res = await fetch(API+'/api/suppliers', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(r=>r.json());
+  }
+  if (res.saved || res.supplier) {
+    toast('Lieferant gespeichert: ' + (res.supplier||{}).name);
+    clearSupForm();
+    loadSuppliers();
+  } else {
+    toast(res.error || 'Fehler', 'error');
+  }
+}
+
+function editSupplier(id) {
+  const s = _suppliers.find(x => x.id === id);
+  if (!s) return;
+  document.getElementById('sup-edit-id').value = s.id;
+  document.getElementById('sup-name').value = s.name || '';
+  document.getElementById('sup-contact').value = s.contact_name || '';
+  document.getElementById('sup-street').value = s.street || '';
+  document.getElementById('sup-plz').value = s.post_code || '';
+  document.getElementById('sup-city').value = s.city || '';
+  document.getElementById('sup-email').value = s.email || '';
+  document.getElementById('sup-phone').value = s.phone || '';
+  document.getElementById('sup-vat').value = s.vat_id || '';
+  document.getElementById('sup-iban').value = s.iban || '';
+  document.getElementById('sup-bic').value = s.bic || '';
+  document.getElementById('sup-category').value = s.category || '';
+  document.getElementById('sup-notes').value = s.notes || '';
+  document.getElementById('sup-save-result').innerHTML = '<span style="color:var(--accent)">Bearbeite: '+esc(s.name)+'</span>';
+}
+
+function clearSupForm() {
+  ['sup-edit-id','sup-name','sup-contact','sup-street','sup-plz','sup-city',
+   'sup-email','sup-phone','sup-vat','sup-iban','sup-bic','sup-category','sup-notes'
+  ].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+  document.getElementById('sup-save-result').innerHTML = '';
+}
+
+async function deleteSupplier(id, name) {
+  if (!confirm('Lieferant "'+name+'" löschen?')) return;
+  await fetch(API+'/api/suppliers/'+id, {method:'DELETE'});
+  toast('Lieferant gelöscht');
+  loadSuppliers();
+}
+
+async function deleteAllSuppliers() {
+  if (!confirm('Alle '+_suppliers.length+' Lieferanten löschen?')) return;
+  await fetch(API+'/api/suppliers/all', {method:'DELETE'});
+  toast('Alle Lieferanten gelöscht');
+  loadSuppliers();
+}
+
+async function approveSupplier(id) {
+  await fetch(API+'/api/suppliers/'+id+'/approve', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({user:'rolf'})});
+  toast('Lieferant freigegeben');
+  loadSuppliers();
+}
+
+async function unapproveSupplier(id) {
+  await fetch(API+'/api/suppliers/'+id+'/unapprove', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
+  toast('Freigabe zurückgenommen');
+  loadSuppliers();
+}
+
+async function uploadSuppliersCsv(file) {
+  if (!file) return;
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(API+'/api/suppliers/csv', {method:'POST', body:form}).then(r=>r.json());
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast(res.imported + ' Lieferanten importiert (' + res.total + ' gesamt)');
+  loadSuppliers();
+}
+
+// ── Vorgänge ──
+let _transactions = [];
+let _currentTxn = null;
+let _currentStepKey = null;
+const STEP_LABELS = {
+  supplier_quote:'Angebot Lieferant', purchase_order:'Bestellung',
+  supplier_invoice:'Eingangsrechnung',
+  customer_quote:'Angebot Kunde', order_intake:'Auftragseingang',
+  delivery_note:'Lieferschein', invoice:'E-Rechnung', dunning:'Mahnung'
+};
+const STEP_KEYS = ['supplier_quote','purchase_order','supplier_invoice','customer_quote','order_intake','delivery_note','invoice','dunning'];
+const STEP_ICONS = {
+  supplier_quote:'&#128230;', purchase_order:'&#128179;',
+  supplier_invoice:'&#128229;',
+  customer_quote:'&#128196;', order_intake:'&#128229;',
+  delivery_note:'&#128666;', invoice:'&#128176;', dunning:'&#9888;'
+};
+
+async function loadTransactions() {
+  try {
+    const status = document.getElementById('txn-filter-status')?.value || '';
+    const url = API+'/api/transactions' + (status ? '?status='+status : '');
+    _transactions = await fetch(url).then(r=>r.json());
+    renderTxnTable();
+    // Stats
+    const stats = await fetch(API+'/api/transactions/stats').then(r=>r.json());
+    document.getElementById('txn-stat-total').textContent = stats.total;
+    document.getElementById('txn-stat-open').textContent = stats.in_bearbeitung + stats.neu;
+    document.getElementById('txn-stat-done').textContent = stats.abgeschlossen;
+    // Dropdowns befüllen
+    fillTxnDropdowns();
+  } catch(e) { console.error('loadTransactions', e); }
+}
+
+async function fillTxnDropdowns() {
+  // Lieferanten
+  const supSel = document.getElementById('txn-new-supplier');
+  if (supSel && _suppliers.length === 0) {
+    try { _suppliers = await fetch(API+'/api/suppliers').then(r=>r.json()); } catch(e) {}
+  }
+  if (supSel) {
+    supSel.innerHTML = '<option value="">-- optional --</option>' +
+      _suppliers.map(s => `<option value="${s.id}">${esc(s.name)}</option>`).join('');
+  }
+  // Kunden
+  const buySel = document.getElementById('txn-new-buyer');
+  if (buySel) {
+    try {
+      const res = await fetch(API+'/api/buyers').then(r=>r.json());
+      const buyers = res.buyers || res || [];
+      buySel.innerHTML = '<option value="">-- optional --</option>' +
+        buyers.map(b => `<option value="${b.id}">${esc(b.name||b.contact_name||'')}</option>`).join('');
+    } catch(e) {}
+  }
+}
+
+function renderTxnTable() {
+  const tbody = document.getElementById('txn-table-body');
+  if (!tbody) return;
+  if (!_transactions.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Keine Vorgänge vorhanden</td></tr>';
+    return;
+  }
+  const statusMap = {NEU:'neu',IN_BEARBEITUNG:'pruefung',ABGESCHLOSSEN:'freigegeben',STORNIERT:'abgelehnt'};
+  const statusLabel = {NEU:'Neu',IN_BEARBEITUNG:'In Bearbeitung',ABGESCHLOSSEN:'Abgeschlossen',STORNIERT:'Storniert'};
+  tbody.innerHTML = _transactions.map(t => {
+    const cur = findCurrentStep(t);
+    const curLabel = cur ? STEP_LABELS[cur] : 'Fertig';
+    return `<tr style="cursor:pointer" onclick="openTxnDetail('${t.id}')">
+      <td style="font-family:var(--mono);font-size:12px;white-space:nowrap">${t.id}</td>
+      <td>${esc(t.subject||'')}</td>
+      <td>${esc(t.supplier_name||'–')}</td>
+      <td>${esc(t.buyer_name||'–')}</td>
+      <td><span class="badge ${statusMap[t.status]||'neu'}">${statusLabel[t.status]||t.status}</span></td>
+      <td>${curLabel}</td>
+      <td style="font-size:12px">${(t.created_at||'').substring(0,10)}</td>
+      <td><button onclick="event.stopPropagation();deleteTxn('${t.id}')" style="font-size:11px;color:var(--danger);padding:1px 6px">&#10005;</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function findCurrentStep(txn) {
+  for (const k of STEP_KEYS) {
+    const s = (txn.steps||{})[k] || {};
+    if (!s.approved && s.status !== 'UEBERSPRUNGEN') return k;
+  }
+  return null;
+}
+
+async function createTransaction() {
+  const subject = document.getElementById('txn-new-subject').value.trim();
+  if (!subject) { toast('Betreff ist Pflichtfeld', 'error'); return; }
+  const supSel = document.getElementById('txn-new-supplier');
+  const buySel = document.getElementById('txn-new-buyer');
+  const supId = supSel?.value || '';
+  const buyId = buySel?.value || '';
+  const supName = supId ? supSel.options[supSel.selectedIndex].text : '';
+  const buyName = buyId ? buySel.options[buySel.selectedIndex].text : '';
+  const res = await fetch(API+'/api/transactions', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({subject, supplier_id:supId, buyer_id:buyId, supplier_name:supName, buyer_name:buyName})
+  }).then(r=>r.json());
+  if (res.created) {
+    toast('Vorgang '+res.transaction.id+' angelegt');
+    document.getElementById('txn-new-subject').value = '';
+    openTxnDetail(res.transaction.id);
+  }
+}
+
+async function deleteTxn(id) {
+  if (!confirm('Vorgang '+id+' löschen?')) return;
+  await fetch(API+'/api/transactions/'+id, {method:'DELETE'});
+  toast('Vorgang gelöscht');
+  loadTransactions();
+}
+
+// ── Vorgang Detail / Stepper ──
+
+async function openTxnDetail(id) {
+  try {
+    await ensureProductsLoaded();
+    // Templates laden falls noch nicht geschehen
+    if (!Object.keys(_docTemplates).length) {
+      try { _docTemplates = await fetch(API+'/api/mandant/templates').then(r=>r.json()); } catch(e) { _docTemplates = {}; }
+      if (!_docTemplates || _docTemplates.error) _docTemplates = {};
+    }
+    const resp = await fetch(API+'/api/transactions/'+id);
+    if (!resp.ok) { toast('Vorgang nicht gefunden ('+resp.status+')', 'error'); return; }
+    _currentTxn = await resp.json();
+    if (_currentTxn.error) { toast(_currentTxn.error, 'error'); return; }
+    document.getElementById('txn-detail-title').textContent = _currentTxn.id + ' · ' + (_currentTxn.subject||'');
+    document.getElementById('txn-detail-sub').textContent =
+      'Lieferant: ' + (_currentTxn.supplier_name||'–') + '  ·  Kunde: ' + (_currentTxn.buyer_name||'–');
+    _currentStepKey = _currentTxn._current_step || STEP_KEYS[0];
+    _positionsDirty = false;
+    renderStepper();
+    selectStep(_currentStepKey);
+    loadTimeline(_currentTxn.id);
+    navigate('txn-detail');
+  } catch(e) { toast('Fehler beim Laden: ' + e.message, 'error'); console.error('openTxnDetail:', e); }
+}
+
+function renderStepper() {
+  const div = document.getElementById('txn-stepper');
+  if (!div || !_currentTxn) return;
+  let html = '';
+  STEP_KEYS.forEach((key, i) => {
+    const step = (_currentTxn.steps||{})[key] || {};
+    const isCurrent = key === _currentStepKey;
+    const isApproved = step.approved;
+    const isSkipped = step.status === 'UEBERSPRUNGEN';
+
+    let icon, cls;
+    if (isApproved) { icon = '&#9745;'; cls = 'color:var(--success)'; }
+    else if (isSkipped) { icon = '&#10140;'; cls = 'color:var(--text2)'; }
+    else if (isCurrent) { icon = '&#9744;'; cls = 'color:var(--accent);font-weight:500'; }
+    else { icon = '&#9675;'; cls = 'color:var(--text2)'; }
+
+    const dateStr = step.date ? step.date.substring(0,10) : '';
+    const amountStr = step.amount ? fmt(step.amount)+' €' : '';
+    const ref = step.reference || '';
+    const bg = isCurrent ? 'background:var(--accent-bg);border-radius:6px;' : '';
+
+    html += `<div onclick="selectStep('${key}')" style="display:flex;gap:6px;align-items:flex-start;padding:4px 6px;cursor:pointer;${bg}">
+      <div style="font-size:16px;${cls};min-width:20px;text-align:center">${icon}</div>
+      <div style="flex:1;font-size:12px;${cls}">
+        <div>${STEP_LABELS[key]}</div>
+        <div style="font-size:10px;color:var(--text2)">
+          ${amountStr ? amountStr : ''}${dateStr ? ' '+dateStr : ''}
+        </div>
+      </div>
+      ${!isApproved && !isSkipped ? `<button onclick="event.stopPropagation();skipStep('${key}')" title="Überspringen" style="font-size:9px;padding:0 3px;color:var(--text2)">&#10140;</button>` : ''}
+    </div>`;
+
+    if (i < STEP_KEYS.length - 1) {
+      html += '<div style="margin-left:15px;border-left:2px solid var(--border);height:4px"></div>';
+    }
+  });
+  div.innerHTML = html;
+}
+
+function selectStep(key) {
+  // Auto-save alte Positionen beim Step-Wechsel
+  if (_currentStepKey && _currentTxn && _positionsDirty) {
+    saveTxnStepPositions();
+  }
+  _currentStepKey = key;
+  _positionsDirty = false;
+  renderStepper();
+  renderStepPositions(key);
+}
+
+let _positionsDirty = false;
+
+const STEP_HINTS = {
+  supplier_quote: 'Produkte aus Katalog w\u00e4hlen \u2192 Angebotsanfrage aufbauen \u2192 Freigeben + Senden',
+  purchase_order: 'Positionen pr\u00fcfen \u2192 Bestellung aufbauen \u2192 Freigeben + Senden',
+  supplier_invoice: 'Rechnung vom Lieferanten erhalten \u2192 PDF/E-Rechnung anh\u00e4ngen \u2192 Positionen pr\u00fcfen \u2192 Freigeben',
+  customer_quote: 'Produkte (VK-Preis) w\u00e4hlen \u2192 Angebot aufbauen \u2192 Freigeben + Senden',
+  order_intake:   'Auftrag best\u00e4tigen \u2192 Positionen anpassen \u2192 Freigeben',
+  delivery_note:  'Lieferpositionen eintragen \u2192 Lieferschein \u2192 Freigeben + Senden',
+  invoice:        'Positionen pr\u00fcfen \u2192 XRechnung erzeugen \u2192 Freigeben + Senden',
+  dunning:        'Rechnungsdaten + Mahnstufe eingeben \u2192 Mahnung erzeugen + Senden',
+};
+
+function renderStepPositions(key) {
+  const step = (_currentTxn.steps||{})[key] || {};
+  document.getElementById('txn-pos-title').textContent = STEP_LABELS[key];
+  const tbody = document.getElementById('txn-pos-body');
+  const positions = step.positions || [];
+  const isEinkauf = ['supplier_quote','purchase_order'].includes(key);
+  const hint = STEP_HINTS[key] || '';
+  const tplKey = key;
+  const readonly = !!step.approved;
+
+  // Template-Texte: Step-Override > Template > leer
+  const introKey = tplKey + '_intro';
+  const closingKey = tplKey + '_closing';
+  const stepIntro = step.intro_text || _docTemplates[introKey] || '';
+  const stepClosing = step.closing_text || _docTemplates[closingKey] || '';
+  const paymentTerms = step.payment_terms || _docTemplates['invoice_payment_terms'] || '';
+
+  // Hint-Box
+  let hintHtml = hint ? '<div style="padding:6px 10px;background:var(--info-bg);border-radius:6px;font-size:12px;color:var(--info);margin-bottom:10px">'+hint+'</div>' : '';
+
+  // Intro-Text (editierbares Textfeld)
+  let introHtml = '';
+  if (key !== 'dunning') {
+    introHtml = '<div style="margin-bottom:10px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">Einleitungstext</label>' +
+      '<textarea id="step-intro-text" rows="3" style="width:100%;font-size:12px;resize:vertical" '+(readonly?'disabled':'')+
+      ' onchange="markDirty()">'+esc(stepIntro)+'</textarea></div>';
+  }
+
+  const totalsDiv = document.getElementById('txn-pos-totals');
+  if (key === 'dunning') {
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Positionen werden aus der Rechnung \u00fcbernommen</td></tr>';
+    totalsDiv.innerHTML = hintHtml;
+  } else {
+    // Quick-Add Produkt-Picker
+    const quickAddHtml = !readonly ? '<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">' +
+      '<select id="quick-add-product" style="flex:1;min-width:200px;font-size:12px;padding:4px 6px">' +
+        '<option value="">Produkt aus Katalog hinzuf\u00fcgen...</option>' +
+        _products.filter(p=>p.status==='AKTIV').map(p => {
+          const price = isEinkauf ? p.ek_price : p.vk_price;
+          return '<option value="'+p.art_nr+'">'+p.art_nr+' \u2013 '+esc(p.name)+' ('+fmt(price)+' \u20ac / '+p.unit+')</option>';
+        }).join('') +
+      '</select>' +
+      '<button onclick="quickAddProduct()" style="font-size:12px;padding:4px 12px;white-space:nowrap">+ Hinzuf\u00fcgen</button>' +
+      '<button onclick="addTxnPosition()" style="font-size:11px;padding:4px 8px;color:var(--text2)">+ Leere Zeile</button>' +
+    '</div>' : '';
+
+    // Positionen-Tabelle
+    if (!positions.length) {
+      tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center;padding:16px">Noch keine Positionen \u2013 Produkt oben ausw\u00e4hlen</td></tr>';
+    } else {
+      tbody.innerHTML = positions.map((p, i) => '<tr>' +
+        '<td>'+p.pos_nr+'</td>' +
+        '<td><input value="'+esc(p.description||'')+'" onchange="markDirty();updateTxnPos('+i+',\'description\',this.value)" style="width:100%"'+(readonly?' disabled':'')+'>' + (readonly?'':productPickerHtml(i)) + '</td>' +
+        '<td><input type="number" value="'+p.quantity+'" min="0.01" step="1" onchange="markDirty();updateTxnPos('+i+',\'quantity\',parseFloat(this.value)||1)" style="width:100%"'+(readonly?' disabled':'')+'></td>' +
+        '<td><input value="'+esc(p.unit||'Stk')+'" onchange="markDirty();updateTxnPos('+i+',\'unit\',this.value)" style="width:100%"'+(readonly?' disabled':'')+'></td>' +
+        '<td><input type="number" step="0.01" value="'+p.unit_price+'" onchange="markDirty();updateTxnPos('+i+',\'unit_price\',parseFloat(this.value)||0)" style="width:100%"'+(readonly?' disabled':'')+'></td>' +
+        '<td><input type="number" step="0.1" value="'+(p.discount_percent||0)+'" onchange="markDirty();updateTxnPos('+i+',\'discount_percent\',parseFloat(this.value)||0)" style="width:100%"'+(readonly?' disabled':'')+'></td>' +
+        '<td style="text-align:right;white-space:nowrap">'+fmt(p.net_amount||0)+' \u20ac</td>' +
+        '<td>'+(readonly?'':'<button onclick="removeTxnPos('+i+')" style="font-size:11px;color:var(--danger);padding:1px 4px">&#10005;</button>')+'</td></tr>').join('');
+    }
+
+    // Closing-Text + Zahlungsbedingung
+    let closingHtml = '<div style="margin-top:10px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">Schlusstext</label>' +
+      '<textarea id="step-closing-text" rows="2" style="width:100%;font-size:12px;resize:vertical" '+(readonly?'disabled':'')+
+      ' onchange="markDirty()">'+esc(stepClosing)+'</textarea></div>';
+    if (key === 'invoice') {
+      const payOpts = [
+        {v:'Zahlbar sofort ohne Abzug', l:'Sofort'},
+        {v:'Zahlbar innerhalb von 7 Tagen', l:'1 Woche'},
+        {v:'Zahlbar innerhalb von 14 Tagen', l:'2 Wochen'},
+        {v:'Zahlbar innerhalb von 30 Tagen', l:'4 Wochen (30 Tage)'},
+      ];
+      closingHtml += '<div style="margin-top:6px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">Zahlungsbedingung</label>' +
+        '<select id="step-payment-terms" style="width:100%;font-size:14px;padding:6px 8px" '+(readonly?'disabled':'')+' onchange="markDirty()">' +
+        payOpts.map(o => '<option value="'+o.v+'"'+(paymentTerms===o.v?' selected':'')+'>'+o.l+' \u2013 '+o.v+'</option>').join('') +
+        '</select></div>';
+    }
+
+    // Summen + Speichern
+    // totalsDiv already declared above
+    let sumHtml = hintHtml + introHtml + quickAddHtml;
+    // positions table is already in tbody (above)
+    // after table: closing + summen
+    let afterTable = closingHtml;
+    if (positions.length) {
+      const net = positions.reduce((s,p) => s + (p.net_amount||0), 0);
+      const tax = Math.round(net * 0.19 * 100) / 100;
+      const saveStyle = _positionsDirty ? 'background:var(--warning);color:#fff;border:none;border-radius:var(--radius);font-weight:500' : '';
+      afterTable += '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-top:1px solid var(--border);margin-top:8px">' +
+        '<span>Netto: <strong>'+fmt(net)+' \u20ac</strong> \u00b7 USt 19%: '+fmt(tax)+' \u20ac \u00b7 <strong>Brutto: '+fmt(net+tax)+' \u20ac</strong></span>' +
+        (!readonly ? '<button onclick="saveTxnStepPositions()" style="font-size:12px;padding:4px 14px;'+saveStyle+'">&#128190; Speichern'+(_positionsDirty?' *':'')+'</button>' : '') +
+        '</div>';
+    }
+
+    // totalsDiv bekommt: hint + intro + quickAdd (ÜBER der Tabelle) → nein, die müssen VOR die table
+    // Lösung: totals hat alles was UNTER der Tabelle kommt. Intro + QuickAdd kommen in ein separates div.
+    // Schauen wir uns die HTML-Struktur an: txn-pos-totals ist UNTER der table.
+    // Wir nutzen ein neues div VOR der table für intro + quickadd.
+    let preDiv = document.getElementById('txn-pos-pretable');
+    if (!preDiv) {
+      preDiv = document.createElement('div');
+      preDiv.id = 'txn-pos-pretable';
+      const table = tbody ? tbody.closest('table') : null;
+      if (table && table.parentNode) {
+        table.parentNode.insertBefore(preDiv, table);
+      }
+    }
+    if (preDiv) preDiv.innerHTML = hintHtml + introHtml + quickAddHtml;
+    totalsDiv.innerHTML = afterTable;
+  }
+
+  // ── Dokument-Anhänge ──
+  const atts = step.attachments || [];
+  let attHtml = '<div style="margin-top:12px;border-top:1px solid var(--border);padding-top:8px">' +
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">' +
+    '<span style="font-size:12px;font-weight:500">Dokumente / Anh\u00e4nge (' + atts.length + ')</span>' +
+    '<label style="font-size:11px;padding:3px 8px;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer">' +
+    '&#128206; Datei anh\u00e4ngen<input type="file" style="display:none" onchange="uploadStepAttachment(this.files[0])">' +
+    '</label></div>';
+  if (atts.length) {
+    attHtml += atts.map(a =>
+      '<div style="display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-size:12px">' +
+      '<a href="'+API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/attachments/'+a.filename+'" target="_blank" style="color:var(--accent)">&#128196; '+esc(a.original_name||a.filename)+'</a>' +
+      '<span style="display:flex;gap:8px;align-items:center">' +
+      '<span style="color:var(--text2)">'+(a.size>1024?Math.round(a.size/1024)+' KB':a.size+' B')+' \u00b7 '+a.uploaded_at+'</span>' +
+      '<button onclick="deleteStepAttachment(\''+a.filename+'\')" style="font-size:10px;color:var(--danger);padding:1px 4px">&#10005;</button>' +
+      '</span></div>'
+    ).join('');
+  }
+  attHtml += '</div>';
+  totalsDiv.innerHTML += attHtml;
+
+  // Approve + PDF Buttons
+  // totalsDiv already declared above
+  // Nächster Step für "Weiter"-Button
+  const nextIdx = STEP_KEYS.indexOf(key) + 1;
+  const nextKey = nextIdx < STEP_KEYS.length ? STEP_KEYS[nextIdx] : null;
+  const nextApprovedOrSkipped = nextKey && ((_currentTxn.steps||{})[nextKey]||{}).approved;
+  const weiterBtn = (nextKey && !nextApprovedOrSkipped)
+    ? ' <button onclick="selectStep(\''+nextKey+'\')" style="margin-left:12px;font-size:12px;padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);cursor:pointer">\u2192 Weiter zu '+STEP_LABELS[nextKey]+'</button>'
+    : '';
+  const approveHtml = step.approved
+    ? '<div style="margin-top:12px;padding:8px;background:var(--success-bg);border-radius:6px;font-size:13px">&#9745; Freigegeben am '+(step.approved_at||'').substring(0,10)+' von '+(step.approved_by||'')+' <button onclick="unapproveStep(\''+key+'\')" style="margin-left:8px;font-size:11px;padding:2px 8px">Zur\u00fccknehmen</button>'+weiterBtn+'</div>'
+    : '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="txn-step-comment" placeholder="Kommentar (optional)" style="flex:1;min-width:120px;font-size:12px"><button onclick="approveStep(\''+key+'\')" class="btn-primary" style="white-space:nowrap">&#10003; Freigeben</button><button onclick="approveAndSend(\''+key+'\')" style="white-space:nowrap;font-size:12px;padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);cursor:pointer">&#9993; Freigeben + Senden</button></div>';
+  let pdfBtn = '';
+  if (key === 'invoice') {
+    pdfBtn = '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button onclick="generateInvoiceFromTxn()" class="btn-primary" style="font-size:12px;padding:4px 12px">&#9889; XRechnung erzeugen</button><button onclick="generatePdf(\'invoice\')" style="font-size:12px;padding:4px 12px">&#128196; PDF-Vorschau</button>'+(step.document_id?'<span style="font-size:11px;color:var(--success);align-self:center">&#10003; Im System</span>':'')+'</div>';
+  } else if (key === 'dunning') {
+    pdfBtn = '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><select id="dunning-level" style="font-size:12px;padding:2px 6px"><option value="1">Zahlungserinnerung</option><option value="2">1. Mahnung</option><option value="3">2. Mahnung</option></select><input id="dunning-inv-ref" placeholder="Rechnungsnr." style="font-size:12px;width:120px"><input id="dunning-inv-amount" type="number" step="0.01" placeholder="Betrag" style="font-size:12px;width:90px"><input id="dunning-fee" type="number" step="0.01" placeholder="Geb." style="font-size:12px;width:70px" value="0"><button onclick="generateDunningPdf()" style="font-size:12px;padding:4px 12px">&#128196; Mahnung</button></div>';
+  } else {
+    pdfBtn = '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button onclick="generatePdf(\''+key+'\')" style="font-size:12px;padding:4px 12px">&#128196; PDF erzeugen</button>'+(step.document_id?'<a href="'+API+'/api/documents/'+(step.reference||key)+'.pdf" target="_blank" style="font-size:12px;padding:4px 12px;text-decoration:none;border:1px solid var(--border);border-radius:var(--radius);color:var(--accent)">&#128229; PDF</a>':'')+'</div>';
+  }
+  totalsDiv.innerHTML += approveHtml + pdfBtn;
+}
+
+function markDirty() { _positionsDirty = true; }
+
+async function uploadStepAttachment(file) {
+  if (!file || !_currentTxn || !_currentStepKey) return;
+  const form = new FormData();
+  form.append('file', file);
+  toast('Datei wird hochgeladen...', 'info');
+  try {
+    const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+_currentStepKey+'/attachments', {
+      method:'POST', body:form
+    }).then(r=>r.json());
+    if (res.error) { toast(res.error, 'error'); return; }
+    toast('Datei gespeichert: ' + res.attachment.original_name);
+    // Step-Daten aktualisieren
+    const step = (_currentTxn.steps||{})[_currentStepKey] || {};
+    if (!step.attachments) step.attachments = [];
+    step.attachments.push(res.attachment);
+    renderStepPositions(_currentStepKey);
+  } catch(e) { toast('Upload-Fehler: '+e, 'error'); }
+}
+
+async function deleteStepAttachment(filename) {
+  if (!confirm('Anhang "'+filename+'" löschen?')) return;
+  await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+_currentStepKey+'/attachments/'+filename, {method:'DELETE'});
+  const step = (_currentTxn.steps||{})[_currentStepKey] || {};
+  step.attachments = (step.attachments||[]).filter(a => a.filename !== filename);
+  toast('Anhang gelöscht');
+  renderStepPositions(_currentStepKey);
+}
+
+function quickAddProduct() {
+  const sel = document.getElementById('quick-add-product');
+  if (!sel || !sel.value) return;
+  const p = _products.find(x => x.art_nr === sel.value);
+  if (!p) return;
+  const step = (_currentTxn.steps||{})[_currentStepKey] || {};
+  if (!step.positions) step.positions = [];
+  const isEinkauf = ['supplier_quote','purchase_order'].includes(_currentStepKey);
+  const price = isEinkauf ? p.ek_price : p.vk_price;
+  step.positions.push({
+    pos_nr: step.positions.length+1, description: p.name, quantity: 1, unit: p.unit,
+    unit_price: price, discount_percent: 0, discount_amount: 0,
+    net_amount: price, tax_rate: p.tax_rate||19, art_nr: p.art_nr
+  });
+  _positionsDirty = true;
+  sel.value = '';
+  renderStepPositions(_currentStepKey);
+  toast(p.name + ' hinzugef\u00fcgt');
+}
+
+function addTxnPosition() {
+  if (!_currentTxn || !_currentStepKey) return;
+  const step = (_currentTxn.steps||{})[_currentStepKey] || {};
+  if (!step.positions) step.positions = [];
+  step.positions.push({pos_nr:step.positions.length+1, description:'', quantity:1, unit:'Stk', unit_price:0, discount_percent:0, discount_amount:0, net_amount:0, tax_rate:19});
+  _positionsDirty = true;
+  renderStepPositions(_currentStepKey);
+}
+
+function updateTxnPos(idx, field, value) {
+  const step = (_currentTxn.steps||{})[_currentStepKey] || {};
+  if (!step.positions || !step.positions[idx]) return;
+  const p = step.positions[idx];
+  p[field] = value;
+  const gross = (p.quantity||0) * (p.unit_price||0);
+  const disc = p.discount_amount || (gross * (p.discount_percent||0) / 100);
+  p.discount_amount = Math.round(disc*100)/100;
+  p.net_amount = Math.round((gross - disc)*100)/100;
+  _positionsDirty = true;
+  renderStepPositions(_currentStepKey);
+}
+
+function removeTxnPos(idx) {
+  const step = (_currentTxn.steps||{})[_currentStepKey] || {};
+  if (!step.positions) return;
+  step.positions.splice(idx, 1);
+  step.positions.forEach((p,i) => p.pos_nr = i+1);
+  _positionsDirty = true;
+  renderStepPositions(_currentStepKey);
+}
+
+async function saveTxnStepPositions() {
+  if (!_currentTxn || !_currentStepKey) return;
+  const step = (_currentTxn.steps||{})[_currentStepKey] || {};
+  // Intro/Closing-Texte aus den Formularfeldern holen
+  const introEl = document.getElementById('step-intro-text');
+  const closingEl = document.getElementById('step-closing-text');
+  const payTermsEl = document.getElementById('step-payment-terms');
+  const saveData = {
+    positions: step.positions || [],
+    _user: 'rolf',
+  };
+  if (introEl) saveData.intro_text = introEl.value;
+  if (closingEl) saveData.closing_text = closingEl.value;
+  if (payTermsEl) saveData.payment_terms = payTermsEl.value;
+  const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+_currentStepKey, {
+    method:'PUT', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(saveData)
+  }).then(r=>r.json());
+  _positionsDirty = false;
+  if (res.saved) {
+    _currentTxn = res.transaction;
+    toast('Dokument gespeichert');
+  }
+  renderStepPositions(_currentStepKey);
+}
+
+async function approveStep(key) {
+  await saveTxnStepPositions();
+  const comment = document.getElementById('txn-step-comment')?.value || '';
+  const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/approve', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user:'rolf', comment})
+  }).then(r=>r.json());
+  if (res.error) { toast(res.error, 'error'); return; }
+  // Positionen weitergereicht? Info anzeigen
+  const fwd = {supplier_quote:'purchase_order', customer_quote:'order_intake', order_intake:'delivery_note', delivery_note:'invoice'};
+  const nextKey = fwd[key];
+  if (nextKey && res.steps && res.steps[nextKey] && (res.steps[nextKey].positions||[]).length) {
+    toast(STEP_LABELS[key]+' freigegeben · Positionen an '+STEP_LABELS[nextKey]+' übernommen');
+  } else {
+    toast(STEP_LABELS[key]+' freigegeben');
+  }
+  // Auf aktuellem Step bleiben (nicht weiter springen)
+  _currentTxn = res;
+  _currentStepKey = key;
+  renderStepper();
+  renderStepPositions(key);
+  loadTimeline(_currentTxn.id);
+}
+
+async function unapproveStep(key) {
+  const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/unapprove', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user:'rolf'})
+  }).then(r=>r.json());
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast('Freigabe zurückgenommen');
+  await openTxnDetail(_currentTxn.id);
+}
+
+async function skipStep(key) {
+  const reason = prompt('Grund für Überspringen (optional):') || '';
+  const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/skip', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user:'rolf', reason})
+  }).then(r=>r.json());
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast(STEP_LABELS[key] + ' übersprungen');
+  await openTxnDetail(_currentTxn.id);
+}
+
+async function loadTimeline(txnId) {
+  try {
+    const events = await fetch(API+'/api/transactions/'+txnId+'/timeline').then(r=>r.json());
+    const div = document.getElementById('txn-timeline');
+    if (!events.length) { div.innerHTML = '<span style="color:var(--text2)">Noch keine Ereignisse</span>'; return; }
+    div.innerHTML = events.map(e => {
+      const icon = e.action === 'FREIGEGEBEN' ? '&#9745;' : e.action === 'UEBERSPRUNGEN' ? '&#10140;' : '&#8226;';
+      const dt = (e.at||'').replace('T',' ').substring(0,16);
+      const detail = e.detail ? ' · '+esc(e.detail) : '';
+      return `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);align-items:baseline">
+        <span style="font-size:12px">${icon} <span style="color:var(--text2)">${dt}</span> <strong>${e.step||''}</strong> ${e.action}${detail}</span>
+        <span style="color:var(--text2);font-size:11px;background:var(--bg2);padding:1px 6px;border-radius:3px;white-space:nowrap;margin-left:16px">${e.user||''}</span>
+      </div>`;
+    }).join('');
+  } catch(e) {}
+}
+
+// ── PDF-Erzeugung ──
+
+async function generatePdf(stepKey) {
+  if (!_currentTxn) { toast('Kein Vorgang geladen', 'error'); return; }
+  try { await saveTxnStepPositions(); } catch(e) { console.warn('saveTxnStepPositions fehlgeschlagen:', e); }
+  const introEl = document.getElementById('step-intro-text');
+  const closingEl = document.getElementById('step-closing-text');
+  const payEl = document.getElementById('step-payment-terms');
+  toast('PDF wird erzeugt...', 'info');
+  try {
+    const resp = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+stepKey+'/generate-pdf', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        intro_text: introEl ? introEl.value : '',
+        closing_text: closingEl ? closingEl.value : '',
+        payment_terms: payEl ? payEl.value : '',
+      })
+    });
+    const text = await resp.text();
+    console.log('PDF-Response:', resp.status, text.substring(0, 500));
+    let res;
+    try { res = JSON.parse(text); } catch(e) {
+      toast('Server-Fehler (kein JSON): ' + text.substring(0, 200), 'error');
+      return;
+    }
+    if (res.error) { toast('PDF-Fehler: ' + res.error, 'error'); return; }
+    toast('PDF erzeugt: ' + res.document.filename);
+    window.open(API + res.download_url, '_blank');
+    await openTxnDetail(_currentTxn.id);
+  } catch(e) {
+    console.error('generatePdf Exception:', e);
+    toast('PDF-Fehler: ' + e.message, 'error');
+  }
+}
+
+async function generateDunningPdf() {
+  if (!_currentTxn) return;
+  const level = parseInt(document.getElementById('dunning-level')?.value || '1');
+  const invRef = document.getElementById('dunning-inv-ref')?.value || '';
+  const invAmount = parseFloat(document.getElementById('dunning-inv-amount')?.value || '0');
+  const fee = parseFloat(document.getElementById('dunning-fee')?.value || '0');
+  if (!invRef) { toast('Rechnungsnummer erforderlich', 'error'); return; }
+  if (!invAmount) { toast('Offener Betrag erforderlich', 'error'); return; }
+  toast('Mahnung wird erzeugt...', 'info');
+  try {
+    const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/dunning/generate-pdf', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({dunning_level:level, original_invoice_ref:invRef, original_invoice_amount:invAmount, dunning_fee:fee})
+    }).then(r=>r.json());
+    if (res.error) { toast(res.error, 'error'); return; }
+    toast('Mahnung erzeugt: ' + res.document.filename);
+    window.open(API + res.download_url, '_blank');
+    await openTxnDetail(_currentTxn.id);
+  } catch(e) { toast('Fehler: '+e, 'error'); }
+}
+
+// ── E-Rechnung aus Vorgang erzeugen ──
+
+async function generateInvoiceFromTxn() {
+  if (!_currentTxn) return;
+  await saveTxnStepPositions();
+  const step = (_currentTxn.steps||{}).invoice || {};
+  if (!(step.positions||[]).length) {
+    toast('Bitte zuerst Positionen in Stufe "E-Rechnung" erfassen', 'error');
+    return;
+  }
+  const payEl = document.getElementById('step-payment-terms');
+  const terms = (payEl ? payEl.value : '') || _docTemplates['invoice_payment_terms'] || 'Zahlbar innerhalb von 30 Tagen';
+  toast('XRechnung wird erzeugt...', 'info');
+  try {
+    const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/generate-invoice', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({payment_terms: terms})
+    }).then(r=>r.json());
+    if (res.error) { toast(res.error, 'error'); return; }
+    toast('E-Rechnung ' + res.number + ' erzeugt (' + res.errors + ' Fehler)', res.valid ? 'success' : 'warn');
+    // PDF-Vorschau automatisch erzeugen und öffnen
+    await openTxnDetail(_currentTxn.id);
+    await generatePdf('invoice');
+  } catch(e) { toast('Fehler: '+e, 'error'); }
+}
+
+// ── Mahnungs-Dashboard ──
+
+async function loadDunning() {
+  try {
+    const rules = await fetch(API+'/api/dunning/rules').then(r=>r.json());
+    const levels = rules.levels || [];
+    if (levels[0]) { document.getElementById('dun-r1-days').value = levels[0].days_after_due; document.getElementById('dun-r1-fee').value = levels[0].fee; }
+    if (levels[1]) { document.getElementById('dun-r2-days').value = levels[1].days_after_due; document.getElementById('dun-r2-fee').value = levels[1].fee; }
+    if (levels[2]) { document.getElementById('dun-r3-days').value = levels[2].days_after_due; document.getElementById('dun-r3-fee').value = levels[2].fee; }
+    await runDunningCheck();
+  } catch(e) { console.error('loadDunning', e); }
+}
+
+async function runDunningCheck() {
+  try {
+    const res = await fetch(API+'/api/dunning/check', {method:'POST'}).then(r=>r.json());
+    document.getElementById('dun-stat-total').textContent = res.total_overdue;
+    document.getElementById('dun-stat-action').textContent = res.needs_action;
+    document.getElementById('dun-stat-amount').textContent = fmt(res.total_overdue_amount);
+    // Badge
+    const badge = document.getElementById('dun-badge');
+    if (badge) { badge.textContent = res.needs_action; badge.style.display = res.needs_action > 0 ? '' : 'none'; }
+    renderDunningTable(res.items || []);
+  } catch(e) { console.error('runDunningCheck', e); }
+}
+
+function renderDunningTable(items) {
+  const tbody = document.getElementById('dun-table-body');
+  if (!tbody) return;
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2);text-align:center">Keine überfälligen Rechnungen</td></tr>';
+    return;
+  }
+  tbody.innerHTML = items.map(o => {
+    const urgency = o.days_overdue > 42 ? 'color:var(--danger);font-weight:500' :
+                    o.days_overdue > 28 ? 'color:var(--warning)' : '';
+    const actionBtn = o.needs_action
+      ? `<button onclick="openTxnForDunning('${o.transaction_id}')" style="font-size:11px;padding:2px 8px">Mahnung erzeugen</button>`
+      : '<span style="color:var(--text2);font-size:11px">wartend</span>';
+    return `<tr>
+      <td style="font-family:var(--mono);font-size:12px;cursor:pointer" onclick="openTxnDetail('${o.transaction_id}')">${o.transaction_id}</td>
+      <td>${esc(o.buyer_name||'–')}</td>
+      <td style="font-family:var(--mono);font-size:12px">${esc(o.invoice_reference||'–')}</td>
+      <td style="text-align:right">${fmt(o.amount)} €</td>
+      <td>${o.due_date ? o.due_date.substring(0,10) : '–'}</td>
+      <td style="text-align:right;${urgency}">${o.days_overdue}</td>
+      <td>${o.last_dunning_level ? 'Stufe '+o.last_dunning_level : '–'}</td>
+      <td>${o.next_dunning_level ? '<strong>Stufe '+o.next_dunning_level+'</strong>' : '–'}</td>
+      <td>${actionBtn}</td>
+    </tr>`;
+  }).join('');
+}
+
+function openTxnForDunning(tid) {
+  openTxnDetail(tid).then(() => selectStep('dunning'));
+}
+
+async function saveDunningRules() {
+  const rules = {
+    grace_days: 14,
+    levels: [
+      {level:1, days_after_due: parseInt(document.getElementById('dun-r1-days').value), fee: parseFloat(document.getElementById('dun-r1-fee').value), subject:'Zahlungserinnerung'},
+      {level:2, days_after_due: parseInt(document.getElementById('dun-r2-days').value), fee: parseFloat(document.getElementById('dun-r2-fee').value), subject:'1. Mahnung'},
+      {level:3, days_after_due: parseInt(document.getElementById('dun-r3-days').value), fee: parseFloat(document.getElementById('dun-r3-fee').value), subject:'2. Mahnung – Letzte Aufforderung'},
+    ]
+  };
+  await fetch(API+'/api/dunning/rules', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(rules)});
+  toast('Mahnregeln gespeichert');
+}
+
+// ── Kunden (eigene Seite) ──
+let _customers = [];
+
+async function loadCustomers() {
+  try {
+    const res = await fetch(API+'/api/buyers').then(r=>r.json());
+    _customers = res.buyers || res || [];
+    document.getElementById('cust-count').textContent = _customers.length;
+    renderCustomerTable();
+  } catch(e) { console.error('loadCustomers', e); }
+}
+
+function renderCustomerTable() {
+  const tbody = document.getElementById('cust-table-body');
+  if (!tbody) return;
+  if (!_customers.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2);text-align:center">Keine Kunden gespeichert</td></tr>';
+    return;
+  }
+  tbody.innerHTML = _customers.map(b => {
+    const contact = (b.salutation ? b.salutation+' ' : '') + (b.contact_name||'');
+    return `<tr>
+      <td style="font-family:var(--mono);font-size:11px">${b.id}</td>
+      <td><a href="#" onclick="editCustomer('${b.id}');return false" style="color:var(--accent)">${esc(b.name||'')}</a></td>
+      <td>${esc(contact)}</td>
+      <td>${esc((b.post_code||'')+' '+(b.city||''))}</td>
+      <td>${esc(b.email||'')}</td>
+      <td style="font-family:var(--mono);font-size:11px">${esc(b.reference||'')}</td>
+      <td><button onclick="deleteCustomer('${b.id}','${esc(b.name||'')}')" style="font-size:11px;color:var(--danger);padding:1px 6px">&#10005;</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function saveCustomer() {
+  const editId = document.getElementById('cust-edit-id').value;
+  const data = {
+    name: document.getElementById('cust-name').value,
+    contact_name: document.getElementById('cust-contact').value,
+    salutation: document.getElementById('cust-salutation').value,
+    street: document.getElementById('cust-street').value,
+    post_code: document.getElementById('cust-plz').value,
+    city: document.getElementById('cust-city').value,
+    email: document.getElementById('cust-email').value,
+    reference: document.getElementById('cust-ref').value,
+    vat_id: document.getElementById('cust-vat').value,
+  };
+  if (!data.name) { toast('Name ist Pflichtfeld', 'error'); return; }
+  let res;
+  if (editId) {
+    res = await fetch(API+'/api/buyers/'+editId, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(r=>r.json());
+  } else {
+    res = await fetch(API+'/api/buyers', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(r=>r.json());
+  }
+  if (res.saved || res.buyer) {
+    toast('Kunde gespeichert');
+    clearCustForm();
+    loadCustomers();
+  } else { toast(res.error||'Fehler', 'error'); }
+}
+
+function editCustomer(id) {
+  const b = _customers.find(x => x.id === id);
+  if (!b) return;
+  document.getElementById('cust-edit-id').value = b.id;
+  document.getElementById('cust-name').value = b.name||'';
+  document.getElementById('cust-contact').value = b.contact_name||'';
+  document.getElementById('cust-salutation').value = b.salutation||'';
+  document.getElementById('cust-street').value = b.street||'';
+  document.getElementById('cust-plz').value = b.post_code||'';
+  document.getElementById('cust-city').value = b.city||'';
+  document.getElementById('cust-email').value = b.email||'';
+  document.getElementById('cust-ref').value = b.reference||'';
+  document.getElementById('cust-vat').value = b.vat_id||'';
+  document.getElementById('cust-save-result').innerHTML = '<span style="color:var(--accent)">Bearbeite: '+esc(b.name)+'</span>';
+}
+
+function clearCustForm() {
+  ['cust-edit-id','cust-name','cust-contact','cust-street','cust-plz','cust-city',
+   'cust-email','cust-ref','cust-vat'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+  document.getElementById('cust-salutation').value = '';
+  document.getElementById('cust-save-result').innerHTML = '';
+}
+
+async function deleteCustomer(id, name) {
+  if (!confirm('Kunde "'+name+'" löschen?')) return;
+  await fetch(API+'/api/buyers/'+id, {method:'DELETE'});
+  toast('Kunde gelöscht');
+  loadCustomers();
+}
+
+async function deleteAllCustomers() {
+  if (!confirm('Alle '+_customers.length+' Kunden löschen?')) return;
+  await fetch(API+'/api/buyers/all', {method:'DELETE'});
+  toast('Alle Kunden gelöscht');
+  loadCustomers();
+}
+
+async function uploadCustomersCsv(file) {
+  if (!file) return;
+  const form = new FormData(); form.append('file', file);
+  const res = await fetch(API+'/api/buyers/csv', {method:'POST', body:form}).then(r=>r.json());
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast(res.imported + ' Kunden importiert (' + res.total + ' gesamt)');
+  loadCustomers();
+}
+
+// ── Produktkatalog ──
+let _products = [];
+
+async function loadProducts() {
+  try {
+    _products = await fetch(API+'/api/products').then(r=>r.json());
+    document.getElementById('prod-count').textContent = _products.length;
+    renderProductTable();
+    // Kategorien-Filter
+    const cats = await fetch(API+'/api/products/categories').then(r=>r.json());
+    const sel = document.getElementById('prod-filter-cat');
+    if (sel) sel.innerHTML = '<option value="">Alle Kategorien</option>' +
+      cats.map(c => `<option>${esc(c)}</option>`).join('');
+    const dl = document.getElementById('prod-cats');
+    if (dl) dl.innerHTML = cats.map(c => `<option value="${esc(c)}">`).join('');
+  } catch(e) { console.error('loadProducts', e); }
+}
+
+function filterProducts() {
+  const cat = document.getElementById('prod-filter-cat')?.value || '';
+  renderProductTable(cat);
+}
+
+function renderProductTable(catFilter) {
+  const tbody = document.getElementById('prod-table-body');
+  if (!tbody) return;
+  let list = _products;
+  if (catFilter) list = list.filter(p => p.category === catFilter);
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Keine Produkte</td></tr>';
+    return;
+  }
+  tbody.innerHTML = list.map(p => `<tr>
+    <td style="font-family:var(--mono);font-size:11px"><a href="#" onclick="editProduct('${p.art_nr}');return false" style="color:var(--accent)">${p.art_nr}</a></td>
+    <td>${esc(p.name)}</td>
+    <td style="font-size:11px">${esc(p.category||'')}</td>
+    <td style="text-align:right">${fmt(p.ek_price)}</td>
+    <td style="text-align:right;font-weight:500">${fmt(p.vk_price)}</td>
+    <td>${esc(p.unit)}</td>
+    <td style="text-align:right">${p.stock === -1 ? '&infin;' : p.stock}</td>
+    <td><button onclick="deleteProduct('${p.art_nr}')" style="font-size:11px;color:var(--danger);padding:1px 4px">&#10005;</button></td>
+  </tr>`).join('');
+}
+
+async function saveProduct() {
+  const editNr = document.getElementById('prod-edit-nr').value;
+  const data = {
+    art_nr: document.getElementById('prod-artnr').value,
+    name: document.getElementById('prod-name').value,
+    description: document.getElementById('prod-desc').value,
+    category: document.getElementById('prod-cat').value,
+    ek_price: parseFloat(document.getElementById('prod-ek').value) || 0,
+    vk_price: parseFloat(document.getElementById('prod-vk').value) || 0,
+    unit: document.getElementById('prod-unit').value || 'Stk',
+    tax_rate: 19,
+  };
+  if (!data.name) { toast('Bezeichnung ist Pflichtfeld', 'error'); return; }
+  let res;
+  if (editNr) {
+    res = await fetch(API+'/api/products/'+editNr, {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(r=>r.json());
+  } else {
+    res = await fetch(API+'/api/products', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(data)}).then(r=>r.json());
+  }
+  if (res.saved) { toast('Produkt gespeichert: ' + (res.product||{}).art_nr); clearProdForm(); loadProducts(); }
+  else toast(res.error||'Fehler', 'error');
+}
+
+function editProduct(nr) {
+  const p = _products.find(x => x.art_nr === nr);
+  if (!p) return;
+  document.getElementById('prod-edit-nr').value = p.art_nr;
+  document.getElementById('prod-artnr').value = p.art_nr;
+  document.getElementById('prod-name').value = p.name;
+  document.getElementById('prod-desc').value = p.description||'';
+  document.getElementById('prod-cat').value = p.category||'';
+  document.getElementById('prod-ek').value = p.ek_price;
+  document.getElementById('prod-vk').value = p.vk_price;
+  document.getElementById('prod-unit').value = p.unit;
+  document.getElementById('prod-save-result').innerHTML = '<span style="color:var(--accent)">Bearbeite: '+esc(p.name)+'</span>';
+}
+
+function clearProdForm() {
+  ['prod-edit-nr','prod-artnr','prod-name','prod-desc','prod-cat'].forEach(id => {
+    const el = document.getElementById(id); if(el) el.value = '';
+  });
+  document.getElementById('prod-ek').value = '0';
+  document.getElementById('prod-vk').value = '0';
+  document.getElementById('prod-unit').value = 'Stk';
+  document.getElementById('prod-save-result').innerHTML = '';
+}
+
+async function deleteProduct(nr) {
+  if (!confirm('Produkt '+nr+' löschen?')) return;
+  await fetch(API+'/api/products/'+nr, {method:'DELETE'});
+  toast('Produkt gelöscht'); loadProducts();
+}
+
+async function deleteAllProducts() {
+  if (!confirm('Alle Produkte löschen?')) return;
+  await fetch(API+'/api/products/all', {method:'DELETE'});
+  toast('Alle Produkte gelöscht'); loadProducts();
+}
+
+async function uploadProductsCsv(file) {
+  if (!file) return;
+  const form = new FormData(); form.append('file', file);
+  const res = await fetch(API+'/api/products/csv', {method:'POST', body:form}).then(r=>r.json());
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast(res.imported + ' Produkte importiert'); loadProducts();
+}
+
+async function loadDemoProducts() {
+  if (!confirm('Demo-Produkte laden? Bestehende werden gelöscht.')) return;
+  const res = await fetch(API+'/api/products/demo', {method:'POST'}).then(r=>r.json());
+  toast(res.created + ' Demo-Produkte angelegt'); loadProducts();
+}
+
+// ── Produkt-Picker für Positionen ──
+
+async function ensureProductsLoaded() {
+  if (!_products.length) {
+    try { _products = await fetch(API+'/api/products').then(r=>r.json()); } catch(e) {}
+  }
+}
+
+function productPickerHtml(idx) {
+  if (!_products.length) return '';
+  return `<select onchange="applyProduct(${idx}, this.value)" style="font-size:11px;padding:1px 4px;max-width:180px;margin-top:2px">
+    <option value="">Produkt w&auml;hlen...</option>
+    ${_products.filter(p=>p.status==='AKTIV').map(p => {
+      const priceLabel = _currentStepKey && ['supplier_quote','purchase_order'].includes(_currentStepKey) ? fmt(p.ek_price) : fmt(p.vk_price);
+      return `<option value="${p.art_nr}">${esc(p.art_nr)} ${esc(p.name)} (${priceLabel} €)</option>`;
+    }).join('')}
+  </select>`;
+}
+
+function applyProduct(idx, artNr) {
+  if (!artNr || !_currentTxn || !_currentStepKey) return;
+  const p = _products.find(x => x.art_nr === artNr);
+  if (!p) return;
+  const step = (_currentTxn.steps||{})[_currentStepKey] || {};
+  if (!step.positions) step.positions = [];
+  const pos = step.positions[idx];
+  if (!pos) return;
+  // EK oder VK je nach Step-Typ
+  const isEinkauf = ['supplier_quote','purchase_order'].includes(_currentStepKey);
+  const price = isEinkauf ? p.ek_price : p.vk_price;
+  pos.description = p.name;
+  pos.unit = p.unit;
+  pos.unit_price = price;
+  pos.tax_rate = p.tax_rate || 19;
+  pos.art_nr = p.art_nr;
+  const gross = (pos.quantity||1) * price;
+  const disc = pos.discount_amount || (gross * (pos.discount_percent||0) / 100);
+  pos.discount_amount = Math.round(disc*100)/100;
+  pos.net_amount = Math.round((gross - disc)*100)/100;
+  renderStepPositions(_currentStepKey);
+}
+
+// ── Freigeben + Per Mail senden ──
+
+async function approveAndSend(key) {
+  await saveTxnStepPositions();
+  const comment = document.getElementById('txn-step-comment')?.value || '';
+  const step = (_currentTxn.steps||{})[key] || {};
+  // Empfänger-Mail ermitteln
+  let toEmail = '';
+  if (['supplier_quote','purchase_order'].includes(key)) {
+    const sup = _suppliers.find(s => s.id === _currentTxn.supplier_id);
+    toEmail = sup ? sup.email : '';
+  } else {
+    try {
+      const res = await fetch(API+'/api/buyers').then(r=>r.json());
+      const buyers = res.buyers || res || [];
+      const buyer = buyers.find(b => b.id === _currentTxn.buyer_id);
+      toEmail = buyer ? buyer.email : '';
+    } catch(e) {}
+  }
+  if (!toEmail) toEmail = prompt('E-Mail-Adresse des Empfängers:') || '';
+  if (!toEmail) { toast('Keine E-Mail-Adresse', 'error'); return; }
+
+  toast('Freigabe + PDF + Mail...', 'info');
+  const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/approve-and-send', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({user:'rolf', comment, to_email:toEmail})
+  }).then(r=>r.json());
+
+  if (res.error && !res.approved) { toast(res.error, 'error'); return; }
+  if (res.sent) {
+    toast(STEP_LABELS[key]+' freigegeben + Mail an '+res.sent_to+' gesendet');
+  } else {
+    toast(STEP_LABELS[key]+' freigegeben. Mail: '+(res.error||'nicht gesendet'), 'warn');
+  }
+  await openTxnDetail(_currentTxn.id);
+}
+
+// ── Steuerberater-Export ──
+
+function stbSetQuartal(offset) {
+  const now = new Date();
+  let q = Math.floor(now.getMonth() / 3) + offset;
+  let y = now.getFullYear();
+  if (q < 0) { q = 3; y--; }
+  if (q > 3) { q = 0; y++; }
+  const von = new Date(y, q * 3, 1);
+  const bis = new Date(y, q * 3 + 3, 0);
+  document.getElementById('stb-von').value = von.toISOString().split('T')[0];
+  document.getElementById('stb-bis').value = bis.toISOString().split('T')[0];
+  loadStbBelege();
+}
+
+function stbSetJahr() {
+  const y = new Date().getFullYear();
+  document.getElementById('stb-von').value = y+'-01-01';
+  document.getElementById('stb-bis').value = y+'-12-31';
+  loadStbBelege();
+}
+
+async function loadStbBelege() {
+  const von = document.getElementById('stb-von').value;
+  const bis = document.getElementById('stb-bis').value;
+  if (!von || !bis) { toast('Bitte Von und Bis angeben', 'error'); return; }
+  try {
+    const res = await fetch(API+'/api/steuerberater/belege?von='+von+'&bis='+bis).then(r=>r.json());
+    const belege = res.belege || [];
+    document.getElementById('stb-count').textContent = belege.length;
+
+    // Zusammenfassung
+    const eingang = belege.filter(b => b.typ === 'Eingang');
+    const ausgang = belege.filter(b => b.typ === 'Ausgang');
+    const sumEin = eingang.reduce((s,b) => s + (b.betrag||0), 0);
+    const sumAus = ausgang.reduce((s,b) => s + (b.betrag||0), 0);
+    document.getElementById('stb-summary').innerHTML =
+      '<div><strong>'+eingang.length+'</strong> Eingangsrechnungen · <strong>'+fmt(sumEin)+' \u20ac</strong></div>' +
+      '<div><strong>'+ausgang.length+'</strong> Ausgangsrechnungen · <strong>'+fmt(sumAus)+' \u20ac</strong></div>';
+
+    // Tabelle
+    const tbody = document.getElementById('stb-table-body');
+    if (!belege.length) {
+      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text2);text-align:center">Keine Belege im gew\u00e4hlten Zeitraum</td></tr>';
+    } else {
+      tbody.innerHTML = belege.map(b => {
+        const typCls = b.typ === 'Eingang' ? 'color:var(--info)' : 'color:var(--success)';
+        const partner = b.lieferant || b.kunde || '';
+        const hasPdf = b.pdf ? true : false;
+        return '<tr>' +
+          '<td style="font-size:11px;font-weight:500;'+typCls+'">'+b.typ+'</td>' +
+          '<td style="font-family:var(--mono);font-size:12px">'+(b.nummer||'\u2013')+'</td>' +
+          '<td>'+(b.datum||'')+'</td>' +
+          '<td>'+esc(partner)+'</td>' +
+          '<td style="text-align:right">'+fmt(b.betrag||0)+' \u20ac</td>' +
+          '<td>'+(hasPdf?'\u2714':'\u2013')+'</td></tr>';
+      }).join('');
+    }
+
+    // Download-Link
+    document.getElementById('stb-download-link').href = API+'/api/steuerberater/export?von='+von+'&bis='+bis;
+    document.getElementById('stb-actions').style.display = belege.length ? 'flex' : 'none';
+  } catch(e) { toast('Fehler: '+e, 'error'); }
+}
+
+async function stbSendMail() {
+  const email = document.getElementById('stb-email').value;
+  if (!email) { toast('Bitte E-Mail des Steuerberaters eingeben', 'error'); return; }
+  const von = document.getElementById('stb-von').value;
+  const bis = document.getElementById('stb-bis').value;
+  if (!confirm('Belegpaket '+von+' bis '+bis+' an '+email+' senden?')) return;
+  toast('Wird gesendet...', 'info');
+  try {
+    const res = await fetch(API+'/api/steuerberater/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email, von, bis})
+    }).then(r=>r.json());
+    if (res.error) { toast(res.error, 'error'); return; }
+    toast('Belegpaket an '+res.to+' gesendet ('+Math.round(res.size/1024)+' KB)');
+  } catch(e) { toast('Fehler: '+e, 'error'); }
+}
+
+async function loadStbSettings() {
+  try {
+    const ms = await fetch(API+'/api/mandant/settings').then(r=>r.json());
+    document.getElementById('stb-email').value = ms.stb_email || '';
+    document.getElementById('stb-name').value = ms.stb_name || '';
+  } catch(e) {}
+  // Aktuelles Quartal vorbelegen
+  if (!document.getElementById('stb-von').value) stbSetQuartal(0);
+}
+
+async function saveStbSettings() {
+  const ms = await fetch(API+'/api/mandant/settings').then(r=>r.json());
+  ms.stb_email = document.getElementById('stb-email').value;
+  ms.stb_name = document.getElementById('stb-name').value;
+  await fetch(API+'/api/mandant/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(ms)});
+  toast('Steuerberater-Einstellungen gespeichert');
+}
+
+// ── Dokumentvorlagen ──
+
+const DEFAULT_TEMPLATES = {
+  supplier_quote_intro: 'Sehr geehrte Damen und Herren,\n\nwir bitten Sie um Abgabe eines Angebots f\u00fcr die nachfolgend aufgef\u00fchrten Positionen.\nBitte senden Sie uns Ihr Angebot bis zum angegebenen Datum zu.',
+  supplier_quote_closing: 'Bitte best\u00e4tigen Sie die Lieferzeit und eventuelle Mindestbestellmengen.\nWir behalten uns die Vergabe an Dritte vor.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  purchase_order_intro: 'Sehr geehrte Damen und Herren,\n\nhiermit bestellen wir verbindlich die nachfolgend aufgef\u00fchrten Positionen.\nBitte best\u00e4tigen Sie den Auftrag schriftlich.',
+  purchase_order_closing: 'Die Lieferung erfolgt an die oben genannte Adresse.\nRechnungen bitten wir unter Angabe der Bestellnummer zu stellen.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  customer_quote_intro: 'Sehr geehrte Damen und Herren,\n\nvielen Dank f\u00fcr Ihre Anfrage. Gerne unterbreiten wir Ihnen folgendes Angebot.\nGrundlage sind die AGB der Energieberatung Rolf Krause (EBRK).\nAlle Preise verstehen sich zzgl. der gesetzlichen Mehrwertsteuer.',
+  customer_quote_closing: 'Dieses Angebot ist 30 Tage g\u00fcltig und freibleibend (\u00a7 2.4 AGB).\nDer Vertrag kommt durch unsere schriftliche Auftragsbest\u00e4tigung zustande (\u00a7 2.2 AGB).\nDer Auftraggeber verpflichtet sich zur wahrheitsgem\u00e4\u00dfen \u00dcbermittlung aller f\u00fcr die Leistungserbringung notwendigen Daten und Unterlagen (\u00a7 5.1 AGB).\n\nWir freuen uns auf Ihre R\u00fcckmeldung.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  customer_quote_validity: '30',
+  order_intake_intro: 'Sehr geehrte Damen und Herren,\n\nvielen Dank f\u00fcr Ihren Auftrag. Hiermit best\u00e4tigen wir die Ausf\u00fchrung der nachfolgend aufgef\u00fchrten Leistungen.\nEs gelten die AGB der Energieberatung Rolf Krause (EBRK).',
+  order_intake_closing: 'Die EBRK schuldet die Erstellung der vereinbarten Leistungen nach anerkannten Regeln (\u00a7 3.1 AGB).\nDer Auftraggeber verpflichtet sich zur Mitwirkung gem\u00e4\u00df \u00a7 5 AGB.\n\nWir freuen uns auf die Zusammenarbeit.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  delivery_note_intro: 'Sehr geehrte Damen und Herren,\n\nmit diesem Lieferschein best\u00e4tigen wir die Erbringung bzw. \u00dcbergabe der nachfolgend aufgef\u00fchrten Leistungen.',
+  delivery_note_closing: 'Bitte best\u00e4tigen Sie den Empfang der aufgef\u00fchrten Leistungen/Unterlagen.\nBei M\u00e4ngeln oder Beanstandungen bitten wir um unverz\u00fcgliche schriftliche Mitteilung.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  invoice_intro: 'Sehr geehrte Damen und Herren,\n\nf\u00fcr die erbrachten Leistungen stellen wir Ihnen nachfolgend vereinbarungsgem\u00e4\u00df in Rechnung.\nEs gelten die AGB der Energieberatung Rolf Krause (EBRK), insbesondere \u00a7 4 (Preise und Verg\u00fctung).',
+  invoice_closing: 'Die Verg\u00fctung ist nach Erhalt der Rechnung ohne jeden Abzug auf das unten genannte Konto zu leisten (\u00a7 4.2 AGB).\nDer Abzug von Skonto bedarf besonderer schriftlicher Vereinbarung.\nBitte geben Sie bei der \u00dcberweisung die Rechnungsnummer als Verwendungszweck an.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  invoice_payment_terms: 'Zahlbar innerhalb von 30 Tagen',
+  dunning_1_intro: 'Sehr geehrte Damen und Herren,\n\nbei der Durchsicht unserer Konten haben wir festgestellt, dass die nachstehend aufgef\u00fchrte Rechnung noch nicht beglichen wurde.\nWir m\u00f6chten Sie freundlich an die Zahlung erinnern und bitten um zeitnahe \u00dcberweisung.',
+  dunning_2_intro: 'Sehr geehrte Damen und Herren,\n\ntrotz unserer Zahlungserinnerung konnten wir leider keinen Zahlungseingang feststellen.\nWir bitten Sie dringend, den offenen Betrag innerhalb von 7 Tagen auf unser Konto zu \u00fcberweisen.\nSollte die Zahlung bereits erfolgt sein, bitten wir um kurze Mitteilung unter Angabe des Buchungsdatums.',
+  dunning_3_intro: 'Sehr geehrte Damen und Herren,\n\nwir mussten leider feststellen, dass unsere bisherigen Zahlungsaufforderungen ohne Ergebnis geblieben sind.\nWir fordern Sie hiermit letztmalig auf, den Rechnungsbetrag zzgl. Mahngeb\u00fchren innerhalb von 5 Werktagen zu begleichen.\nNach fruchtlosem Ablauf dieser Frist sehen wir uns gezwungen, unsere Forderung an ein Inkassounternehmen bzw. einen Rechtsanwalt zu \u00fcbergeben. Die dadurch entstehenden Kosten gehen zu Ihren Lasten.',
+};
+
+let _docTemplates = {};
+
+async function loadDocTemplates() {
+  try {
+    _docTemplates = await fetch(API+'/api/mandant/templates').then(r=>r.json());
+    // UI befüllen
+    const fields = ['supplier_quote-intro','supplier_quote-closing',
+      'purchase_order-intro','purchase_order-closing',
+      'customer_quote-intro','customer_quote-closing','customer_quote-validity',
+      'order_intake-intro','order_intake-closing',
+      'delivery_note-intro','delivery_note-closing',
+      'invoice-intro','invoice-closing','invoice-payment_terms',
+      'dunning_1-intro','dunning_2-intro','dunning_3-intro'];
+    fields.forEach(f => {
+      const el = document.getElementById('tpl-'+f);
+      const key = f.replace(/-/g,'_');
+      if (el) el.value = _docTemplates[key] || '';
+    });
+  } catch(e) { console.error('loadDocTemplates', e); }
+}
+
+async function saveDocTemplates() {
+  const tpl = {};
+  const fields = ['supplier_quote_intro','supplier_quote_closing',
+    'purchase_order_intro','purchase_order_closing',
+    'customer_quote_intro','customer_quote_closing','customer_quote_validity',
+    'order_intake_intro','order_intake_closing',
+    'delivery_note_intro','delivery_note_closing',
+    'invoice_intro','invoice_closing','invoice_payment_terms',
+    'dunning_1_intro','dunning_2_intro','dunning_3_intro'];
+  fields.forEach(key => {
+    const elId = 'tpl-' + key.replace(/_/g,'-');
+    const el = document.getElementById(elId);
+    if (el) tpl[key] = el.value;
+  });
+  await fetch(API+'/api/mandant/templates', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(tpl)});
+  _docTemplates = tpl;
+  document.getElementById('tpl-save-result').innerHTML = '<span style="color:var(--success)">&#10003; Vorlagen gespeichert</span>';
+  toast('Dokumentvorlagen gespeichert');
+}
+
+function loadDefaultTemplates() {
+  if (!confirm('Standardtexte laden? Bestehende Einträge werden überschrieben.')) return;
+  Object.entries(DEFAULT_TEMPLATES).forEach(([key, val]) => {
+    const elId = 'tpl-' + key.replace(/_/g,'-');
+    const el = document.getElementById(elId);
+    if (el) el.value = val;
+  });
+  toast('Standardtexte geladen – bitte noch speichern');
 }
 
 async function saveEmailSettings() {
