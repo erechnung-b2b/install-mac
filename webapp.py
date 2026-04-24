@@ -536,6 +536,9 @@ def api_buyers_csv_upload():
         except Exception:
             return _json({"error": "Datei konnte nicht gelesen werden"}, 400)
 
+    # Zeilenumbrüche normalisieren (Mac \r, Windows \r\n → Unix \n)
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
     buyers = _load_buyers()
     added = 0
 

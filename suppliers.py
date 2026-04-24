@@ -164,6 +164,9 @@ class SupplierManager:
         except UnicodeDecodeError:
             text = file_bytes.decode("latin-1")
 
+        # Zeilenumbrüche normalisieren
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+
         delimiter = ";" if ";" in text else ","
         reader = csv.reader(io.StringIO(text), delimiter=delimiter)
         header_map = None

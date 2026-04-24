@@ -508,7 +508,8 @@ th.c,td.c{text-align:center}
     <div class="card" style="flex:2;min-width:400px;overflow-x:auto">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <h3 style="margin:0">Lieferantenliste (<span id="sup-count">0</span>)</h3>
-        <div style="display:flex;gap:6px">
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="sup-search" placeholder="Suchen..." oninput="filterSuppliers()" style="font-size:12px;padding:4px 8px;width:160px">
           <a href="/api/suppliers/csv/export" download style="font-size:11px;padding:2px 8px;text-decoration:none;border:1px solid var(--border);border-radius:var(--radius)">CSV Export</a>
           <button onclick="deleteAllSuppliers()" style="font-size:11px;padding:2px 8px;color:var(--danger)">Alle l&ouml;schen</button>
         </div>
@@ -556,7 +557,8 @@ th.c,td.c{text-align:center}
     <div class="card" style="flex:2;min-width:400px;overflow-x:auto">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <h3 style="margin:0">Kundenliste (<span id="cust-count">0</span>)</h3>
-        <div style="display:flex;gap:6px">
+        <div style="display:flex;gap:6px;align-items:center">
+          <input id="cust-search" placeholder="Suchen..." oninput="filterCustomers()" style="font-size:12px;padding:4px 8px;width:160px">
           <a href="/api/buyers/csv/export" download style="font-size:11px;padding:2px 8px;text-decoration:none;border:1px solid var(--border);border-radius:var(--radius)">CSV Export</a>
           <button onclick="deleteAllCustomers()" style="font-size:11px;padding:2px 8px;color:var(--danger)">Alle l&ouml;schen</button>
         </div>
@@ -603,6 +605,7 @@ th.c,td.c{text-align:center}
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <h3 style="margin:0">Produktliste (<span id="prod-count">0</span>)</h3>
         <div style="display:flex;gap:6px;align-items:center">
+          <input id="prod-search" placeholder="Suchen..." oninput="filterProducts()" style="font-size:12px;padding:4px 8px;width:140px">
           <select id="prod-filter-cat" onchange="filterProducts()" style="font-size:11px;padding:2px 6px">
             <option value="">Alle Kategorien</option>
           </select>
@@ -1166,9 +1169,9 @@ function navigate(page) {
   if (page === 'archive') loadArchive();
   if (page === 'settings') loadSettings();
   if (page === 'create') fillSellerFromMandant();
-  if (page === 'suppliers') loadSuppliers();
-  if (page === 'customers') loadCustomers();
-  if (page === 'products') loadProducts();
+  if (page === 'suppliers') { loadSuppliers().then(() => initAutocompletes()); }
+  if (page === 'customers') { loadCustomers().then(() => initAutocompletes()); }
+  if (page === 'products') { loadProducts().then(() => initAutocompletes()); }
   if (page === 'transactions') loadTransactions();
   if (page === 'dunning') loadDunning();
   if (page === 'steuerberater') loadStbSettings();
@@ -2371,14 +2374,19 @@ async function loadSuppliers() {
   } catch(e) { console.error('loadSuppliers', e); }
 }
 
-function renderSupplierTable() {
+function renderSupplierTable(searchQ) {
   const tbody = document.getElementById('sup-table-body');
   if (!tbody) return;
-  if (!_suppliers.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Keine Lieferanten gespeichert</td></tr>';
+  let list = _suppliers;
+  if (searchQ) {
+    const q = searchQ.toLowerCase();
+    list = list.filter(s => ((s.name||'')+(s.contact_name||'')+(s.city||'')+(s.email||'')+(s.category||'')).toLowerCase().includes(q));
+  }
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Keine Lieferanten'+(searchQ?' gefunden':'')+'</td></tr>';
     return;
   }
-  tbody.innerHTML = _suppliers.map(s => {
+  tbody.innerHTML = list.map(s => {
     const chk = s.approved
       ? `<span style="color:var(--success);cursor:pointer" title="Freigabe zurücknehmen" onclick="unapproveSupplier('${s.id}')">&#9745;</span>`
       : `<span style="color:var(--text2);cursor:pointer" title="Freigeben" onclick="approveSupplier('${s.id}')">&#9744;</span>`;
@@ -2393,6 +2401,11 @@ function renderSupplierTable() {
       <td><button onclick="deleteSupplier('${s.id}','${esc(s.name)}')" style="font-size:11px;color:var(--danger);padding:1px 6px">&#10005;</button></td>
     </tr>`;
   }).join('');
+}
+
+function filterSuppliers() {
+  const q = document.getElementById('sup-search')?.value || '';
+  renderSupplierTable(q);
 }
 
 async function saveSupplier() {
@@ -3170,6 +3183,80 @@ async function saveDunningRules() {
   toast('Mahnregeln gespeichert');
 }
 
+// ── Live-Suche / Autocomplete ──
+
+function setupAutocomplete(inputId, getData, onSelect, displayFn) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  // Container für Dropdown
+  let dropdown = input.parentElement.querySelector('.ac-dropdown');
+  if (!dropdown) {
+    dropdown = document.createElement('div');
+    dropdown.className = 'ac-dropdown';
+    dropdown.style.cssText = 'position:absolute;z-index:999;background:white;border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.12);max-height:240px;overflow-y:auto;display:none;width:100%;left:0;top:100%;font-size:13px;';
+    input.parentElement.style.position = 'relative';
+    input.parentElement.appendChild(dropdown);
+  }
+
+  input.addEventListener('input', function() {
+    const q = this.value.trim().toLowerCase();
+    if (q.length < 2) { dropdown.style.display = 'none'; return; }
+    const items = getData();
+    const matches = items.filter(item => {
+      const searchStr = displayFn(item).toLowerCase();
+      return searchStr.includes(q);
+    }).slice(0, 10);
+    if (!matches.length) { dropdown.style.display = 'none'; return; }
+    dropdown.innerHTML = matches.map((item, i) =>
+      '<div class="ac-item" data-idx="'+i+'" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border)">' +
+      '<div style="font-weight:500">'+esc(displayFn(item))+'</div>' +
+      '<div style="font-size:11px;color:var(--text2)">'+esc(item._sub||'')+'</div>' +
+      '</div>'
+    ).join('');
+    dropdown.style.display = 'block';
+    dropdown.querySelectorAll('.ac-item').forEach((el, i) => {
+      el.onmouseenter = function() { this.style.background = 'var(--bg2)'; };
+      el.onmouseleave = function() { this.style.background = ''; };
+      el.onclick = function() {
+        onSelect(matches[i]);
+        dropdown.style.display = 'none';
+      };
+    });
+  });
+
+  // Schließen bei Klick außerhalb
+  document.addEventListener('click', function(e) {
+    if (!input.contains(e.target) && !dropdown.contains(e.target)) {
+      dropdown.style.display = 'none';
+    }
+  });
+}
+
+// ── Autocomplete initialisieren ──
+
+function initAutocompletes() {
+  // Kunden: Suche nach Name, Ort, Referenz
+  setupAutocomplete('cust-name',
+    () => _customers.map(b => ({...b, _sub: (b.post_code||'')+' '+(b.city||'')+' · '+(b.reference||'')+' · '+(b.email||'')})),
+    (b) => editCustomer(b.id),
+    (b) => b.name || b.contact_name || ''
+  );
+
+  // Lieferanten: Suche nach Name, Ort
+  setupAutocomplete('sup-name',
+    () => (_suppliers||[]).map(s => ({...s, _sub: (s.post_code||'')+' '+(s.city||'')+' · '+(s.email||'')})),
+    (s) => editSupplier(s.id),
+    (s) => s.name || s.contact_name || ''
+  );
+
+  // Produkte: Suche nach Name, Art.-Nr., Kategorie
+  setupAutocomplete('prod-name',
+    () => _products.map(p => ({...p, _sub: p.art_nr+' · '+(p.category||'')+' · EK '+fmt(p.ek_price)+' / VK '+fmt(p.vk_price)+' €'})),
+    (p) => editProduct(p.art_nr),
+    (p) => p.name + ' ' + p.art_nr + ' ' + (p.category||'')
+  );
+}
+
 // ── Kunden (eigene Seite) ──
 let _customers = [];
 
@@ -3182,11 +3269,16 @@ async function loadCustomers() {
   } catch(e) { console.error('loadCustomers', e); }
 }
 
-function renderCustomerTable() {
+function renderCustomerTable(searchQ) {
   const tbody = document.getElementById('cust-table-body');
   if (!tbody) return;
-  if (!_customers.length) {
-    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2);text-align:center">Keine Kunden gespeichert</td></tr>';
+  let list = _customers;
+  if (searchQ) {
+    const q = searchQ.toLowerCase();
+    list = list.filter(b => ((b.name||'')+(b.contact_name||'')+(b.city||'')+(b.email||'')+(b.reference||'')).toLowerCase().includes(q));
+  }
+  if (!list.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2);text-align:center">Keine Kunden'+(searchQ?' gefunden':'')+'</td></tr>';
     return;
   }
   tbody.innerHTML = _customers.map(b => {
@@ -3201,6 +3293,11 @@ function renderCustomerTable() {
       <td><button onclick="deleteCustomer('${b.id}','${esc(b.name||'')}')" style="font-size:11px;color:var(--danger);padding:1px 6px">&#10005;</button></td>
     </tr>`;
   }).join('');
+}
+
+function filterCustomers() {
+  const q = document.getElementById('cust-search')?.value || '';
+  renderCustomerTable(q);
 }
 
 async function saveCustomer() {
@@ -3296,14 +3393,19 @@ async function loadProducts() {
 
 function filterProducts() {
   const cat = document.getElementById('prod-filter-cat')?.value || '';
-  renderProductTable(cat);
+  const q = document.getElementById('prod-search')?.value || '';
+  renderProductTable(cat, q);
 }
 
-function renderProductTable(catFilter) {
+function renderProductTable(catFilter, searchQ) {
   const tbody = document.getElementById('prod-table-body');
   if (!tbody) return;
   let list = _products;
   if (catFilter) list = list.filter(p => p.category === catFilter);
+  if (searchQ) {
+    const q = searchQ.toLowerCase();
+    list = list.filter(p => ((p.name||'')+(p.art_nr||'')+(p.description||'')+(p.category||'')).toLowerCase().includes(q));
+  }
   if (!list.length) {
     tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Keine Produkte</td></tr>';
     return;
