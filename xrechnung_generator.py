@@ -189,6 +189,11 @@ def generate_xrechnung(inv: Invoice) -> etree._Element:
         pr = etree.SubElement(root, _cac("ProjectReference")); _txt(pr, "ID", inv.project_reference)
     _build_seller(root, inv)
     _build_buyer(root, inv)
+    # BT-72: Actual Delivery Date
+    _delivery_date = inv.tax_point_date or inv.period_end
+    if _delivery_date:
+        delivery = etree.SubElement(root, _cac("Delivery"))
+        _dt(delivery, "ActualDeliveryDate", _delivery_date)
     _build_payment(root, inv)
     for ac in inv.allowances_charges: _build_allowance_charge(root, ac, inv.currency_code)
     _build_tax_total(root, inv)

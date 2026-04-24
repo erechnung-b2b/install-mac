@@ -1415,6 +1415,7 @@ def api_txn_approve_and_send(tid, step_key):
             positions=step.get("positions", []), step=step,
             reference=ref, subject=txn.get("subject", ""),
             doc_date=step.get("date", ""), due_date=step.get("due_date", ""),
+            delivery_date=step.get("date", ""),
             transaction_id=tid, step_key=step_key,
             intro_text=intro, closing_text=closing,
         )
@@ -1482,6 +1483,26 @@ def api_txn_approve_and_send(tid, step_key):
                            filename=doc_entry["filename"])
             msg.attach(att)
 
+    # Bei Rechnungen: auch XRechnung-XML anhängen
+    if step_key == "invoice":
+        try:
+            # XRechnung aus Vorgang erzeugen (falls noch nicht geschehen)
+            xml_path = _DATA / "data" / "documents" / f"{ref}.xml"
+            if not xml_path.exists():
+                # Versuche XML aus dem Rechnungssystem zu holen
+                inv_obj = invoices.get(ref) or invoices.get(tid)
+                if inv_obj:
+                    xml_bytes = generate_and_serialize(inv_obj)
+                    xml_path.parent.mkdir(parents=True, exist_ok=True)
+                    xml_path.write_bytes(xml_bytes)
+            if xml_path.exists():
+                xml_att = MIMEApplication(xml_path.read_bytes(), _subtype="xml")
+                xml_att.add_header("Content-Disposition", "attachment",
+                                   filename=f"{ref}.xml")
+                msg.attach(xml_att)
+        except Exception as e:
+            print(f"  XRechnung-XML für Mail: {e}")
+
     try:
         if smtp_port == 465:
             ctx = ssl.create_default_context()
@@ -1543,13 +1564,24 @@ def api_txn_stock_out(tid):
 
 @app.route("/api/steuerberater/belege")
 def api_stb_belege():
-    """Sammelt alle Rechnungen für einen Zeitraum."""
+    """Sammelt ALLE Belege für einen Zeitraum — Eingang, Ausgang, Lieferanten-Docs, Workflow-Anhänge."""
     von = request.args.get("von", "")
     bis = request.args.get("bis", "")
 
-    belege = []
+    def in_range(d):
+        if not d:
+            return False
+        d = d[:10]
+        if von and d < von:
+            return False
+        if bis and d > bis:
+            return False
+        return True
 
-    # 1. Eingangsrechnungen aus Archiv
+    belege = []
+    seen_files = set()  # Duplikate vermeiden
+
+    # ── 1. Eingangsrechnungen aus E-Rechnung-Archiv ──
     archiv_dir = _DATA / "data" / "archiv"
     if archiv_dir.exists():
         idx_file = archiv_dir / "index.json"
@@ -1558,15 +1590,11 @@ def api_stb_belege():
                 idx = json.loads(idx_file.read_text("utf-8"))
                 for entry in idx:
                     inv_date = entry.get("invoice_date", entry.get("archived_at", ""))[:10]
-                    if von and inv_date < von:
+                    if not in_range(inv_date):
                         continue
-                    if bis and inv_date > bis:
-                        continue
-                    # PDF suchen
                     inv_id = entry.get("id", "")
                     inv_dir = archiv_dir / inv_id
-                    pdf_file = None
-                    xml_file = None
+                    pdf_file = xml_file = None
                     if inv_dir.exists():
                         for f in inv_dir.iterdir():
                             if f.suffix.lower() == ".pdf":
@@ -1575,6 +1603,7 @@ def api_stb_belege():
                                 xml_file = str(f)
                     belege.append({
                         "typ": "Eingang",
+                        "kategorie": "E-Rechnung",
                         "nummer": entry.get("invoice_number", ""),
                         "datum": inv_date,
                         "lieferant": entry.get("seller_name", ""),
@@ -1584,38 +1613,137 @@ def api_stb_belege():
                         "xml": xml_file,
                         "id": inv_id,
                     })
+                    if pdf_file:
+                        seen_files.add(pdf_file)
             except Exception:
                 pass
 
-    # 2. Ausgangsrechnungen aus Dokumenten-Index
+    # ── 2. Lieferanten-Dokumente (Rechnungen + Lieferscheine) ──
+    sup_docs_dir = _DATA / "data" / "supplier_docs"
+    if sup_docs_dir.exists():
+        for sid_dir in sup_docs_dir.iterdir():
+            if not sid_dir.is_dir():
+                continue
+            idx_file = sid_dir / "index.json"
+            if not idx_file.exists():
+                continue
+            try:
+                docs = json.loads(idx_file.read_text("utf-8"))
+                for doc in docs:
+                    doc_date = doc.get("uploaded_at", "")[:10]
+                    if not in_range(doc_date):
+                        continue
+                    doc_type = doc.get("type", "sonstiges")
+                    filepath = str(sid_dir / doc_type / doc.get("filename", ""))
+                    if filepath in seen_files:
+                        continue
+                    seen_files.add(filepath)
+                    typ_label = {"rechnung": "Eingang", "lieferschein": "Eingang",
+                                 "angebot": "Eingang", "sonstiges": "Sonstiges"}.get(doc_type, "Sonstiges")
+                    kat_label = {"rechnung": "Lieferanten-Rechnung", "lieferschein": "Lieferschein",
+                                 "angebot": "Lieferanten-Angebot", "sonstiges": "Sonstiges"}.get(doc_type, doc_type)
+                    belege.append({
+                        "typ": typ_label,
+                        "kategorie": kat_label,
+                        "nummer": doc.get("original_name", doc.get("filename", "")),
+                        "datum": doc_date,
+                        "lieferant": doc.get("supplier_name", ""),
+                        "kunde": "",
+                        "betrag": 0,
+                        "pdf": filepath if Path(filepath).exists() else "",
+                        "xml": None,
+                        "id": doc.get("hash", ""),
+                    })
+            except Exception:
+                pass
+
+    # ── 3. Workflow-Anhänge (Eingangsrechnungen im Step supplier_invoice) ──
+    att_dir = _DATA / "data" / "attachments"
+    if att_dir.exists():
+        for txn_dir in att_dir.iterdir():
+            if not txn_dir.is_dir():
+                continue
+            for step_dir in txn_dir.iterdir():
+                if not step_dir.is_dir():
+                    continue
+                step_name = step_dir.name
+                for f in step_dir.iterdir():
+                    if not f.is_file():
+                        continue
+                    fp = str(f)
+                    if fp in seen_files:
+                        continue
+                    seen_files.add(fp)
+                    # Datum aus Datei-Änderungszeit
+                    fdate = date.fromtimestamp(f.stat().st_mtime).isoformat()
+                    if not in_range(fdate):
+                        continue
+                    step_labels = {
+                        "supplier_quote": "Lieferanten-Angebot",
+                        "purchase_order": "Bestellung",
+                        "supplier_invoice": "Lieferanten-Rechnung",
+                        "customer_quote": "Kundenangebot",
+                        "order_intake": "Auftragsbestätigung",
+                        "delivery_note": "Lieferschein",
+                        "invoice": "Ausgangsrechnung",
+                        "dunning": "Mahnung",
+                    }
+                    kat = step_labels.get(step_name, step_name)
+                    is_eingang = step_name in ("supplier_quote", "purchase_order", "supplier_invoice")
+                    belege.append({
+                        "typ": "Eingang" if is_eingang else "Ausgang",
+                        "kategorie": kat,
+                        "nummer": f.name,
+                        "datum": fdate,
+                        "lieferant": "",
+                        "kunde": "",
+                        "betrag": 0,
+                        "pdf": fp,
+                        "xml": None,
+                        "id": txn_dir.name + "/" + step_name,
+                    })
+
+    # ── 4. Erzeugte Ausgangsrechnungen (PDFs aus doc_generator) ──
     docs_dir = _DATA / "data" / "documents"
     doc_idx_file = docs_dir / "index.json"
     if doc_idx_file.exists():
         try:
             doc_idx = json.loads(doc_idx_file.read_text("utf-8"))
             for doc in doc_idx:
-                if doc.get("type") != "invoice":
-                    continue
                 doc_date = doc.get("created_at", "")[:10]
-                if von and doc_date < von:
+                if not in_range(doc_date):
                     continue
-                if bis and doc_date > bis:
+                filepath = doc.get("filepath", "")
+                if filepath in seen_files:
                     continue
+                seen_files.add(filepath)
+                doc_type = doc.get("type", "")
+                type_labels = {
+                    "invoice": "Ausgangsrechnung",
+                    "customer_quote": "Kundenangebot",
+                    "delivery_note": "Lieferschein",
+                    "purchase_order": "Bestellung",
+                    "supplier_quote": "Angebotsanfrage",
+                    "dunning": "Mahnung",
+                }
+                kat = type_labels.get(doc_type, doc_type)
+                is_ausgang = doc_type in ("invoice", "customer_quote", "delivery_note", "dunning")
                 belege.append({
-                    "typ": "Ausgang",
+                    "typ": "Ausgang" if is_ausgang else "Eingang",
+                    "kategorie": kat,
                     "nummer": doc.get("reference", ""),
                     "datum": doc_date,
                     "lieferant": "",
-                    "kunde": doc.get("transaction_id", ""),
+                    "kunde": "",
                     "betrag": 0,
-                    "pdf": doc.get("filepath", ""),
+                    "pdf": filepath if filepath and Path(filepath).exists() else "",
                     "xml": None,
                     "id": doc.get("id", ""),
                 })
         except Exception:
             pass
 
-    # 3. Workflow-Rechnungen (invoice-Steps mit Anhängen)
+    # ── 5. Workflow-Rechnungen (als Fallback) ──
     try:
         txns = txn_mgr.list_all()
         for txn in txns:
@@ -1623,18 +1751,18 @@ def api_stb_belege():
             if not inv_step.get("approved"):
                 continue
             inv_date = inv_step.get("date", "")[:10]
-            if von and inv_date < von:
-                continue
-            if bis and inv_date > bis:
+            if not in_range(inv_date):
                 continue
             ref = inv_step.get("reference", "")
-            # Prüfen ob schon in der Liste
-            if any(b["nummer"] == ref and b["typ"] == "Ausgang" for b in belege):
+            if any(b["nummer"] == ref and b["kategorie"] == "Ausgangsrechnung" for b in belege):
                 continue
             amount = inv_step.get("amount", 0)
             pdf_path = str(docs_dir / f"{ref}.pdf") if ref else ""
+            if pdf_path in seen_files:
+                continue
             belege.append({
                 "typ": "Ausgang",
+                "kategorie": "Ausgangsrechnung",
                 "nummer": ref,
                 "datum": inv_date,
                 "lieferant": "",
@@ -1674,22 +1802,28 @@ def api_stb_export():
         csv_buffer = io.StringIO()
         csv_buffer.write("\ufeff")
         w = csv.writer(csv_buffer, delimiter=";")
-        w.writerow(["Typ", "Belegnummer", "Datum", "Lieferant/Kunde", "Betrag", "Datei"])
+        w.writerow(["Typ", "Kategorie", "Belegnummer", "Datum", "Lieferant/Kunde", "Betrag", "Datei"])
         for b in belege:
             partner = b.get("lieferant") or b.get("kunde") or ""
             filename = ""
+            # Ordner nach Kategorie
+            sub = b.get("kategorie", b.get("typ", "Sonstiges")).replace("/", "-")
             if b.get("pdf") and Path(b["pdf"]).exists():
                 fname = Path(b["pdf"]).name
-                sub = "Eingang" if b["typ"] == "Eingang" else "Ausgang"
                 arcname = f"{sub}/{fname}"
+                # Duplikat im ZIP vermeiden
+                existing = [n.filename for n in zf.filelist]
+                if arcname in existing:
+                    stem, ext = fname.rsplit(".", 1) if "." in fname else (fname, "")
+                    arcname = f"{sub}/{stem}_{len(existing)}.{ext}"
                 zf.write(b["pdf"], arcname)
                 filename = arcname
             if b.get("xml") and Path(b["xml"]).exists():
                 fname = Path(b["xml"]).name
-                sub = "Eingang" if b["typ"] == "Eingang" else "Ausgang"
                 arcname = f"{sub}/{fname}"
-                zf.write(b["xml"], arcname)
-            w.writerow([b["typ"], b.get("nummer",""), b.get("datum",""),
+                if arcname not in [n.filename for n in zf.filelist]:
+                    zf.write(b["xml"], arcname)
+            w.writerow([b["typ"], b.get("kategorie",""), b.get("nummer",""), b.get("datum",""),
                         partner, f'{b.get("betrag",0):.2f}'.replace(".",","), filename])
         zf.writestr("Belegübersicht.csv", csv_buffer.getvalue().encode("utf-8-sig"))
 
@@ -2834,6 +2968,7 @@ def api_generate():
             invoice_number=number,
             invoice_date=_inv_date,
             tax_point_date=date.fromisoformat(data["delivery_date"]) if data.get("delivery_date") else None,
+            period_end=date.fromisoformat(data["delivery_date"]) if data.get("delivery_date") else None,
             invoice_type_code=data.get("type", "380"),
             currency_code=data.get("currency", "EUR"),
             buyer_reference=data.get("buyer_reference", ""),
@@ -2860,7 +2995,8 @@ def api_generate():
             ),
             payment=PaymentInfo(
                 means_code=data.get("payment_code", "58"),
-                iban=data.get("iban", ""),
+                iban=data.get("iban", data.get("seller_iban", "")),
+                bic=data.get("bic", data.get("seller_bic", "")),
                 payment_terms=_terms,
                 due_date=_due_date,
             ),
@@ -3112,7 +3248,7 @@ def api_email_receive_log():
 
 @app.route("/api/invoices/<inv_id>/send", methods=["POST"])
 def api_send_invoice(inv_id):
-    """Versendet eine Rechnung per E-Mail (XML + druckbare Belegansicht)."""
+    """Versendet eine Rechnung per E-Mail (PDF + XRechnung-XML)."""
     inv = invoices.get(inv_id)
     if not inv:
         return _json({"error": "Rechnung nicht gefunden"}, 404)
@@ -3134,20 +3270,60 @@ def api_send_invoice(inv_id):
             "errors": [i.message for i in report.issues if i.severity.value == "ERROR"],
         }, 400)
 
-    # Druckbare Belegansicht (HTML) als PDF-Ersatz erzeugen
+    # PDF erzeugen
     pdf_attachments = []
     try:
-        html_response = view_invoice_html(inv_id)
-        if hasattr(html_response, 'get_data'):
-            html_bytes = html_response.get_data()
-        elif isinstance(html_response, str):
-            html_bytes = html_response.encode("utf-8")
-        else:
-            html_bytes = str(html_response).encode("utf-8")
-        pdf_filename = f"{inv.invoice_number.replace('/', '_')}_Beleg.html"
-        pdf_attachments.append((pdf_filename, html_bytes))
-    except Exception:
-        pass  # Versand auch ohne Belegansicht moeglich
+        # Positionen aus Invoice-Objekt extrahieren
+        positions = []
+        for i, line in enumerate(inv.lines):
+            positions.append({
+                "pos_nr": i + 1,
+                "description": line.item_name,
+                "quantity": line.quantity,
+                "unit": line.unit_code,
+                "unit_price": line.unit_price,
+                "net_amount": line.net_amount,
+                "tax_rate": line.tax_percent,
+                "discount_percent": 0,
+                "discount_amount": 0,
+            })
+        buyer_data = {
+            "name": inv.buyer.name,
+            "street": inv.buyer.address.street if inv.buyer.address else "",
+            "city": inv.buyer.address.city if inv.buyer.address else "",
+            "post_code": inv.buyer.address.post_code if inv.buyer.address else "",
+        }
+        # Templates laden
+        templates = _load_mandant_settings().get("doc_templates", {})
+        pdf_entry = doc_gen.generate(
+            doc_type="invoice",
+            recipient=buyer_data,
+            positions=positions,
+            step={"date": inv.invoice_date},
+            reference=inv.invoice_number,
+            subject="",
+            doc_date=inv.invoice_date,
+            due_date=inv.due_date or "",
+            delivery_date=(inv.tax_point_date or inv.period_end or ""),
+            intro_text=templates.get("invoice_intro", ""),
+            closing_text=templates.get("invoice_closing", ""),
+        )
+        pdf_path = doc_gen.get_filepath(pdf_entry["filename"])
+        if pdf_path and pdf_path.exists():
+            pdf_filename = f"{inv.invoice_number.replace('/', '_')}.pdf"
+            pdf_attachments.append((pdf_filename, pdf_path.read_bytes()))
+    except Exception as e:
+        print(f"  PDF-Erzeugung für Mail fehlgeschlagen: {e}")
+        # Fallback: HTML-Belegansicht
+        try:
+            html_response = view_invoice_html(inv_id)
+            if hasattr(html_response, 'get_data'):
+                html_bytes = html_response.get_data()
+            else:
+                html_bytes = str(html_response).encode("utf-8")
+            pdf_attachments.append((f"{inv.invoice_number.replace('/', '_')}_Beleg.html", html_bytes))
+        except Exception:
+            pass
 
     send_log = email_sender.send_invoice(
         invoice=inv, recipient=recipient,
@@ -3155,11 +3331,11 @@ def api_send_invoice(inv_id):
         additional_attachments=pdf_attachments,
     )
 
-    # Versand im Audit-Trail protokollieren (kein erneutes Archivieren!)
+    # Versand im Audit-Trail protokollieren
     if send_log.success:
-        attachments_info = f"XML + Belegansicht" if pdf_attachments else "XML"
+        att_info = "PDF + XML" if pdf_attachments else "XML"
         inv.add_audit("EMAIL_VERSENDET",
-                      comment=f"An {recipient} ({attachments_info}), Message-ID: {send_log.message_id}")
+                      comment=f"An {recipient} ({att_info}), Message-ID: {send_log.message_id}")
 
     return _json({
         "success": send_log.success,

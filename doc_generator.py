@@ -457,6 +457,7 @@ def generate_document(
     reference: str = "",
     doc_date: str = "",
     due_date: str = "",
+    delivery_date: str = "",
     subject: str = "",
     intro_text: str = "",
     closing_text: str = "",
@@ -500,6 +501,8 @@ def generate_document(
         meta_parts.append(f"<b>Nr.:</b> {reference}")
     if doc_date:
         meta_parts.append(f"<b>Datum:</b> {_date_de(doc_date)}")
+    if delivery_date:
+        meta_parts.append(f"<b>Leistungsdatum:</b> {_date_de(delivery_date)}")
     if subject:
         meta_parts.append(f"<b>Betreff:</b> {subject}")
     if meta_parts:
@@ -696,6 +699,7 @@ class DocumentGenerator:
     def generate(self, doc_type: str, recipient: dict, positions: list,
                  step: dict, reference: str = "", subject: str = "",
                  doc_date: str = "", due_date: str = "",
+                 delivery_date: str = "",
                  transaction_id: str = "", step_key: str = "",
                  dunning_level: int = 0, original_invoice_ref: str = "",
                  original_invoice_amount: float = 0,
@@ -721,6 +725,7 @@ class DocumentGenerator:
             reference=reference,
             doc_date=doc_date,
             due_date=due_date,
+            delivery_date=delivery_date,
             subject=subject,
             logo_path=logo_path,
             dunning_level=dunning_level,

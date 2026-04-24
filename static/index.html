@@ -375,6 +375,8 @@ th.c,td.c{text-align:center}
         <div class="form-row"><label>E-Mail</label><input id="c-seller-email"></div></div>
       <div class="form-row-2"><div class="form-row"><label>Kontakt</label><input id="c-seller-contact"></div>
         <div class="form-row"><label>Telefon</label><input id="c-seller-phone"></div></div>
+      <div class="form-row-2"><div class="form-row"><label>IBAN</label><input id="c-seller-iban" placeholder="DE89..."></div>
+        <div class="form-row"><label>BIC</label><input id="c-seller-bic" placeholder="COBADEFFXXX"></div></div>
     </div></div>
     <div class="card"><div class="card-header"><h3>Käufer</h3>
       <div style="display:flex;gap:8px;align-items:center">
@@ -388,9 +390,9 @@ th.c,td.c{text-align:center}
         <button onclick="toggleBuyerTable()" style="font-size:11px;padding:2px 8px" id="btn-buyer-table">Kundenliste</button>
       </div>
     </div><div class="card-body">
-      <div class="form-row"><label>Firma</label><input id="c-buyer-name" placeholder="Kundenname"></div>
+      <div class="form-row"><label>Firma</label><input id="c-buyer-name" placeholder="Kundenname — tippen zum Suchen"></div>
       <div class="form-row-2"><div class="form-row"><label>Straße</label><input id="c-buyer-street"></div>
-        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:8px"><input id="c-buyer-plz" style="width:80px"><input id="c-buyer-city"></div></div></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:8px"><input id="c-buyer-plz" style="width:80px" oninput="plzLookup(this,'c-buyer-city')"><input id="c-buyer-city"></div></div></div>
       <div class="form-row-2">
         <div class="form-row"><label>Ansprechpartner</label>
           <div style="display:flex;gap:6px">
@@ -434,20 +436,25 @@ th.c,td.c{text-align:center}
       <div class="form-row"><label>Rechnungsnummer</label><input id="c-number" placeholder="Wird automatisch vergeben" readonly style="background:var(--bg3)"></div>
       <div class="form-row"><label>Rechnungsdatum</label><input type="date" id="c-date"></div>
       <div class="form-row"><label>Leistungsdatum</label><input type="date" id="c-delivery-date" title="Tag/Ende der Leistung (BT-72)"></div>
-      <div class="form-row"><label>IBAN</label><input id="c-iban" placeholder="Wird aus Stammdaten geladen"></div>
       <div class="form-row"><label>Zahlungsziel</label>
           <select id="c-terms">
-            <option value="Zahlbar sofort ohne Abzug">Sofort</option>
+            <option value="Zahlbar sofort ohne Abzug" selected>Sofort</option>
             <option value="Zahlbar innerhalb von 7 Tagen ohne Abzug">7 Tage netto</option>
             <option value="Zahlbar innerhalb von 14 Tagen ohne Abzug">14 Tage netto</option>
-            <option value="Zahlbar innerhalb von 30 Tagen ohne Abzug" selected>30 Tage netto</option>
+            <option value="Zahlbar innerhalb von 30 Tagen ohne Abzug">30 Tage netto</option>
           </select>
         </div>
     </div>
     <div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Positionen</div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+      <select id="c-product-picker" style="flex:1;font-size:12px;padding:4px 8px">
+        <option value="">Produkt aus Katalog hinzuf&uuml;gen...</option>
+      </select>
+      <button onclick="addLineFromProduct()" style="font-size:12px;padding:4px 12px">+ Hinzuf&uuml;gen</button>
+      <button onclick="addLine()" style="font-size:11px;padding:4px 8px;color:var(--text2)">+ Leere Zeile</button>
+    </div>
     <table><thead><tr><th>Bezeichnung</th><th class="r" style="width:80px">Menge</th><th class="r" style="width:100px">EP netto</th><th class="r" style="width:80px">USt %</th><th style="width:40px"></th></tr></thead>
       <tbody id="c-lines"></tbody></table>
-    <button onclick="addLine()" style="margin-top:8px">+ Position</button>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
       <button onclick="generateInvoice()">Validieren</button>
       <button class="primary" onclick="generateInvoice(true)">XRechnung erzeugen &amp; herunterladen</button>
@@ -808,9 +815,9 @@ th.c,td.c{text-align:center}
     </div>
     <div id="stb-summary" style="display:flex;gap:24px;margin-bottom:12px;font-size:13px"></div>
     <table class="data-table"><thead><tr>
-      <th style="width:70px">Typ</th><th>Belegnummer</th><th>Datum</th><th>Lieferant / Kunde</th><th style="text-align:right">Betrag</th><th style="width:60px">PDF</th>
+      <th style="width:70px">Typ</th><th style="width:140px">Kategorie</th><th>Belegnummer</th><th>Datum</th><th>Lieferant / Kunde</th><th style="text-align:right">Betrag</th><th style="width:50px">PDF</th>
     </tr></thead><tbody id="stb-table-body">
-      <tr><td colspan="6" style="color:var(--text2);text-align:center">Zeitraum w&auml;hlen und &quot;Belege suchen&quot; klicken</td></tr>
+      <tr><td colspan="7" style="color:var(--text2);text-align:center">Zeitraum w&auml;hlen und &quot;Belege suchen&quot; klicken</td></tr>
     </tbody></table>
   </div>
   <div class="card" style="margin-top:16px">
@@ -1186,6 +1193,17 @@ th.c,td.c{text-align:center}
 
 <script>
 const API = '';
+// ── Alle globalen Variablen am Anfang deklarieren ──
+var _products = [];
+var _customers = [];
+var _buyers = [];
+var _suppliers = [];
+var _docTemplates = {};
+var _selectedBuyerId = '';
+var _positionsDirty = false;
+var _currentSupplierDocId = '';
+var _currentTxn = null;
+var _currentStepKey = '';
 let currentInvoiceId = null;
 
 // ── Navigation ──
@@ -1204,7 +1222,7 @@ function navigate(page) {
   if (page === 'workflow') loadWorkflow();
   if (page === 'archive') loadArchive();
   if (page === 'settings') loadSettings();
-  if (page === 'create') fillSellerFromMandant();
+  if (page === 'create') { fillSellerFromMandant(); loadBuyers(); ensureProductsLoaded().then(() => { fillProductPicker(); initAutocompletes(); }); const today=new Date().toISOString().split('T')[0]; document.getElementById('c-date').value=today; document.getElementById('c-delivery-date').value=today; }
   if (page === 'suppliers') { loadSuppliers().then(() => initAutocompletes()); }
   if (page === 'customers') { loadCustomers().then(() => initAutocompletes()); }
   if (page === 'products') { loadProducts().then(() => initAutocompletes()); }
@@ -1236,7 +1254,10 @@ function toast(msg, type='success') {
 // ── Dashboard ──
 async function loadDashboard() {
   document.getElementById('dash-date').textContent = new Date().toLocaleDateString('de-DE', {weekday:'long', day:'numeric', month:'long', year:'numeric'});
-  const [dRes, iRes] = await Promise.all([fetch(API+'/api/dashboard').then(r=>r.json()), fetch(API+'/api/invoices').then(r=>r.json())]);
+  let dRes = {total:0, offene:0, touchless_rate:0, volumen:0, txn_total:0, txn_offen:0, txn_abgeschlossen:0, txn_umsatz:0, txn_pipeline:0, dunning_overdue:0, dunning_action:0, dunning_amount:0};
+  let iRes = {invoices:[]};
+  try { dRes = await fetch(API+'/api/dashboard').then(r=>r.json()); } catch(e) {}
+  try { iRes = await fetch(API+'/api/invoices').then(r=>r.json()); } catch(e) {}
   document.getElementById('dash-metrics').innerHTML = [
     {l:'Eingangsvolumen',v:dRes.total,s:`${dRes.offene} offen`,c:''},
     {l:'Offene Freigaben',v:dRes.offene,s:dRes.offene>0?'Aktion erforderlich':'Alles erledigt',c:dRes.offene>0?'warn':'up'},
@@ -1251,15 +1272,16 @@ async function loadDashboard() {
   const dunBadge = document.getElementById('dun-badge');
   if (dunBadge) { dunBadge.textContent = dRes.dunning_action||0; dunBadge.style.display = (dRes.dunning_action||0)>0?'':'none'; }
 
-  document.getElementById('nav-badge').textContent = dRes.offene;
-  const invs = iRes.invoices.slice(0, 6);
-  document.getElementById('dash-table').innerHTML = invs.map(i=>`
+  document.getElementById('nav-badge').textContent = dRes.offene || 0;
+  const invs = (iRes.invoices||[]).slice(0, 6);
+  document.getElementById('dash-table').innerHTML = invs.length ? invs.map(i=>`
     <tr class="clickable" onclick="openDetail('${i.id}')">
       <td style="font-weight:500">${i.number}</td><td>${i.seller}</td>
       <td class="r" style="font-weight:500">${fmt(i.gross)} EUR</td>
       <td class="c">${validBadge(i.valid)}</td><td class="c">${statusBadge(i.status)}</td>
       <td style="color:var(--text2);font-size:12px">${i.date}</td>
-    </tr>`).join('');
+    </tr>`).join('')
+    : '<tr><td colspan="6" style="text-align:center;color:var(--text2);padding:20px">Keine Rechnungen vorhanden. Starten Sie unter <a href="#" onclick="navigate(\'create\');return false" style="color:var(--accent)">Rechnung erstellen</a> oder <a href="#" onclick="navigate(\'transactions\');return false" style="color:var(--accent)">Vorgänge</a>.</td></tr>';
 }
 
 // ── Rechnungsliste ──
@@ -1345,7 +1367,8 @@ async function openDetail(id) {
   document.getElementById('det-buyer').innerHTML = `
     <div class="name">${inv.buyer.name}</div>
     <p>${inv.buyer.street}</p><p>${inv.buyer.post_code} ${inv.buyer.city}</p>
-    <p>USt-ID: ${inv.buyer.vat_id||'—'}</p><p>Kundennr.: ${inv.buyer_reference||'—'}</p>`;
+    <p>USt-ID: ${inv.buyer.vat_id||'—'}</p><p>Kundennr.: ${inv.buyer_reference||'—'}</p>
+    <p>Leistungsdatum: ${inv.period_end||inv.period_start||'—'}</p>`;
 
   document.getElementById('det-lines').innerHTML = inv.lines.map(l=>`
     <tr><td>${l.id}</td><td>${l.name}${l.description?'<br><span style="font-size:12px;color:var(--text2)">'+l.description+'</span>':''}</td>
@@ -1390,7 +1413,7 @@ async function openDetail(id) {
       <span style="color:var(--text2)">Format</span><span>${inv.format||'XRechnung'}</span>
       <span style="color:var(--text2)">Bestellung</span><span>${inv.order_reference||'—'}</span>
       <span style="color:var(--text2)">Vertrag</span><span>${inv.contract_reference||'—'}</span>
-      <span style="color:var(--text2)">Leistung</span><span>${inv.period_start?inv.period_start+' – '+(inv.period_end||''):'—'}</span>
+      <span style="color:var(--text2)">Leistungsdatum</span><span>${inv.period_end||inv.period_start||'—'}</span>
       <span style="color:var(--text2)">Bezug</span><span>${inv.preceding_invoice||'—'}</span>
     </div>
     ${inv.direction === 'EINGANG' ? '<button onclick="matchOrder(\''+inv.id+'\')" style="margin-top:8px;font-size:11px;padding:3px 10px">&#128279; Bestellung suchen</button>' : ''}
@@ -1654,16 +1677,59 @@ async function uploadFile(file) {
 
 // ── Rechnung erstellen ──
 let lineCount = 0;
-function addLine() {
+function addLine(name, qty, price, tax) {
   lineCount++;
   const row = document.createElement('tr');
   row.id = 'line-' + lineCount;
-  row.innerHTML = `<td><input id="cl-name-${lineCount}" placeholder="Bezeichnung" value="Dienstleistung"></td>
-    <td><input id="cl-qty-${lineCount}" type="number" value="1" min="1" style="text-align:right"></td>
-    <td><input id="cl-price-${lineCount}" type="number" value="100" step="0.01" style="text-align:right"></td>
-    <td><input id="cl-tax-${lineCount}" type="number" value="19" style="text-align:right"></td>
-    <td><button onclick="document.getElementById('line-${lineCount}').remove()" style="color:var(--danger);border:0;background:0">&#10007;</button></td>`;
+  const lc = lineCount;
+  const prods = (typeof _products !== 'undefined' && _products.length) ? _products.filter(p=>p.status==='AKTIV') : [];
+  const prodOpts = prods.map(p =>
+    '<option value="'+p.art_nr+'">'+esc(p.art_nr+' '+p.name)+' ('+fmt(p.vk_price)+' €)</option>'
+  ).join('');
+  row.innerHTML = `<td><input id="cl-name-${lc}" placeholder="Bezeichnung" value="${esc(name||'Dienstleistung')}" style="width:100%">
+      <select onchange="applyProductToLine(${lc}, this.value)" style="font-size:11px;padding:1px 4px;margin-top:2px;max-width:200px">
+        <option value="">Produkt...</option>${prodOpts}
+      </select></td>
+    <td><input id="cl-qty-${lc}" type="number" value="${qty||1}" min="0.01" step="1" style="text-align:right"></td>
+    <td><input id="cl-price-${lc}" type="number" value="${price||100}" step="0.01" style="text-align:right"></td>
+    <td><input id="cl-tax-${lc}" type="number" value="${tax||19}" style="text-align:right"></td>
+    <td><button onclick="document.getElementById('line-${lc}').remove()" style="color:var(--danger);border:0;background:0">&#10007;</button></td>`;
   document.getElementById('c-lines').appendChild(row);
+}
+
+function addLineFromProduct() {
+  const sel = document.getElementById('c-product-picker');
+  if (!sel || !sel.value) return;
+  const p = _products.find(x => x.art_nr === sel.value);
+  if (!p) return;
+  addLine(p.name, 1, p.vk_price, p.tax_rate || 19);
+  sel.value = '';
+  toast(p.name + ' hinzugefügt');
+}
+
+function applyProductToLine(lc, artNr) {
+  if (!artNr) return;
+  const p = _products.find(x => x.art_nr === artNr);
+  if (!p) return;
+  document.getElementById('cl-name-'+lc).value = p.name;
+  document.getElementById('cl-price-'+lc).value = p.vk_price;
+  document.getElementById('cl-tax-'+lc).value = p.tax_rate || 19;
+}
+
+function fillProductPicker() {
+  const prodOpts = _products.filter(p => p.status === 'AKTIV').map(p =>
+    '<option value="'+p.art_nr+'">'+esc(p.art_nr+' – '+p.name)+' ('+fmt(p.vk_price)+' €/'+p.unit+')</option>'
+  ).join('');
+  // Top-Picker
+  const sel = document.getElementById('c-product-picker');
+  if (sel) sel.innerHTML = '<option value="">Produkt aus Katalog hinzufügen...</option>' + prodOpts;
+  // Per-Zeile-Picker in bestehenden Rows aktualisieren
+  document.querySelectorAll('#c-lines tr select').forEach(s => {
+    if (s.id === 'c-product-picker') return;
+    const val = s.value;
+    s.innerHTML = '<option value="">Produkt...</option>' + prodOpts;
+    s.value = val;
+  });
 }
 
 async function generateInvoice(download=false) {
@@ -1686,6 +1752,8 @@ async function generateInvoice(download=false) {
     seller_email: document.getElementById('c-seller-email').value,
     seller_contact: document.getElementById('c-seller-contact').value,
     seller_phone: document.getElementById('c-seller-phone').value,
+    seller_iban: document.getElementById('c-seller-iban').value,
+    seller_bic: document.getElementById('c-seller-bic').value,
     seller_contact_email: document.getElementById('c-seller-email').value,
     buyer_name: document.getElementById('c-buyer-name').value,
     buyer_street: document.getElementById('c-buyer-street').value,
@@ -1698,7 +1766,8 @@ async function generateInvoice(download=false) {
     buyer_vat: document.getElementById('c-buyer-vat').value,
     date: document.getElementById('c-date').value,
     delivery_date: document.getElementById('c-delivery-date').value,
-    iban: document.getElementById('c-iban').value,
+    iban: document.getElementById('c-seller-iban').value,
+    bic: document.getElementById('c-seller-bic').value,
     payment_terms: document.getElementById('c-terms').value,
     lines: lines,
   };
@@ -2217,8 +2286,9 @@ async function fillSellerFromMandant() {
     if (m.email) document.getElementById('c-seller-email').value = m.email;
     if (m.contact_name) document.getElementById('c-seller-contact').value = m.contact_name;
     if (m.contact_phone) document.getElementById('c-seller-phone').value = m.contact_phone;
-    if (m.iban) document.getElementById('c-iban').value = m.iban;
-  } catch(e) {}
+    if (m.iban) document.getElementById('c-seller-iban').value = m.iban;
+    if (m.bic) document.getElementById('c-seller-bic').value = m.bic;
+  } catch(e) { console.error('fillSeller:', e); }
   // Naechste Rechnungsnummer holen
   try {
     const nr = await fetch(API+'/api/mandant/next-number').then(r=>r.json());
@@ -2232,7 +2302,7 @@ async function fillSellerFromMandant() {
 }
 
 // ── Rechnungsempfaenger / Kunden ──
-let _buyers = [];
+// _buyers declared at top
 async function loadBuyers() {
   try {
     const res = await fetch(API+'/api/buyers').then(r=>r.json());
@@ -2312,7 +2382,7 @@ function exportBuyersCsv() {
   a.click();
   toast('CSV exportiert: ' + _buyers.length + ' Empfaenger');
 }
-let _selectedBuyerId = null;
+// _selectedBuyerId declared at top
 function selectBuyer(idx) {
   if (idx === '' || idx === undefined) {
     _selectedBuyerId = null;
@@ -2400,7 +2470,7 @@ function updateInvoiceNumber() {
 }
 
 // ── Lieferanten ──
-let _suppliers = [];
+// _suppliers declared at top
 
 async function loadSuppliers() {
   try {
@@ -2446,7 +2516,7 @@ function filterSuppliers() {
 }
 
 // ── Lieferanten-Dokumente ──
-let _currentSupplierDocId = '';
+// _currentSupplierDocId declared at top
 
 async function showSupplierDocs(sid, name) {
   _currentSupplierDocId = sid;
@@ -2609,8 +2679,8 @@ async function uploadSuppliersCsv(file) {
 
 // ── Vorgänge ──
 let _transactions = [];
-let _currentTxn = null;
-let _currentStepKey = null;
+// _currentTxn declared at top
+// _currentStepKey declared at top
 const STEP_LABELS = {
   supplier_quote:'Angebot Lieferant', purchase_order:'Bestellung',
   supplier_invoice:'Eingangsrechnung',
@@ -2799,7 +2869,7 @@ function selectStep(key) {
   renderStepPositions(key);
 }
 
-let _positionsDirty = false;
+// _positionsDirty declared at top
 
 const STEP_HINTS = {
   supplier_quote: 'Produkte aus Katalog w\u00e4hlen \u2192 Angebotsanfrage aufbauen \u2192 Freigeben + Senden',
@@ -3365,30 +3435,43 @@ function setupAutocomplete(inputId, getData, onSelect, displayFn) {
 // ── Autocomplete initialisieren ──
 
 function initAutocompletes() {
-  // Kunden: Suche nach Name, Ort, Referenz
+  // Kunden-Seite
   setupAutocomplete('cust-name',
     () => _customers.map(b => ({...b, _sub: (b.post_code||'')+' '+(b.city||'')+' · '+(b.reference||'')+' · '+(b.email||'')})),
     (b) => editCustomer(b.id),
     (b) => b.name || b.contact_name || ''
   );
 
-  // Lieferanten: Suche nach Name, Ort
+  // Lieferanten-Seite
   setupAutocomplete('sup-name',
     () => (_suppliers||[]).map(s => ({...s, _sub: (s.post_code||'')+' '+(s.city||'')+' · '+(s.email||'')})),
     (s) => editSupplier(s.id),
     (s) => s.name || s.contact_name || ''
   );
 
-  // Produkte: Suche nach Name, Art.-Nr., Kategorie
+  // Produkte-Seite
   setupAutocomplete('prod-name',
     () => _products.map(p => ({...p, _sub: p.art_nr+' · '+(p.category||'')+' · EK '+fmt(p.ek_price)+' / VK '+fmt(p.vk_price)+' €'})),
     (p) => editProduct(p.art_nr),
     (p) => p.name + ' ' + p.art_nr + ' ' + (p.category||'')
   );
+
+  // Rechnung erstellen — Käufer-Suche
+  setupAutocomplete('c-buyer-name',
+    () => _buyers.map(b => ({...b, _sub: (b.post_code||'')+' '+(b.city||'')+' · '+(b.email||'')})),
+    (b) => {
+      const idx = _buyers.findIndex(x => x.id === b.id);
+      if (idx >= 0) {
+        document.getElementById('c-buyer-select').value = idx;
+        selectBuyer(idx);
+      }
+    },
+    (b) => b.name || b.contact_name || ''
+  );
 }
 
 // ── Kunden (eigene Seite) ──
-let _customers = [];
+// _customers declared at top
 
 async function loadCustomers() {
   try {
@@ -3504,7 +3587,7 @@ async function uploadCustomersCsv(file) {
 }
 
 // ── Produktkatalog ──
-let _products = [];
+// _products declared at top
 
 async function loadProducts() {
   try {
@@ -3735,30 +3818,35 @@ async function loadStbBelege() {
     const belege = res.belege || [];
     document.getElementById('stb-count').textContent = belege.length;
 
-    // Zusammenfassung
+    // Zusammenfassung nach Kategorie
     const eingang = belege.filter(b => b.typ === 'Eingang');
     const ausgang = belege.filter(b => b.typ === 'Ausgang');
-    const sumEin = eingang.reduce((s,b) => s + (b.betrag||0), 0);
-    const sumAus = ausgang.reduce((s,b) => s + (b.betrag||0), 0);
-    document.getElementById('stb-summary').innerHTML =
-      '<div><strong>'+eingang.length+'</strong> Eingangsrechnungen · <strong>'+fmt(sumEin)+' \u20ac</strong></div>' +
-      '<div><strong>'+ausgang.length+'</strong> Ausgangsrechnungen · <strong>'+fmt(sumAus)+' \u20ac</strong></div>';
+    const sonstige = belege.filter(b => b.typ === 'Sonstiges');
+    const kategorien = {};
+    belege.forEach(b => { const k = b.kategorie||b.typ; kategorien[k] = (kategorien[k]||0) + 1; });
+    let sumHtml = '<div><strong>'+eingang.length+'</strong> Eingang</div>' +
+      '<div><strong>'+ausgang.length+'</strong> Ausgang</div>';
+    if (sonstige.length) sumHtml += '<div><strong>'+sonstige.length+'</strong> Sonstiges</div>';
+    sumHtml += '<div style="color:var(--text2);font-size:11px;margin-left:8px">' +
+      Object.entries(kategorien).map(([k,v]) => k+': '+v).join(' · ') + '</div>';
+    document.getElementById('stb-summary').innerHTML = sumHtml;
 
     // Tabelle
     const tbody = document.getElementById('stb-table-body');
     if (!belege.length) {
-      tbody.innerHTML = '<tr><td colspan="6" style="color:var(--text2);text-align:center">Keine Belege im gew\u00e4hlten Zeitraum</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2);text-align:center">Keine Belege im gew\u00e4hlten Zeitraum</td></tr>';
     } else {
       tbody.innerHTML = belege.map(b => {
-        const typCls = b.typ === 'Eingang' ? 'color:var(--info)' : 'color:var(--success)';
+        const typCls = b.typ === 'Eingang' ? 'color:var(--info)' : b.typ === 'Ausgang' ? 'color:var(--success)' : 'color:var(--text2)';
         const partner = b.lieferant || b.kunde || '';
         const hasPdf = b.pdf ? true : false;
         return '<tr>' +
           '<td style="font-size:11px;font-weight:500;'+typCls+'">'+b.typ+'</td>' +
+          '<td style="font-size:11px">'+esc(b.kategorie||'')+'</td>' +
           '<td style="font-family:var(--mono);font-size:12px">'+(b.nummer||'\u2013')+'</td>' +
           '<td>'+(b.datum||'')+'</td>' +
           '<td>'+esc(partner)+'</td>' +
-          '<td style="text-align:right">'+fmt(b.betrag||0)+' \u20ac</td>' +
+          '<td style="text-align:right">'+(b.betrag?fmt(b.betrag)+' \u20ac':'\u2013')+'</td>' +
           '<td>'+(hasPdf?'\u2714':'\u2013')+'</td></tr>';
       }).join('');
     }
@@ -3826,7 +3914,7 @@ const DEFAULT_TEMPLATES = {
   dunning_3_intro: 'Sehr geehrte Damen und Herren,\n\nwir mussten leider feststellen, dass unsere bisherigen Zahlungsaufforderungen ohne Ergebnis geblieben sind.\nWir fordern Sie hiermit letztmalig auf, den Rechnungsbetrag zzgl. Mahngeb\u00fchren innerhalb von 5 Werktagen zu begleichen.\nNach fruchtlosem Ablauf dieser Frist sehen wir uns gezwungen, unsere Forderung an ein Inkassounternehmen bzw. einen Rechtsanwalt zu \u00fcbergeben. Die dadurch entstehenden Kosten gehen zu Ihren Lasten.',
 };
 
-let _docTemplates = {};
+// _docTemplates declared at top
 
 async function loadDocTemplates() {
   try {
