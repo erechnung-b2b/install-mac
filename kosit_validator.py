@@ -105,13 +105,52 @@ def _find_scenarios(validator_jar: Path) -> Optional[Path]:
     return None
 
 
+def _find_java() -> Optional[str]:
+    """Sucht java in PATH und gängigen Installationsorten."""
+    # 1. PATH
+    found = shutil.which("java")
+    if found:
+        return found
+    # 2. JAVA_HOME
+    jh = os.environ.get("JAVA_HOME", "")
+    if jh:
+        candidate = Path(jh) / "bin" / "java"
+        if candidate.exists():
+            return str(candidate)
+    # 3. Gängige Linux/WSL-Pfade
+    for p in [
+        "/usr/lib/jvm/default-java/bin/java",
+        "/usr/lib/jvm/default-jre/bin/java",
+        "/usr/bin/java",
+        "/usr/local/bin/java",
+    ]:
+        if Path(p).exists():
+            return p
+    # 4. Wildcard unter /usr/lib/jvm/
+    for jvm_dir in Path("/usr/lib/jvm").glob("*") if Path("/usr/lib/jvm").exists() else []:
+        candidate = jvm_dir / "bin" / "java"
+        if candidate.exists():
+            return str(candidate)
+    # 5. Windows: Program Files
+    for p in [
+        r"C:\Program Files\Eclipse Adoptium",
+        r"C:\Program Files\Java",
+        r"C:\Program Files (x86)\Java",
+    ]:
+        pp = Path(p)
+        if pp.exists():
+            for java_exe in pp.glob("*/bin/java.exe"):
+                return str(java_exe)
+    return None
+
+
 def is_available(validator_path: Optional[str] = None) -> tuple[bool, str]:
     """
     Prüft, ob der KoSIT-Validator aufrufbar ist.
     Returns (available, reason_if_not).
     """
-    if shutil.which("java") is None:
-        return False, "Java nicht im PATH gefunden"
+    if _find_java() is None:
+        return False, "Java nicht gefunden (weder in PATH noch unter gängigen Installationspfaden)"
     jar = _find_validator_jar(validator_path)
     if jar is None:
         return False, "KoSIT-Validator-JAR nicht gefunden"
@@ -151,8 +190,9 @@ def validate_with_kosit(
         output_dir.mkdir()
         input_file.write_bytes(xml_bytes)
 
+        java_exe = _find_java() or "java"
         cmd = [
-            "java", "-jar", str(jar),
+            java_exe, "-jar", str(jar),
             "-s", str(scenarios),
             "-o", str(output_dir),
             "-r", str(scenarios.parent),  # Repository-Wurzel
@@ -190,7 +230,7 @@ def validate_with_kosit(
 def _parse_kosit_report(report_bytes: bytes) -> KositResult:
     """
     Parst das vom KoSIT-Validator erzeugte Report-XML.
-    Format: schematron-svrl mit <rep:scenarioMatched>, <rep:validation> etc.
+    Unterstützt verschiedene Validator-Versionen mit unterschiedlichen Namespaces.
     """
     result = KositResult(available=True, report_xml=report_bytes.decode("utf-8", errors="replace"))
 
@@ -200,43 +240,78 @@ def _parse_kosit_report(report_bytes: bytes) -> KositResult:
         result.unavailable_reason = f"Report nicht parsebar: {e}"
         return result
 
-    # Namespaces des KoSIT-Reports
-    ns = {
-        "rep": "http://www.xoev.de/de/validator/varl/1",
-        "svrl": "http://purl.oclc.org/dsdl/svrl",
-    }
+    # Mehrere mögliche Namespaces für KoSIT-Versionen
+    nss = [
+        {"rep": "http://www.xoev.de/de/validator/varl/1", "svrl": "http://purl.oclc.org/dsdl/svrl"},
+        {"rep": "http://www.xoev.de/de/validator/framework/1/createreportinput", "svrl": "http://purl.oclc.org/dsdl/svrl"},
+        {"rep": "http://www.xoev.de/de/validator/varl", "svrl": "http://purl.oclc.org/dsdl/svrl"},
+    ]
 
-    # Validator-Version
-    engine = root.find(".//rep:engine", ns)
-    if engine is not None and engine.text:
-        result.validator_version = engine.text.strip()
+    # Version ohne Namespace-Abhängigkeit finden (Tag-Namen direkt)
+    def _find_local(elem, tag):
+        """Findet Element anhand des Local-Name, unabhängig vom Namespace."""
+        for e in elem.iter():
+            if etree.QName(e.tag).localname == tag:
+                return e
+        return None
 
-    # Scenario
-    scenario = root.find(".//rep:scenario", ns)
-    if scenario is not None:
-        name = scenario.find("rep:name", ns)
-        if name is not None and name.text:
-            result.scenario = name.text.strip()
+    def _findall_local(elem, tag):
+        return [e for e in elem.iter() if etree.QName(e.tag).localname == tag]
 
-    # Failed Asserts durchzählen
-    for fa in root.findall(".//svrl:failed-assert", ns):
-        flag = fa.get("flag", "").lower()
-        role = fa.get("role", "").lower()
-        severity = flag or role
-        text_el = fa.find("svrl:text", ns)
-        msg = (text_el.text or "").strip() if text_el is not None else ""
+    # 1. Validator-Version — egal aus welchem Namespace
+    for elem in root.iter():
+        tag = etree.QName(elem.tag).localname
+        if tag == "engine" and elem.text:
+            result.validator_version = elem.text.strip()
+            break
+        if tag == "validatorVersion" and elem.text:
+            result.validator_version = elem.text.strip()
+            break
+
+    # 2. Szenario-Name
+    for elem in root.iter():
+        tag = etree.QName(elem.tag).localname
+        if tag == "scenario":
+            name = _find_local(elem, "name")
+            if name is not None and name.text:
+                result.scenario = name.text.strip()
+                break
+        if tag == "scenarioMatched":
+            # Alternativ: scenarioMatched enthält scenario-Name als Attribut
+            name_val = elem.get("name", "") or elem.get("scenario", "")
+            if name_val:
+                result.scenario = name_val
+                break
+
+    # 3. Failed asserts / Fehler finden
+    for fa in _findall_local(root, "failed-assert"):
+        flag = (fa.get("flag", "") or fa.get("role", "")).lower()
+        text_el = _find_local(fa, "text")
+        msg = ""
+        if text_el is not None:
+            # Text kann in verschachtelten Elementen liegen
+            msg = " ".join(text_el.itertext()).strip()
         rule_id = fa.get("id", "")
-        entry = f"{rule_id}: {msg}" if rule_id else msg
-
-        if severity in ("fatal", "error"):
+        entry = f"[{rule_id}] {msg}" if rule_id else msg
+        if flag in ("fatal", "error"):
             result.errors.append(entry)
+        elif flag in ("warning", "warn"):
+            result.warnings.append(entry)
         else:
+            # Unbekannt → als Warnung einsortieren
             result.warnings.append(entry)
 
-    # Gesamtergebnis: accept / reject
-    accept = root.find(".//rep:accepts", ns)
-    if accept is not None and accept.text:
-        result.valid = accept.text.strip().lower() == "true"
+    # 4. Gesamtergebnis
+    accept_text = None
+    for elem in root.iter():
+        tag = etree.QName(elem.tag).localname
+        if tag in ("accepts", "accepted", "valid"):
+            if elem.text:
+                accept_text = elem.text.strip().lower()
+                break
+
+    if accept_text is not None:
+        result.valid = accept_text in ("true", "accepted", "valid", "1")
     else:
         result.valid = len(result.errors) == 0
 

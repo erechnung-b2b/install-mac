@@ -50,8 +50,12 @@ def render_invoice(inv: Invoice, report: ValidationReport = None) -> str:
         lines.append(f"  {'Bestellreferenz:':<30} {inv.order_reference}")
     if inv.contract_reference:
         lines.append(f"  {'Vertragsreferenz:':<30} {inv.contract_reference}")
-    if inv.period_start or inv.period_end:
-        lines.append(f"  {'Leistungszeitraum:':<30} {inv.period_start or '?'} – {inv.period_end or '?'}")
+    if inv.period_start and inv.period_end and inv.period_start != inv.period_end:
+        lines.append(f"  {'Leistungszeitraum:':<30} {inv.period_start} – {inv.period_end}")
+    else:
+        _delivery = inv.tax_point_date or inv.period_end or inv.period_start
+        if _delivery:
+            lines.append(f"  {'Leistungsdatum:':<30} {_mark('BT-72', _delivery)}")
     if inv.note:
         lines.append(f"  {'Bemerkung:':<30} {inv.note}")
     if inv.preceding_invoice:

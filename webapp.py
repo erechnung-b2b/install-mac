@@ -994,6 +994,7 @@ def api_txn_generate_pdf(tid, step_key):
             subject=txn.get("subject", ""),
             doc_date=step.get("date") or data.get("date", ""),
             due_date=step.get("due_date") or data.get("due_date", ""),
+            delivery_date=step.get("date") or data.get("date", ""),
             transaction_id=tid,
             step_key=step_key,
             dunning_level=dunning_level,
@@ -2190,6 +2191,7 @@ def api_invoices():
             "format": inv._source_format or "XRechnung",
             "direction": inv._direction or "AUSGANG",
             "buyer_reference": inv.buyer_reference or inv.buyer.buyer_reference,
+            "delivery_date": (inv.tax_point_date or inv.period_end).isoformat() if (inv.tax_point_date or inv.period_end) else None,
         })
     result.sort(key=lambda x: x["date"], reverse=True)
     return _json({"invoices": result, "count": len(result)})
@@ -2292,7 +2294,11 @@ def view_invoice_html(inv_id):
     inv = invoices.get(inv_id)
     if not inv:
         abort(404)
+    return _render_invoice_html(inv)
 
+
+def _render_invoice_html(inv):
+    """Erzeugt den HTML-Code der Belegansicht für eine Rechnung."""
     report = validate_invoice(inv)
     s = inv.seller
     b = inv.buyer
@@ -2341,8 +2347,11 @@ def view_invoice_html(inv_id):
     due_fmt = p.due_date.strftime("%d.%m.%Y") if p.due_date else "—"
     date_fmt = inv.invoice_date.strftime("%d.%m.%Y") if inv.invoice_date else "—"
     period_fmt = ""
-    if inv.period_start:
-        period_fmt = f'<div class="meta-row"><span class="k">Leistungszeitraum</span><span>{inv.period_start.strftime("%d.%m.%Y")} – {inv.period_end.strftime("%d.%m.%Y") if inv.period_end else ""}</span></div>'
+    _delivery = inv.tax_point_date or inv.period_end or inv.period_start
+    if inv.period_start and inv.period_end and inv.period_start != inv.period_end:
+        period_fmt = f'<div class="meta-row"><span class="k">Leistungszeitraum</span><span>{inv.period_start.strftime("%d.%m.%Y")} – {inv.period_end.strftime("%d.%m.%Y")}</span></div>'
+    elif _delivery:
+        period_fmt = f'<div class="meta-row"><span class="k">Leistungsdatum</span><span>{_delivery.strftime("%d.%m.%Y")}</span></div>'
 
     pay_label = {"30": "Überweisung", "48": "Kreditkarte", "58": "SEPA-Überweisung", "59": "SEPA-Lastschrift"}.get(p.means_code, p.means_code)
 
@@ -2618,11 +2627,117 @@ def api_upload_pdf_ausgang():
     }, 201)
 
 
+# ── ZUGFeRD: asynchrone Erzeugung mit Job-Queue ────────────────────────
+# Jobs im Speicher: { job_id: {"status": "running|done|error", "pdf": bytes|None, "error": str|None, "filename": str, "created": timestamp} }
+_zugferd_jobs = {}
+_zugferd_lock = __import__("threading").Lock()
+
+
+def _zugferd_worker(job_id: str, inv, xml_bytes: bytes, filename: str):
+    """Erzeugt ZUGFeRD-PDF im Hintergrund."""
+    try:
+        try:
+            from weasyprint import HTML
+            from zugferd_writer import _embed_xml_in_pdf
+            html_str = _render_invoice_html(inv)
+            visible_pdf = HTML(string=html_str).write_pdf()
+            pdf_bytes = _embed_xml_in_pdf(visible_pdf, xml_bytes, filename="factur-x.xml")
+        except ImportError:
+            pdf_bytes = generate_zugferd_pdf(inv, xml_bytes)
+
+        with _zugferd_lock:
+            _zugferd_jobs[job_id] = {
+                "status": "done", "pdf": pdf_bytes, "error": None,
+                "filename": filename, "created": _zugferd_jobs[job_id]["created"],
+            }
+    except Exception as e:
+        with _zugferd_lock:
+            _zugferd_jobs[job_id] = {
+                "status": "error", "pdf": None, "error": str(e),
+                "filename": filename, "created": _zugferd_jobs[job_id]["created"],
+            }
+
+
+def _zugferd_cleanup():
+    """Entfernt fertige Jobs älter als 10 Minuten."""
+    import time
+    now = time.time()
+    with _zugferd_lock:
+        stale = [jid for jid, job in _zugferd_jobs.items()
+                 if now - job.get("created", now) > 600]
+        for jid in stale:
+            del _zugferd_jobs[jid]
+
+
+@app.route("/api/invoices/<inv_id>/zugferd/start", methods=["POST"])
+def api_zugferd_start(inv_id):
+    """Startet asynchrone ZUGFeRD-PDF-Erzeugung, liefert job_id zurück."""
+    import uuid, threading, time
+    _zugferd_cleanup()
+
+    inv = invoices.get(inv_id)
+    if not inv:
+        return _json({"error": "Rechnung nicht gefunden"}, 404)
+
+    try:
+        xml_bytes = generate_and_serialize(inv)
+    except Exception as e:
+        return _json({"error": f"XML-Erzeugung fehlgeschlagen: {e}"}, 500)
+
+    job_id = uuid.uuid4().hex[:12]
+    filename = f"{inv.invoice_number}_zugferd.pdf"
+
+    with _zugferd_lock:
+        _zugferd_jobs[job_id] = {
+            "status": "running", "pdf": None, "error": None,
+            "filename": filename, "created": time.time(),
+        }
+
+    t = threading.Thread(target=_zugferd_worker,
+                         args=(job_id, inv, xml_bytes, filename),
+                         daemon=True)
+    t.start()
+
+    return _json({"job_id": job_id, "status": "running"})
+
+
+@app.route("/api/invoices/<inv_id>/zugferd/status/<job_id>")
+def api_zugferd_status(inv_id, job_id):
+    """Prüft Status eines ZUGFeRD-Jobs."""
+    with _zugferd_lock:
+        job = _zugferd_jobs.get(job_id)
+    if not job:
+        return _json({"error": "Job nicht gefunden"}, 404)
+    return _json({
+        "status": job["status"],
+        "ready": job["status"] == "done",
+        "error": job.get("error"),
+    })
+
+
+@app.route("/api/invoices/<inv_id>/zugferd/download/<job_id>")
+def api_zugferd_download(inv_id, job_id):
+    """Lädt fertiges ZUGFeRD-PDF herunter."""
+    from flask import Response
+    with _zugferd_lock:
+        job = _zugferd_jobs.get(job_id)
+    if not job:
+        return _json({"error": "Job nicht gefunden"}, 404)
+    if job["status"] != "done":
+        return _json({"error": "PDF noch nicht fertig", "status": job["status"]}, 202)
+
+    return Response(
+        job["pdf"],
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{job["filename"]}"'},
+    )
+
+
 @app.route("/api/invoices/<inv_id>/zugferd", methods=["GET"])
 def api_download_zugferd(inv_id):
     """
-    Erzeugt on-the-fly ein ZUGFeRD-PDF/A-3 für eine gespeicherte Rechnung
-    und liefert es als Download aus (FR-700, P-03).
+    Synchrone Variante (Rückwärtskompatibilität).
+    Neue Frontend-Versionen sollten /zugferd/start + /status + /download nutzen.
     """
     from flask import Response
     inv = invoices.get(inv_id)
@@ -2630,7 +2745,14 @@ def api_download_zugferd(inv_id):
         return _json({"error": "Rechnung nicht gefunden"}, 404)
     try:
         xml_bytes = generate_and_serialize(inv)
-        pdf_bytes = generate_zugferd_pdf(inv, xml_bytes)
+        try:
+            from weasyprint import HTML
+            from zugferd_writer import _embed_xml_in_pdf
+            html_str = _render_invoice_html(inv)
+            visible_pdf = HTML(string=html_str).write_pdf()
+            pdf_bytes = _embed_xml_in_pdf(visible_pdf, xml_bytes, filename="factur-x.xml")
+        except ImportError:
+            pdf_bytes = generate_zugferd_pdf(inv, xml_bytes)
     except Exception as e:
         return _json({"error": f"ZUGFeRD-Erzeugung fehlgeschlagen: {e}"}, 500)
 
@@ -2669,6 +2791,7 @@ def api_validate_kosit(inv_id):
         "version": result.validator_version,
         "scenario": result.scenario,
         "reason": result.unavailable_reason,
+        "report_xml": (result.report_xml[:5000] if result.report_xml else ""),  # Erste 5000 Zeichen zum Debug
     })
 
 

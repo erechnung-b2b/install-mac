@@ -83,9 +83,14 @@ def _build_visible_pdf(inv: Invoice) -> bytes:
         ["Rechnungsnummer:", inv.invoice_number],
         ["Rechnungsdatum:", inv.invoice_date.strftime("%d.%m.%Y")
          if hasattr(inv.invoice_date, "strftime") else str(inv.invoice_date)],
-        ["Kundennummer:", inv.buyer_reference or "–"],
-        ["Währung:", inv.currency_code],
     ]
+    # BT-72 Leistungsdatum
+    _delivery = inv.tax_point_date or inv.period_end
+    if _delivery:
+        _del_str = _delivery.strftime("%d.%m.%Y") if hasattr(_delivery, "strftime") else str(_delivery)
+        meta.append(["Leistungsdatum:", _del_str])
+    meta.append(["Kundennummer:", inv.buyer_reference or "–"])
+    meta.append(["Währung:", inv.currency_code])
     if inv.seller.tax_registration_id:
         meta.append(["Steuernummer:", inv.seller.tax_registration_id])
     t_meta = Table(meta, colWidths=[45 * mm, 80 * mm])
@@ -218,15 +223,77 @@ def generate_zugferd_pdf(inv: Invoice, xml_bytes: bytes) -> bytes:
     """
     Erzeugt ein ZUGFeRD-Hybrid-PDF (sichtbar + eingebettetes XML).
 
-    Args:
-        inv: Invoice-Objekt für die sichtbare Darstellung
-        xml_bytes: Das XRechnung-XML, das eingebettet werden soll
-                   (erzeugt über xrechnung_generator.generate_and_serialize)
-
-    Returns:
-        PDF-Bytes mit eingebettetem XML
+    Nutzt denselben doc_generator wie normale Rechnungen, damit das Layout
+    einheitlich ist, und bettet dann die XRechnung-XML ein.
     """
-    visible_pdf = _build_visible_pdf(inv)
+    try:
+        from doc_generator import generate_document
+        from pathlib import Path
+        import json
+
+        # Seller-Dict aus Mandanten-Settings
+        seller = {}
+        try:
+            # Versuche Mandanten-Stammdaten zu laden
+            cfg_path = Path("data") / "mandant_settings.json"
+            if cfg_path.exists():
+                seller = json.loads(cfg_path.read_text("utf-8"))
+        except Exception:
+            pass
+
+        # Fallback: aus Invoice-Objekt
+        if not seller.get("name"):
+            seller = {
+                "name": inv.seller.name,
+                "street": inv.seller.address.street if inv.seller.address else "",
+                "city": inv.seller.address.city if inv.seller.address else "",
+                "post_code": inv.seller.address.post_code if inv.seller.address else "",
+                "email": inv.seller.contact.email if hasattr(inv.seller, "contact") and inv.seller.contact else "",
+                "vat_id": inv.seller.vat_id or "",
+                "iban": inv.payment.iban if inv.payment else "",
+                "bic": inv.payment.bic if inv.payment else "",
+            }
+
+        # Recipient-Dict
+        recipient = {
+            "name": inv.buyer.name,
+            "street": inv.buyer.address.street if inv.buyer.address else "",
+            "city": inv.buyer.address.city if inv.buyer.address else "",
+            "post_code": inv.buyer.address.post_code if inv.buyer.address else "",
+        }
+
+        # Positionen
+        positions = []
+        for i, line in enumerate(inv.lines, 1):
+            positions.append({
+                "pos_nr": i,
+                "description": line.item_name,
+                "quantity": float(line.quantity),
+                "unit": {"C62": "Stk.", "HUR": "Std.", "DAY": "Tag(e)"}.get(line.unit_code, line.unit_code),
+                "unit_price": float(line.unit_price),
+                "net_amount": float(line.line_net_amount),
+                "tax_rate": float(line.tax_rate),
+                "discount_percent": 0,
+                "discount_amount": 0,
+            })
+
+        visible_pdf = generate_document(
+            doc_type="invoice",
+            seller=seller,
+            recipient=recipient,
+            positions=positions,
+            step={"date": inv.invoice_date.isoformat() if hasattr(inv.invoice_date, "isoformat") else str(inv.invoice_date)},
+            reference=inv.invoice_number,
+            doc_date=inv.invoice_date.isoformat() if hasattr(inv.invoice_date, "isoformat") else str(inv.invoice_date),
+            due_date=inv.payment.due_date.isoformat() if inv.payment and inv.payment.due_date else "",
+            delivery_date=(inv.tax_point_date or inv.period_end or ""),
+            subject="",
+        )
+    except Exception as e:
+        # Fallback: einfaches Layout wenn doc_generator nicht verfügbar
+        print(f"  ZUGFeRD nutzt Fallback-Layout: {e}")
+        visible_pdf = _build_visible_pdf(inv)
+
     return _embed_xml_in_pdf(visible_pdf, xml_bytes, filename="factur-x.xml")
 
 

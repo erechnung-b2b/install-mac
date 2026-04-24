@@ -1441,35 +1441,86 @@ async function exportInvoice() {
 }
 
 async function downloadZugferd() {
-  // Lädt PDF/A-3-Hybrid-Rechnung (visuelles PDF + eingebettetes XRechnung-XML)
-  const url = API + `/api/invoices/${currentInvoiceId}/zugferd`;
-  const r = await fetch(url);
-  if (!r.ok) { toast('ZUGFeRD-Erzeugung fehlgeschlagen', 'error'); return; }
-  const blob = await r.blob();
-  const inv = window._currentInvoiceData || {};
-  const fname = (inv.invoice_number || 'rechnung') + '_zugferd.pdf';
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = fname;
-  a.click();
-  URL.revokeObjectURL(a.href);
-  toast('ZUGFeRD-PDF heruntergeladen: ' + fname);
+  // Async: Job starten → Status pollen → Download
+  const btn = document.getElementById('btn-zugferd');
+  const origText = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Erzeuge PDF...'; }
+
+  try {
+    // Job starten
+    const startRes = await fetch(API + `/api/invoices/${currentInvoiceId}/zugferd/start`, {method:'POST'});
+    const startData = await startRes.json();
+    if (!startRes.ok || startData.error) {
+      toast(startData.error || 'Fehler beim Start', 'error');
+      return;
+    }
+    const jobId = startData.job_id;
+
+    // Polling alle 500ms bis fertig (max 60s)
+    const maxTries = 120;
+    for (let i = 0; i < maxTries; i++) {
+      await new Promise(r => setTimeout(r, 500));
+      const statRes = await fetch(API + `/api/invoices/${currentInvoiceId}/zugferd/status/${jobId}`);
+      const stat = await statRes.json();
+      if (stat.status === 'error') {
+        toast('Fehler: ' + (stat.error || 'unbekannt'), 'error');
+        return;
+      }
+      if (stat.ready) {
+        // Fertig — Download
+        const dlRes = await fetch(API + `/api/invoices/${currentInvoiceId}/zugferd/download/${jobId}`);
+        if (!dlRes.ok) { toast('Download fehlgeschlagen', 'error'); return; }
+        const blob = await dlRes.blob();
+        const inv = window._currentInvoiceData || {};
+        const fname = (inv.invoice_number || 'rechnung') + '_zugferd.pdf';
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fname;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        toast('ZUGFeRD-PDF heruntergeladen: ' + fname);
+        return;
+      }
+      // Laufende Statusanzeige alle 2s aktualisieren
+      if (btn && i % 4 === 0) {
+        const sec = Math.floor((i * 500) / 1000);
+        btn.innerHTML = `⏳ Erzeuge PDF... ${sec}s`;
+      }
+    }
+    toast('Zeitüberschreitung — bitte erneut versuchen', 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = origText; }
+  }
 }
 
 async function validateWithKosit() {
-  // Ruft den offiziellen KoSIT-XRechnung-Validator (wenn installiert)
-  toast('KoSIT-Validator läuft…');
-  const res = await fetch(API+`/api/invoices/${currentInvoiceId}/kosit`, {method:'POST'}).then(r=>r.json());
-  if (!res.available) {
-    toast('KoSIT nicht verfügbar: ' + (res.reason || 'unbekannt'), 'error');
-    return;
-  }
-  const label = res.valid
-    ? `KoSIT gültig (${res.version || 'Validator'}, ${res.warnings} Warnungen)`
-    : `KoSIT: ${res.errors} Fehler, ${res.warnings} Warnungen`;
-  toast(label, res.valid ? 'success' : 'error');
-  if (res.error_details && res.error_details.length) {
-    console.warn('KoSIT-Fehler:', res.error_details);
+  // Ruft den offiziellen KoSIT-XRechnung-Validator
+  const btn = document.getElementById('btn-kosit');
+  const orig = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'KoSIT läuft…'; }
+  try {
+    const res = await fetch(API+`/api/invoices/${currentInvoiceId}/kosit`, {method:'POST'}).then(r=>r.json());
+    if (!res.available) {
+      alert('KoSIT nicht verfügbar\n\nGrund: ' + (res.reason || 'unbekannt'));
+      return;
+    }
+    const status = res.valid ? '✅ GÜLTIG' : '❌ UNGÜLTIG';
+    const errList = (res.error_details||[]).map((e,i) => `  ${i+1}. ${typeof e === 'string' ? e : (e.message||JSON.stringify(e))}`).join('\n') || '  (keine)';
+    const warnList = (res.warning_details||[]).slice(0,10).map((w,i) => `  ${i+1}. ${typeof w === 'string' ? w : (w.message||JSON.stringify(w))}`).join('\n') || '  (keine)';
+    const msg = `KoSIT-Validierung: ${status}\n\n` +
+      `Validator-Version: ${res.version || 'unbekannt'}\n` +
+      `Szenario:          ${res.scenario || '-'}\n` +
+      `Fehler:            ${res.errors}\n` +
+      `Warnungen:         ${res.warnings}\n\n` +
+      (res.errors > 0 ? `── Fehlerdetails ──\n${errList}\n\n` : '') +
+      (res.warnings > 0 ? `── Warnungen ──\n${warnList}` : '');
+    // Pop-up mit Details
+    alert(msg);
+    // Zusätzlich in Console
+    console.log('KoSIT-Ergebnis:', res);
+    toast(res.valid ? 'KoSIT: Rechnung gültig' : `KoSIT: ${res.errors} Fehler`, res.valid ? 'success' : 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
   }
 }
 
@@ -2013,7 +2064,13 @@ function renderInvoiceDocument(inv, typeLabel) {
     <div class="meta-grid">
       <div class="meta-box">
         <div class="meta-row"><span class="k">Rechnungsdatum</span><span>${fmtDate(inv.date)}</span></div>
-        ${inv.period_start ? '<div class="meta-row"><span class="k">Leistungszeitraum</span><span>'+fmtDate(inv.period_start)+' – '+fmtDate(inv.period_end)+'</span></div>' : ''}
+        ${(() => {
+          const start = inv.period_start, end = inv.period_end, tp = inv.tax_point_date;
+          if (start && end && start !== end) return '<div class="meta-row"><span class="k">Leistungszeitraum</span><span>'+fmtDate(start)+' – '+fmtDate(end)+'</span></div>';
+          const d = tp || end || start;
+          if (d) return '<div class="meta-row"><span class="k">Leistungsdatum</span><span>'+fmtDate(d)+'</span></div>';
+          return '';
+        })()}
         ${p.due_date ? '<div class="meta-row"><span class="k">Fällig am</span><span style="font-weight:500">'+fmtDate(p.due_date)+'</span></div>' : ''}
       </div>
       <div class="meta-box">
