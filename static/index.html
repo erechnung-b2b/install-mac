@@ -521,7 +521,7 @@ th.c,td.c{text-align:center}
   </div>
 
   <!-- Lieferanten-Dokumente -->
-  <div class="card" style="margin-top:16px" id="sup-docs-card" style="display:none">
+  <div class="card" style="margin-top:16px;display:none" id="sup-docs-card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
       <h3 style="margin:0" id="sup-docs-title">Dokumente</h3>
       <div style="display:flex;gap:6px;align-items:center">
@@ -2559,6 +2559,7 @@ function editSupplier(id) {
   document.getElementById('sup-category').value = s.category || '';
   document.getElementById('sup-notes').value = s.notes || '';
   document.getElementById('sup-save-result').innerHTML = '<span style="color:var(--accent)">Bearbeite: '+esc(s.name)+'</span>';
+  showSupplierDocs(s.id, s.name);
 }
 
 function clearSupForm() {
@@ -2566,6 +2567,8 @@ function clearSupForm() {
    'sup-email','sup-phone','sup-vat','sup-iban','sup-bic','sup-category','sup-notes'
   ].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   document.getElementById('sup-save-result').innerHTML = '';
+  document.getElementById('sup-docs-card').style.display = 'none';
+  _currentSupplierDocId = '';
 }
 
 async function deleteSupplier(id, name) {
@@ -4258,7 +4261,15 @@ async function unlockInvoice(number) { toast('Rechnung wird entsperrt...'); load
 // ── Lizenz ──
 async function loadLicense() {
   try {
-    const lic = await fetch(API+'/api/license').then(r=>r.json());
+    const resp = await fetch(API+'/api/license');
+    let lic;
+    try {
+      const text = await resp.text();
+      lic = JSON.parse(text);
+    } catch(e) {
+      console.warn('License endpoint returned non-JSON, using trial fallback');
+      lic = {status:'TRIAL', is_active:true, is_trial:true, trial_days_left:28, days_remaining:28, device_id:'--', status_text:'Testversion'};
+    }
     const badge = document.getElementById('lic-badge');
     const info = document.getElementById('lic-info');
     const form = document.getElementById('lic-form');
