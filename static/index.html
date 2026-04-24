@@ -1180,9 +1180,23 @@ th.c,td.c{text-align:center}
   <div class="modal">
     <h3>Rechnung per E-Mail versenden</h3>
     <div id="send-invoice-info" style="padding:12px;background:var(--bg3);border-radius:var(--radius);margin-bottom:16px;font-size:13px"></div>
-    <div class="form-row"><label>Empfänger E-Mail *</label><input id="send-recipient" type="email" placeholder="einkauf@kunde.de"></div>
-    <div class="form-row"><label>Betreff (optional, wird automatisch generiert)</label><input id="send-subject" placeholder=""></div>
-    <div class="form-row"><label>Nachricht (optional)</label><textarea id="send-body" rows="4" placeholder="Wird automatisch erzeugt wenn leer"></textarea></div>
+    <div class="form-row"><label>Empfänger E-Mail *</label><input id="send-recipient" type="email" placeholder="kontakt@kunde.de"></div>
+    <div class="form-row-2">
+      <div class="form-row"><label>Anrede</label>
+        <select id="send-salutation" onchange="updateSendBody()">
+          <option value="">— (Damen und Herren)</option>
+          <option value="Herr">Herr</option>
+          <option value="Frau">Frau</option>
+          <option value="Herr Dr.">Herr Dr.</option>
+          <option value="Frau Dr.">Frau Dr.</option>
+          <option value="Herr Prof.">Herr Prof.</option>
+          <option value="Frau Prof.">Frau Prof.</option>
+        </select>
+      </div>
+      <div class="form-row"><label>Ansprechpartner</label><input id="send-contact" oninput="updateSendBody()" placeholder="Vor- und Nachname"></div>
+    </div>
+    <div class="form-row"><label>Betreff</label><input id="send-subject" placeholder="Rechnung RE-..."></div>
+    <div class="form-row"><label>Nachricht</label><textarea id="send-body" rows="8" placeholder="Wird automatisch erzeugt"></textarea></div>
     <div id="send-result" style="margin-top:12px"></div>
     <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px">
       <button onclick="hideSendDialog()">Abbrechen</button>
@@ -4146,18 +4160,78 @@ async function loadSendLog() {
 }
 
 // ── Versand-Dialog ──
-function showSendDialog() {
+async function showSendDialog() {
   document.getElementById('send-modal').classList.add('show');
   document.getElementById('send-result').innerHTML = '';
   document.getElementById('send-recipient').value = '';
   document.getElementById('send-subject').value = '';
   document.getElementById('send-body').value = '';
+  const contactEl = document.getElementById('send-contact');
+  if (contactEl) contactEl.value = '';
+  const salutEl = document.getElementById('send-salutation');
+  if (salutEl) salutEl.value = '';
+
   const inv = window._currentInvoiceData;
-  if (inv) {
-    document.getElementById('send-invoice-info').innerHTML =
-      `<strong>${inv.number}</strong> &middot; ${inv.seller?.name||''} &middot; ${fmt(inv.totals?.due||0)} ${inv.currency||'EUR'}`;
-    if (inv.buyer?.email) document.getElementById('send-recipient').value = inv.buyer.email;
+  if (!inv) return;
+
+  document.getElementById('send-invoice-info').innerHTML =
+    `<strong>${inv.number}</strong> &middot; ${inv.seller?.name||''} &middot; ${fmt(inv.totals?.due||0)} ${inv.currency||'EUR'}`;
+  if (inv.buyer?.email) document.getElementById('send-recipient').value = inv.buyer.email;
+
+  // Passenden Kunden aus der gespeicherten Liste finden (für Anrede + Ansprechpartner)
+  let matched = null;
+  try {
+    if (!_buyers.length) {
+      const res = await fetch(API+'/api/buyers').then(r => r.json());
+      _buyers = res.buyers || [];
+    }
+    const ref = inv.buyer_reference || '';
+    const name = inv.buyer?.name || '';
+    matched = _buyers.find(b => ref && b.reference === ref)
+           || _buyers.find(b => name && b.name === name);
+  } catch(e) {}
+
+  if (matched) {
+    if (contactEl) contactEl.value = matched.contact_name || '';
+    if (salutEl) salutEl.value = matched.salutation || '';
   }
+  updateSendBody();
+
+  // Betreff vorbelegen
+  document.getElementById('send-subject').value = `Rechnung ${inv.number}`;
+}
+
+function updateSendBody() {
+  const inv = window._currentInvoiceData || {};
+  const salut = document.getElementById('send-salutation')?.value || '';
+  const contact = document.getElementById('send-contact')?.value || '';
+  const sellerName = (inv.seller?.name) || '';
+
+  // Nachnamen extrahieren (letztes Wort)
+  const nachname = contact.trim().split(/\s+/).pop() || '';
+  let anrede = 'Sehr geehrte Damen und Herren,';
+  if (salut && nachname) {
+    if (salut === 'Herr') anrede = `Sehr geehrter Herr ${nachname},`;
+    else if (salut === 'Frau') anrede = `Sehr geehrte Frau ${nachname},`;
+    else if (salut === 'Herr Dr.') anrede = `Sehr geehrter Herr Dr. ${nachname},`;
+    else if (salut === 'Frau Dr.') anrede = `Sehr geehrte Frau Dr. ${nachname},`;
+    else if (salut === 'Herr Prof.') anrede = `Sehr geehrter Herr Prof. ${nachname},`;
+    else if (salut === 'Frau Prof.') anrede = `Sehr geehrte Frau Prof. ${nachname},`;
+    else anrede = `${salut} ${nachname},`;
+  }
+
+  const body = `${anrede}
+
+anbei erhalten Sie unsere Rechnung ${inv.number||''}.
+Die Rechnung liegt sowohl als PDF als auch als XRechnung-XML (EN 16931) bei.
+
+Bei Fragen stehen wir Ihnen gerne zur Verfügung.
+
+Mit freundlichen Grüßen
+${sellerName}`;
+
+  const bodyEl = document.getElementById('send-body');
+  if (bodyEl) bodyEl.value = body;
 }
 function hideSendDialog() { document.getElementById('send-modal').classList.remove('show'); }
 
