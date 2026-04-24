@@ -720,6 +720,105 @@ def api_suppliers_csv_export():
         headers={"Content-Disposition": "attachment; filename=lieferanten_export.csv"})
 
 
+# ── API: Lieferanten-Dokumente ────────────────────────────────────────
+
+@app.route("/api/suppliers/<sid>/documents", methods=["POST"])
+def api_supplier_doc_upload(sid):
+    """Lädt ein Dokument hoch und verknüpft es mit einem Lieferanten."""
+    sup = supplier_mgr.get(sid)
+    if not sup:
+        return _json({"error": "Lieferant nicht gefunden"}, 404)
+
+    file = request.files.get("file")
+    doc_type = request.form.get("type", "sonstiges")
+    if not file or not file.filename:
+        return _json({"error": "Keine Datei"}, 400)
+
+    import hashlib
+    from werkzeug.utils import secure_filename
+
+    doc_dir = _DATA / "data" / "supplier_docs" / sid / doc_type
+    doc_dir.mkdir(parents=True, exist_ok=True)
+
+    filename = secure_filename(file.filename) or "dokument.pdf"
+    filepath = doc_dir / filename
+    counter = 1
+    stem, ext = (filename.rsplit(".", 1) + [""])[:2]
+    while filepath.exists():
+        filename = f"{stem}_{counter}.{ext}" if ext else f"{stem}_{counter}"
+        filepath = doc_dir / filename
+        counter += 1
+
+    file_bytes = file.read()
+    filepath.write_bytes(file_bytes)
+    sha = hashlib.sha256(file_bytes).hexdigest()[:16]
+
+    # Index aktualisieren
+    idx_file = _DATA / "data" / "supplier_docs" / sid / "index.json"
+    idx = []
+    if idx_file.exists():
+        try:
+            idx = json.loads(idx_file.read_text("utf-8"))
+        except Exception:
+            pass
+
+    entry = {
+        "filename": filename,
+        "original_name": file.filename,
+        "type": doc_type,
+        "size": len(file_bytes),
+        "hash": sha,
+        "uploaded_at": date.today().isoformat(),
+        "supplier_id": sid,
+        "supplier_name": sup.get("name", ""),
+    }
+    idx.append(entry)
+    idx_file.write_text(json.dumps(idx, indent=2, ensure_ascii=False), "utf-8")
+
+    return _json({"uploaded": True, "document": entry})
+
+
+@app.route("/api/suppliers/<sid>/documents")
+def api_supplier_docs_list(sid):
+    """Liste aller Dokumente eines Lieferanten."""
+    idx_file = _DATA / "data" / "supplier_docs" / sid / "index.json"
+    if not idx_file.exists():
+        return _json([])
+    try:
+        return _json(json.loads(idx_file.read_text("utf-8")))
+    except Exception:
+        return _json([])
+
+
+@app.route("/api/suppliers/<sid>/documents/<doc_type>/<filename>")
+def api_supplier_doc_download(sid, doc_type, filename):
+    """Download eines Lieferanten-Dokuments."""
+    from flask import send_from_directory
+    doc_dir = _DATA / "data" / "supplier_docs" / sid / doc_type
+    filepath = doc_dir / filename
+    if not filepath.exists():
+        return _json({"error": "Datei nicht gefunden"}, 404)
+    return send_from_directory(str(doc_dir), filename)
+
+
+@app.route("/api/suppliers/<sid>/documents/<doc_type>/<filename>", methods=["DELETE"])
+def api_supplier_doc_delete(sid, doc_type, filename):
+    """Löscht ein Lieferanten-Dokument."""
+    doc_dir = _DATA / "data" / "supplier_docs" / sid / doc_type
+    filepath = doc_dir / filename
+    if filepath.exists():
+        filepath.unlink()
+    idx_file = _DATA / "data" / "supplier_docs" / sid / "index.json"
+    if idx_file.exists():
+        try:
+            idx = json.loads(idx_file.read_text("utf-8"))
+            idx = [d for d in idx if not (d["filename"] == filename and d["type"] == doc_type)]
+            idx_file.write_text(json.dumps(idx, indent=2, ensure_ascii=False), "utf-8")
+        except Exception:
+            pass
+    return _json({"deleted": True})
+
+
 # ── API: Vorgänge / Auftragsmanagement ────────────────────────────────
 
 @app.route("/api/transactions")

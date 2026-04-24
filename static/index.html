@@ -479,7 +479,7 @@ th.c,td.c{text-align:center}
       <div class="form-row"><label>Ansprechpartner</label><input id="sup-contact" placeholder="Max Mustermann"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="form-row"><label>Strasse</label><input id="sup-street" placeholder="Industriestr. 5"></div>
-        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="sup-plz" placeholder="41379" style="width:80px"><input id="sup-city" placeholder="Brüggen"></div></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="sup-plz" placeholder="41379" style="width:80px" oninput="plzLookup(this,'sup-city')"><input id="sup-city" placeholder="Brüggen"></div></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="form-row"><label>E-Mail</label><input id="sup-email" type="email" placeholder="info@firma.de"></div>
@@ -515,8 +515,44 @@ th.c,td.c{text-align:center}
         </div>
       </div>
       <table class="data-table"><thead><tr>
-        <th style="width:40px">&#10003;</th><th>ID</th><th>Firma</th><th>Ansprechpartner</th><th>Ort</th><th>Kategorie</th><th>E-Mail</th><th style="width:80px"></th>
+        <th style="width:40px">&#10003;</th><th>ID</th><th>Firma</th><th>Ansprechpartner</th><th>Ort</th><th>Kategorie</th><th>E-Mail</th><th style="width:50px">&#128196;</th><th style="width:80px"></th>
       </tr></thead><tbody id="sup-table-body"></tbody></table>
+    </div>
+  </div>
+
+  <!-- Lieferanten-Dokumente -->
+  <div class="card" style="margin-top:16px" id="sup-docs-card" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="margin:0" id="sup-docs-title">Dokumente</h3>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="sup-doc-type" style="font-size:12px;padding:4px 8px">
+          <option value="lieferschein">Lieferschein</option>
+          <option value="rechnung">Rechnung</option>
+          <option value="angebot">Angebot</option>
+          <option value="sonstiges">Sonstiges</option>
+        </select>
+        <label style="font-size:12px;padding:4px 12px;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;background:var(--bg2)">
+          &#128206; Dokument hochladen
+          <input type="file" style="display:none" onchange="uploadSupplierDoc(this.files[0])" accept=".pdf,.xml,.jpg,.png,.xlsx,.csv,.doc,.docx">
+        </label>
+      </div>
+    </div>
+    <div style="display:flex;gap:16px;flex-wrap:wrap" id="sup-docs-sections">
+      <!-- Rechnungen -->
+      <div style="flex:1;min-width:300px">
+        <h4 style="margin:0 0 8px 0;font-size:13px;color:var(--accent)">&#128176; Rechnungen</h4>
+        <div id="sup-docs-rechnung" style="font-size:12px">Keine Rechnungen</div>
+      </div>
+      <!-- Lieferscheine -->
+      <div style="flex:1;min-width:300px">
+        <h4 style="margin:0 0 8px 0;font-size:13px;color:var(--success)">&#128666; Lieferscheine</h4>
+        <div id="sup-docs-lieferschein" style="font-size:12px">Keine Lieferscheine</div>
+      </div>
+      <!-- Angebote + Sonstiges -->
+      <div style="flex:1;min-width:300px">
+        <h4 style="margin:0 0 8px 0;font-size:13px;color:var(--text2)">&#128196; Angebote &amp; Sonstiges</h4>
+        <div id="sup-docs-sonstiges" style="font-size:12px">Keine Dokumente</div>
+      </div>
     </div>
   </div>
 </div>
@@ -536,7 +572,7 @@ th.c,td.c{text-align:center}
       <div class="form-row"><label>Ansprechpartner</label><input id="cust-contact" placeholder="Stefan Müller"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="form-row"><label>Strasse</label><input id="cust-street" placeholder="Hauptstr. 12"></div>
-        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="cust-plz" placeholder="41379" style="width:80px"><input id="cust-city" placeholder="Brüggen"></div></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="cust-plz" placeholder="41379" style="width:80px" oninput="plzLookup(this,'cust-city')"><input id="cust-city" placeholder="Brüggen"></div></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="form-row"><label>E-Mail</label><input id="cust-email" type="email" placeholder="kunde@firma.de"></div>
@@ -937,7 +973,7 @@ th.c,td.c{text-align:center}
       </div>
       <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;margin-top:8px">
         <div class="form-row"><label>Straße *</label><input id="s-mandant-street" value="" placeholder="Hauptstraße 42"></div>
-        <div class="form-row"><label>PLZ *</label><input id="s-mandant-plz" value="" placeholder="10115"></div>
+        <div class="form-row"><label>PLZ *</label><input id="s-mandant-plz" value="" placeholder="10115" oninput="plzLookup(this,'s-mandant-city')"></div>
         <div class="form-row"><label>Ort *</label><input id="s-mandant-city" value="" placeholder="Berlin"></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:8px">
@@ -2383,7 +2419,7 @@ function renderSupplierTable(searchQ) {
     list = list.filter(s => ((s.name||'')+(s.contact_name||'')+(s.city||'')+(s.email||'')+(s.category||'')).toLowerCase().includes(q));
   }
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Keine Lieferanten'+(searchQ?' gefunden':'')+'</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2);text-align:center">Keine Lieferanten'+(searchQ?' gefunden':'')+'</td></tr>';
     return;
   }
   tbody.innerHTML = list.map(s => {
@@ -2398,6 +2434,7 @@ function renderSupplierTable(searchQ) {
       <td>${esc((s.post_code||'')+' '+(s.city||''))}</td>
       <td>${esc(s.category||'')}</td>
       <td>${esc(s.email||'')}</td>
+      <td style="text-align:center"><a href="#" onclick="showSupplierDocs('${s.id}','${esc(s.name)}');return false" style="color:var(--accent);font-size:12px" title="Dokumente">&#128196;</a></td>
       <td><button onclick="deleteSupplier('${s.id}','${esc(s.name)}')" style="font-size:11px;color:var(--danger);padding:1px 6px">&#10005;</button></td>
     </tr>`;
   }).join('');
@@ -2406,6 +2443,71 @@ function renderSupplierTable(searchQ) {
 function filterSuppliers() {
   const q = document.getElementById('sup-search')?.value || '';
   renderSupplierTable(q);
+}
+
+// ── Lieferanten-Dokumente ──
+let _currentSupplierDocId = '';
+
+async function showSupplierDocs(sid, name) {
+  _currentSupplierDocId = sid;
+  document.getElementById('sup-docs-title').textContent = 'Dokumente — ' + name;
+  document.getElementById('sup-docs-card').style.display = 'block';
+  // Scroll dorthin
+  document.getElementById('sup-docs-card').scrollIntoView({behavior:'smooth'});
+  await loadSupplierDocs(sid);
+}
+
+async function loadSupplierDocs(sid) {
+  try {
+    const docs = await fetch(API+'/api/suppliers/'+sid+'/documents').then(r=>r.json());
+    const rechnungen = docs.filter(d => d.type === 'rechnung');
+    const lieferscheine = docs.filter(d => d.type === 'lieferschein');
+    const sonstige = docs.filter(d => d.type !== 'rechnung' && d.type !== 'lieferschein');
+
+    renderSupDocList('sup-docs-rechnung', rechnungen, sid);
+    renderSupDocList('sup-docs-lieferschein', lieferscheine, sid);
+    renderSupDocList('sup-docs-sonstiges', sonstige, sid);
+  } catch(e) { console.error('loadSupplierDocs', e); }
+}
+
+function renderSupDocList(containerId, docs, sid) {
+  const el = document.getElementById(containerId);
+  if (!docs.length) {
+    el.innerHTML = '<span style="color:var(--text2)">Keine Dokumente</span>';
+    return;
+  }
+  el.innerHTML = docs.map(d =>
+    '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid var(--border)">' +
+    '<a href="'+API+'/api/suppliers/'+sid+'/documents/'+d.type+'/'+d.filename+'" target="_blank" style="color:var(--accent)">'+esc(d.original_name||d.filename)+'</a>' +
+    '<span style="display:flex;gap:8px;align-items:center">' +
+    '<span style="color:var(--text2);font-size:11px">'+(d.size>1024?Math.round(d.size/1024)+' KB':d.size+' B')+' · '+d.uploaded_at+'</span>' +
+    '<button onclick="deleteSupplierDoc(\''+sid+'\',\''+d.type+'\',\''+d.filename+'\')" style="font-size:10px;color:var(--danger);padding:1px 4px">&#10005;</button>' +
+    '</span></div>'
+  ).join('');
+}
+
+async function uploadSupplierDoc(file) {
+  if (!file || !_currentSupplierDocId) { toast('Bitte zuerst Lieferant auswählen (📄 klicken)', 'error'); return; }
+  const docType = document.getElementById('sup-doc-type').value;
+  const form = new FormData();
+  form.append('file', file);
+  form.append('type', docType);
+  toast('Wird hochgeladen...', 'info');
+  try {
+    const res = await fetch(API+'/api/suppliers/'+_currentSupplierDocId+'/documents', {
+      method:'POST', body:form
+    }).then(r=>r.json());
+    if (res.error) { toast(res.error, 'error'); return; }
+    toast(res.document.original_name + ' gespeichert als ' + docType);
+    loadSupplierDocs(_currentSupplierDocId);
+  } catch(e) { toast('Upload-Fehler: '+e, 'error'); }
+}
+
+async function deleteSupplierDoc(sid, docType, filename) {
+  if (!confirm('Dokument "'+filename+'" löschen?')) return;
+  await fetch(API+'/api/suppliers/'+sid+'/documents/'+docType+'/'+filename, {method:'DELETE'});
+  toast('Dokument gelöscht');
+  loadSupplierDocs(sid);
 }
 
 async function saveSupplier() {
@@ -3181,6 +3283,31 @@ async function saveDunningRules() {
   };
   await fetch(API+'/api/dunning/rules', {method:'PUT', headers:{'Content-Type':'application/json'}, body:JSON.stringify(rules)});
   toast('Mahnregeln gespeichert');
+}
+
+// ── PLZ → Stadt Auto-Fill ──
+
+let _plzTimer = null;
+function plzLookup(input, cityFieldId) {
+  clearTimeout(_plzTimer);
+  const plz = input.value.trim();
+  if (plz.length !== 5 || !/^\d{5}$/.test(plz)) return;
+  _plzTimer = setTimeout(async () => {
+    try {
+      const res = await fetch('https://openplzapi.org/de/Localities?postalCode='+plz);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.length > 0) {
+        const city = data[0].name || '';
+        const el = document.getElementById(cityFieldId);
+        if (el && !el.value) {
+          el.value = city;
+          el.style.background = '#f0fdf4';
+          setTimeout(() => el.style.background = '', 1500);
+        }
+      }
+    } catch(e) { /* offline – kein Problem */ }
+  }, 300);
 }
 
 // ── Live-Suche / Autocomplete ──
