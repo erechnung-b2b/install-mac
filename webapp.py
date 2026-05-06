@@ -87,7 +87,7 @@ mandant_mgr.mandanten[demo_mandant.mandant_id] = demo_mandant
 email_config = EmailConfig(
     imap_host="imap.example.com", imap_user="rechnungen@demo-gmbh.de",
     smtp_host="smtp.example.com", smtp_from_address="rechnungen@demo-gmbh.de",
-    smtp_from_name="EBRK UG Rechnungswesen", mandant_name="EBRK UG",
+    smtp_from_name="Rechnungswesen", mandant_name="Demo GmbH",
 )
 email_sender = MockEmailSender(email_config, str(_DATA / "data" / "sent_mails"))
 email_receiver = MockEmailReceiver(email_config, inbox, str(_DATA / "data" / "test_mails"))
@@ -420,10 +420,11 @@ def _generate_buyer_id(name: str) -> str:
 def _save_buyer_if_new(name: str, street: str = "", post_code: str = "",
                        city: str = "", email: str = "", reference: str = "",
                        vat_id: str = "", salutation: str = "",
-                       contact_name: str = "") -> dict | None:
+                       contact_name: str = "", is_private: bool = False) -> dict | None:
     """Speichert einen Kaeufer wenn er noch nicht existiert.
     name = Firma (kann leer sein bei Privatpersonen)
     contact_name = Ansprechpartner (Vor- und Nachname)
+    is_private = Privatperson (vereinfachte Rechnung, keine BR-Pflicht)
     """
     display = name.strip() if name else contact_name.strip() if contact_name else ""
     if not display:
@@ -446,6 +447,7 @@ def _save_buyer_if_new(name: str, street: str = "", post_code: str = "",
         "vat_id": vat_id.strip(),
         "salutation": salutation.strip(),
         "contact_name": contact_name.strip(),
+        "is_private": bool(is_private),
     }
     buyers.append(buyer)
     _save_buyers(buyers)
@@ -476,6 +478,7 @@ def api_buyers_add():
         vat_id=data.get("vat_id", ""),
         salutation=data.get("salutation", ""),
         contact_name=contact_name,
+        is_private=bool(data.get("is_private", False)),
     )
     return _json({"saved": True, "buyer": buyer})
 
@@ -492,6 +495,8 @@ def api_buyers_update(buyer_id):
                         "reference", "vat_id", "salutation", "contact_name"]:
                 if key in data:
                     b[key] = data[key].strip() if isinstance(data[key], str) else data[key]
+            if "is_private" in data:
+                b["is_private"] = bool(data["is_private"])
             found = True
             _save_buyers(buyers)
             return _json({"saved": True, "buyer": b})
@@ -3094,7 +3099,7 @@ def api_generate():
             period_end=date.fromisoformat(data["delivery_date"]) if data.get("delivery_date") else None,
             invoice_type_code=data.get("type", "380"),
             currency_code=data.get("currency", "EUR"),
-            buyer_reference=data.get("buyer_reference", ""),
+            buyer_reference=data.get("buyer_reference", "").strip() or "PRIV-" + (data.get("buyer_id", "") or "00000"),
             note=data.get("note", ""),
             seller=Seller(
                 name=data.get("seller_name", ""),
@@ -3113,7 +3118,7 @@ def api_generate():
                                 data.get("buyer_postcode", "")),
                 electronic_address=data.get("buyer_email", ""),
                 electronic_address_scheme="EM",
-                buyer_reference=data.get("buyer_reference", ""),
+                buyer_reference=data.get("buyer_reference", "").strip() or "PRIV-" + (data.get("buyer_id", "") or "00000"),
                 vat_id=data.get("buyer_vat", ""),
             ),
             payment=PaymentInfo(

@@ -42,7 +42,7 @@ Zwei Artefakte werden gebraucht:
 Entpacke die Szenario-ZIP in einen Ordner und lege den Validator-JAR dazu.
 Empfohlener Pfad unter Windows:
 
-    C:\Users\Rolf\Claude\erechnung-komplett\erechnung\tools\kosit\
+    C:\Pfad\zu\erechnung\tools\kosit\
     ├── validator-<version>-standalone.jar
     ├── scenarios.xml
     ├── resources\
@@ -64,8 +64,8 @@ Software oder direkt in `data/mandant_settings.json`:
 
 ```json
 {
-  "company_name": "Energieberatung Rolf Krause",
-  "kosit_validator_path": "C:/Users/Rolf/tools/kosit/validator-1.5.0-standalone.jar"
+  "company_name": "Demo GmbH",
+  "kosit_validator_path": "C:/Pfad/zu/tools/kosit/validator-1.5.0-standalone.jar"
 }
 ```
 

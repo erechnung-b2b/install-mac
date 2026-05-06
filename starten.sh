@@ -82,8 +82,38 @@ echo "  Server startet auf Port $PORT..."
 echo "  URL: http://localhost:$PORT"
 echo "  Daten: $BASE/data/"
 echo ""
+
+# Log-Verzeichnis anlegen
+LOG_DIR="$BASE/data/logs"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/erechnung.log"
+
+# Altes Log rotieren wenn größer als 10 MB
+if [ -f "$LOG_FILE" ]; then
+    SIZE=$(stat -c%s "$LOG_FILE" 2>/dev/null || stat -f%z "$LOG_FILE" 2>/dev/null || echo 0)
+    if [ "$SIZE" -gt 10485760 ]; then
+        TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+        mv "$LOG_FILE" "$LOG_DIR/erechnung_$TIMESTAMP.log"
+        echo "  Altes Log archiviert: erechnung_$TIMESTAMP.log"
+    fi
+fi
+
+echo "  Log: $LOG_FILE"
+echo "  Live-Verfolgung: tail -f $LOG_FILE"
 echo "  Zum Beenden: Strg+C"
 echo "  ────────────────────────────────────────────────────"
 echo ""
 
-$PYTHON run.py $PORT
+# Server starten — alle Ausgaben in Log-Datei umleiten
+# Trap für sauberes Beenden bei Strg+C
+trap 'echo ""; echo "  Server beendet."; exit 0' INT TERM
+
+$PYTHON run.py $PORT >> "$LOG_FILE" 2>&1 &
+SERVER_PID=$!
+
+echo "  ✓ Server läuft (PID $SERVER_PID)"
+echo ""
+echo "  Drücke Strg+C zum Beenden."
+
+# Warten bis Server beendet wird
+wait $SERVER_PID

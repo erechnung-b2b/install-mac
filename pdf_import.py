@@ -1,7 +1,7 @@
 """
-PDF-Import für Ausgangsrechnungen im Format 'Energieberatung Rolf Krause'.
+PDF-Import für Ausgangsrechnungen.
 
-Parst das bekannte Excel-basierte Rechnungs-PDF und erzeugt ein
+Parst ein Excel-basiertes Rechnungs-PDF und erzeugt ein
 models.Invoice-Objekt, das direkt in den bestehenden erechnung-Flow
 (xrechnung_generator, archive, persistence, webapp) eingespeist werden kann.
 
@@ -32,20 +32,22 @@ from models import (
 )
 
 
-# ── Seller-Stammdaten aus Briefkopf ───────────────────────────────────
-# Werden verwendet, falls in mandant_settings.json noch nichts gepflegt ist.
+# ── Seller-Stammdaten Fallback ────────────────────────────────────────
+# Demo-Werte. Werden nur verwendet, falls in mandant_settings.json noch
+# keine echten Stammdaten gepflegt sind. Bitte über die Web-UI
+# (Tab "Mandant") die eigenen Firmendaten eintragen.
 _SELLER_FALLBACK = dict(
-    name="Energieberatung Rolf Krause",
-    street="Ginsterweg 2a",
-    post_code="41379",
-    city="Brüggen",
+    name="Demo GmbH",
+    street="Musterstraße 1",
+    post_code="00000",
+    city="Musterstadt",
     country="DE",
-    email="energieberatung@rolfkrause.com",
-    telephone="+49 176 22872775",
-    iban="DE62334500000034417394",
-    bic="",  # aus mandant_settings.json übernehmen, wenn gepflegt
-    bank_name="Sparkasse-HRV",
-    contact_name="Rolf Krause",
+    email="info@example.com",
+    telephone="",
+    iban="",
+    bic="",
+    bank_name="",
+    contact_name="",
 )
 
 

@@ -375,17 +375,14 @@ class TransactionManager:
     # ── Freigabe (Häkchen) ──
 
     def can_approve(self, txn: dict, step_key: str) -> tuple[bool, str]:
-        """Prüft ob ein Step freigegeben werden kann."""
-        idx = STEP_KEYS.index(step_key)
-        if idx == 0:
-            return True, ""
-
-        prev_key = STEP_KEYS[idx - 1]
-        prev = txn["steps"].get(prev_key, {})
-        if prev.get("approved") or prev.get("status") == "UEBERSPRUNGEN":
-            return True, ""
-
-        return False, f"Vorheriger Schritt '{STEP_LABELS[prev_key]}' muss zuerst freigegeben werden."
+        """
+        Prüft ob ein Step freigegeben werden kann.
+        Freie Reihenfolge: jeder Step darf jederzeit freigegeben werden.
+        Frühere offene Steps werden beim Freigeben automatisch als ÜBERSPRUNGEN markiert.
+        """
+        if step_key not in STEP_KEYS:
+            return False, f"Unbekannter Step: {step_key}"
+        return True, ""
 
     def approve_step(self, txn_id: str, step_key: str,
                      user: str = "system", comment: str = "") -> dict:
@@ -401,6 +398,24 @@ class TransactionManager:
         ok, reason = self.can_approve(txn, step_key)
         if not ok:
             raise ValueError(reason)
+
+        # Frühere unberührte Steps automatisch als ÜBERSPRUNGEN markieren
+        idx = STEP_KEYS.index(step_key)
+        for prev_key in STEP_KEYS[:idx]:
+            prev = txn["steps"].get(prev_key, {})
+            # Nur Steps überspringen die bisher gar nicht angefasst wurden
+            if (not prev.get("approved")
+                    and prev.get("status") != "UEBERSPRUNGEN"
+                    and prev.get("status") != "ERLEDIGT"
+                    and not prev.get("reference")
+                    and not prev.get("date")):
+                prev["status"] = "UEBERSPRUNGEN"
+                prev["history"].append({
+                    "action": "UEBERSPRUNGEN_AUTO",
+                    "user": user,
+                    "at": _ts(),
+                    "comment": f"Automatisch übersprungen bei Freigabe von {STEP_LABELS.get(step_key, step_key)}",
+                })
 
         step = txn["steps"][step_key]
         step["approved"] = True

@@ -25,7 +25,5 @@ licensing_old_hmac.py
 .vscode/
 .idea/
 *.swp
-
-# Backups
 backup*.zip
 .venv/

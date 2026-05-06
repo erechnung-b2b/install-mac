@@ -13,8 +13,8 @@ zip -r "$BACKUP" data/ -x "data/.DS_Store" > /dev/null 2>&1
 SIZE=$(ls -lh "$BACKUP" | awk '{print $5}')
 echo "  OK: $BACKUP ($SIZE)"
 
-# Nach Windows Downloads kopieren (WSL)
-WIN_DL="/mnt/c/Users/Rolf/Downloads"
+# Auf Wunsch: Backup nach $HOME/Downloads kopieren (Linux/Mac/WSL)
+WIN_DL="$HOME/Downloads"
 if [ -d "$WIN_DL" ]; then
     cp "$BACKUP" "$WIN_DL/"
     echo "  Kopiert nach: $WIN_DL/$BACKUP"

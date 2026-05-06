@@ -47,9 +47,9 @@ def dunning_mgr(tmp_dir):
 
 class TestSupplierCRUD:
     def test_add_supplier(self, supplier_mgr):
-        s = supplier_mgr.add({"name": "Muster Bau GmbH", "city": "Brüggen"})
+        s = supplier_mgr.add({"name": "Muster Bau GmbH", "city": "Musterstadt"})
         assert s["name"] == "Muster Bau GmbH"
-        assert s["city"] == "Brüggen"
+        assert s["city"] == "Musterstadt"
         assert s["country"] == "DE"
         assert s["approved"] is False
         assert s["status"] == "AKTIV"

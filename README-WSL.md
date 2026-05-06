@@ -10,7 +10,7 @@ mkdir -p ~/erechnung
 cd ~/erechnung
 
 # 3. Dateien aus Windows nach WSL kopieren (einmalig)
-cp -r /mnt/c/Users/Rolf/Claude/erechnung-komplett/install-main/erechnung/* .
+cp -r /mnt/c/PFAD/ZUM/erechnung/* .
 
 # 4. Unix-Skripte reinkopieren (aus diesem Paket)
 #    install.sh und starten.sh in ~/erechnung/ ablegen

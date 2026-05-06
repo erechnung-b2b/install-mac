@@ -230,10 +230,9 @@ Erzeugt unter `dist/erechnung/` eine standalone Version. Den Ordner auf beliebig
 
 ## Kontakt
 
-**energieberatung rolf krause**
-Dipl. Ing.
-E-Mail: energieberatung@rolfkrause.com
+**E-Rechnung B2B**
+Web: https://e-rechnung-b2b.de
 
 ---
 
-*E-Rechnungssystem v1.0 — XRechnung | ZUGFeRD | EN 16931 — Stand April 2026*
+*E-Rechnungssystem v2.0 — XRechnung | ZUGFeRD | EN 16931*

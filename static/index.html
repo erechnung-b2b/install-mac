@@ -185,7 +185,7 @@ th.c,td.c{text-align:center}
 <div class="shell">
 
 <div class="sidebar">
-  <h1><span id="sidebar-logo" style="margin-bottom:4px"></span>E-Rechnung<span>EBRK UG &middot; v2.0</span></h1>
+  <h1><span id="sidebar-logo" style="margin-bottom:4px"></span>E-Rechnung<span>B2B &middot; v2.0</span></h1>
   <div class="nav-item active" onclick="navigate('dashboard')"><span class="icon">&#9632;</span>Dashboard</div>
   <div class="nav-item" onclick="navigate('inbox')"><span class="icon">&#9993;</span>Rechnungen<span class="badge" id="nav-badge">3</span></div>
   <div class="nav-item" onclick="navigate('workflow')"><span class="icon">&#10003;</span>Freigaben<span class="badge" id="wf-badge">2</span></div>
@@ -486,7 +486,7 @@ th.c,td.c{text-align:center}
       <div class="form-row"><label>Ansprechpartner</label><input id="sup-contact" placeholder="Max Mustermann"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="form-row"><label>Strasse</label><input id="sup-street" placeholder="Industriestr. 5"></div>
-        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="sup-plz" placeholder="41379" style="width:80px" oninput="plzLookup(this,'sup-city')"><input id="sup-city" placeholder="Brüggen"></div></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="sup-plz" placeholder="00000" style="width:80px" oninput="plzLookup(this,'sup-city')"><input id="sup-city" placeholder="Musterstadt"></div></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="form-row"><label>E-Mail</label><input id="sup-email" type="email" placeholder="info@firma.de"></div>
@@ -579,13 +579,21 @@ th.c,td.c{text-align:center}
       <div class="form-row"><label>Ansprechpartner</label><input id="cust-contact" placeholder="Stefan Müller"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="form-row"><label>Strasse</label><input id="cust-street" placeholder="Hauptstr. 12"></div>
-        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="cust-plz" placeholder="41379" style="width:80px" oninput="plzLookup(this,'cust-city')"><input id="cust-city" placeholder="Brüggen"></div></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:4px"><input id="cust-plz" placeholder="00000" style="width:80px" oninput="plzLookup(this,'cust-city')"><input id="cust-city" placeholder="Musterstadt"></div></div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="form-row"><label>E-Mail</label><input id="cust-email" type="email" placeholder="kunde@firma.de"></div>
         <div class="form-row"><label>Referenz (BT-10)</label><input id="cust-ref" placeholder="K-MUE-001"></div>
       </div>
-      <div class="form-row"><label>USt-ID (bei Firmen)</label><input id="cust-vat" placeholder="DE123456789"></div>
+      <div class="form-row-2">
+        <div class="form-row"><label>USt-ID (bei Firmen)</label><input id="cust-vat" placeholder="DE123456789"></div>
+        <div class="form-row" style="display:flex;align-items:flex-end;padding-bottom:6px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal">
+            <input type="checkbox" id="cust-is-private" style="width:auto">
+            <span>Privatperson (vereinfachte Rechnung)</span>
+          </label>
+        </div>
+      </div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button onclick="saveCustomer()" class="btn-primary">Speichern</button>
         <button onclick="clearCustForm()">Zur&uuml;cksetzen</button>
@@ -2473,7 +2481,11 @@ function selectBuyer(idx) {
   document.getElementById('c-buyer-salutation').value = b.salutation || '';
   document.getElementById('c-buyer-contact').value = b.contact_name || '';
   document.getElementById('c-buyer-vat').value = b.vat_id || '';
-  document.getElementById('buyer-save-result').innerHTML = `<span style="color:var(--text2)">ID: ${b.id}</span>`;
+  // Privatperson: Buyer Reference automatisch setzen, falls leer
+  if (b.is_private && !b.reference) {
+    document.getElementById('c-buyer-ref').value = 'PRIV-' + b.id;
+  }
+  document.getElementById('buyer-save-result').innerHTML = `<span style="color:var(--text2)">ID: ${b.id}${b.is_private?' · <span style="color:var(--info)">Privatperson</span>':''}</span>`;
   updateInvoiceNumber();
 }
 async function updateSelectedBuyer() {
@@ -2551,14 +2563,22 @@ async function loadSuppliers() {
   } catch(e) { console.error('loadSuppliers', e); }
 }
 
+function _fullTextMatch(obj, q) {
+  if (!q) return true;
+  const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return true;
+  // Alle Werte des Objekts als String zusammenführen (auch Notizen, IDs, etc.)
+  const blob = Object.values(obj || {})
+    .filter(v => v !== null && v !== undefined && typeof v !== 'object')
+    .join(' ').toLowerCase();
+  return tokens.every(t => blob.includes(t));
+}
+
 function renderSupplierTable(searchQ) {
   const tbody = document.getElementById('sup-table-body');
   if (!tbody) return;
   let list = _suppliers;
-  if (searchQ) {
-    const q = searchQ.toLowerCase();
-    list = list.filter(s => ((s.name||'')+(s.contact_name||'')+(s.city||'')+(s.email||'')+(s.category||'')).toLowerCase().includes(q));
-  }
+  if (searchQ) list = list.filter(s => _fullTextMatch(s, searchQ));
   if (!list.length) {
     tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2);text-align:center">Keine Lieferanten'+(searchQ?' gefunden':'')+'</td></tr>';
     return;
@@ -3472,10 +3492,16 @@ function setupAutocomplete(inputId, getData, onSelect, displayFn) {
   input.addEventListener('input', function() {
     const q = this.value.trim().toLowerCase();
     if (q.length < 2) { dropdown.style.display = 'none'; return; }
+    const tokens = q.split(/\s+/).filter(Boolean);
     const items = getData();
     const matches = items.filter(item => {
-      const searchStr = displayFn(item).toLowerCase();
-      return searchStr.includes(q);
+      // Volltextsuche: alle Felder + display + sub kombinieren
+      const display = displayFn(item) || '';
+      const sub = item._sub || '';
+      const blob = (display + ' ' + sub + ' ' + Object.values(item)
+        .filter(v => v !== null && v !== undefined && typeof v !== 'object')
+        .join(' ')).toLowerCase();
+      return tokens.every(t => blob.includes(t));
     }).slice(0, 10);
     if (!matches.length) { dropdown.style.display = 'none'; return; }
     dropdown.innerHTML = matches.map((item, i) =>
@@ -3557,19 +3583,17 @@ function renderCustomerTable(searchQ) {
   const tbody = document.getElementById('cust-table-body');
   if (!tbody) return;
   let list = _customers;
-  if (searchQ) {
-    const q = searchQ.toLowerCase();
-    list = list.filter(b => ((b.name||'')+(b.contact_name||'')+(b.city||'')+(b.email||'')+(b.reference||'')).toLowerCase().includes(q));
-  }
+  if (searchQ) list = list.filter(b => _fullTextMatch(b, searchQ));
   if (!list.length) {
     tbody.innerHTML = '<tr><td colspan="7" style="color:var(--text2);text-align:center">Keine Kunden'+(searchQ?' gefunden':'')+'</td></tr>';
     return;
   }
-  tbody.innerHTML = _customers.map(b => {
+  tbody.innerHTML = list.map(b => {
     const contact = (b.salutation ? b.salutation+' ' : '') + (b.contact_name||'');
+    const privBadge = b.is_private ? ' <span style="background:var(--info-bg);color:var(--info);font-size:10px;padding:1px 4px;border-radius:3px;font-weight:500">PRIVAT</span>' : '';
     return `<tr>
       <td style="font-family:var(--mono);font-size:11px">${b.id}</td>
-      <td><a href="#" onclick="editCustomer('${b.id}');return false" style="color:var(--accent)">${esc(b.name||'')}</a></td>
+      <td><a href="#" onclick="editCustomer('${b.id}');return false" style="color:var(--accent)">${esc(b.name||'')}</a>${privBadge}</td>
       <td>${esc(contact)}</td>
       <td>${esc((b.post_code||'')+' '+(b.city||''))}</td>
       <td>${esc(b.email||'')}</td>
@@ -3596,6 +3620,7 @@ async function saveCustomer() {
     email: document.getElementById('cust-email').value,
     reference: document.getElementById('cust-ref').value,
     vat_id: document.getElementById('cust-vat').value,
+    is_private: document.getElementById('cust-is-private').checked,
   };
   if (!data.name) { toast('Name ist Pflichtfeld', 'error'); return; }
   let res;
@@ -3624,6 +3649,7 @@ function editCustomer(id) {
   document.getElementById('cust-email').value = b.email||'';
   document.getElementById('cust-ref').value = b.reference||'';
   document.getElementById('cust-vat').value = b.vat_id||'';
+  document.getElementById('cust-is-private').checked = !!b.is_private;
   document.getElementById('cust-save-result').innerHTML = '<span style="color:var(--accent)">Bearbeite: '+esc(b.name)+'</span>';
 }
 
@@ -3686,10 +3712,7 @@ function renderProductTable(catFilter, searchQ) {
   if (!tbody) return;
   let list = _products;
   if (catFilter) list = list.filter(p => p.category === catFilter);
-  if (searchQ) {
-    const q = searchQ.toLowerCase();
-    list = list.filter(p => ((p.name||'')+(p.art_nr||'')+(p.description||'')+(p.category||'')).toLowerCase().includes(q));
-  }
+  if (searchQ) list = list.filter(p => _fullTextMatch(p, searchQ));
   if (!list.length) {
     tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Keine Produkte</td></tr>';
     return;
@@ -3967,18 +3990,18 @@ async function saveStbSettings() {
 
 const DEFAULT_TEMPLATES = {
   supplier_quote_intro: 'Sehr geehrte Damen und Herren,\n\nwir bitten Sie um Abgabe eines Angebots f\u00fcr die nachfolgend aufgef\u00fchrten Positionen.\nBitte senden Sie uns Ihr Angebot bis zum angegebenen Datum zu.',
-  supplier_quote_closing: 'Bitte best\u00e4tigen Sie die Lieferzeit und eventuelle Mindestbestellmengen.\nWir behalten uns die Vergabe an Dritte vor.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  supplier_quote_closing: 'Bitte best\u00e4tigen Sie die Lieferzeit und eventuelle Mindestbestellmengen.\nWir behalten uns die Vergabe an Dritte vor.\n\nMit freundlichen Gr\u00fc\u00dfen\nIhre Firma',
   purchase_order_intro: 'Sehr geehrte Damen und Herren,\n\nhiermit bestellen wir verbindlich die nachfolgend aufgef\u00fchrten Positionen.\nBitte best\u00e4tigen Sie den Auftrag schriftlich.',
-  purchase_order_closing: 'Die Lieferung erfolgt an die oben genannte Adresse.\nRechnungen bitten wir unter Angabe der Bestellnummer zu stellen.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
-  customer_quote_intro: 'Sehr geehrte Damen und Herren,\n\nvielen Dank f\u00fcr Ihre Anfrage. Gerne unterbreiten wir Ihnen folgendes Angebot.\nGrundlage sind die AGB der Energieberatung Rolf Krause (EBRK).\nAlle Preise verstehen sich zzgl. der gesetzlichen Mehrwertsteuer.',
-  customer_quote_closing: 'Dieses Angebot ist 30 Tage g\u00fcltig und freibleibend (\u00a7 2.4 AGB).\nDer Vertrag kommt durch unsere schriftliche Auftragsbest\u00e4tigung zustande (\u00a7 2.2 AGB).\nDer Auftraggeber verpflichtet sich zur wahrheitsgem\u00e4\u00dfen \u00dcbermittlung aller f\u00fcr die Leistungserbringung notwendigen Daten und Unterlagen (\u00a7 5.1 AGB).\n\nWir freuen uns auf Ihre R\u00fcckmeldung.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  purchase_order_closing: 'Die Lieferung erfolgt an die oben genannte Adresse.\nRechnungen bitten wir unter Angabe der Bestellnummer zu stellen.\n\nMit freundlichen Gr\u00fc\u00dfen\nIhre Firma',
+  customer_quote_intro: 'Sehr geehrte Damen und Herren,\n\nvielen Dank f\u00fcr Ihre Anfrage. Gerne unterbreiten wir Ihnen folgendes Angebot.\nGrundlage sind die unsere AGB.\nAlle Preise verstehen sich zzgl. der gesetzlichen Mehrwertsteuer.',
+  customer_quote_closing: 'Dieses Angebot ist 30 Tage g\u00fcltig und freibleibend (\u00a7 2.4 AGB).\nDer Vertrag kommt durch unsere schriftliche Auftragsbest\u00e4tigung zustande (\u00a7 2.2 AGB).\nDer Auftraggeber verpflichtet sich zur wahrheitsgem\u00e4\u00dfen \u00dcbermittlung aller f\u00fcr die Leistungserbringung notwendigen Daten und Unterlagen (\u00a7 5.1 AGB).\n\nWir freuen uns auf Ihre R\u00fcckmeldung.\n\nMit freundlichen Gr\u00fc\u00dfen\nIhre Firma',
   customer_quote_validity: '30',
-  order_intake_intro: 'Sehr geehrte Damen und Herren,\n\nvielen Dank f\u00fcr Ihren Auftrag. Hiermit best\u00e4tigen wir die Ausf\u00fchrung der nachfolgend aufgef\u00fchrten Leistungen.\nEs gelten die AGB der Energieberatung Rolf Krause (EBRK).',
-  order_intake_closing: 'Die EBRK schuldet die Erstellung der vereinbarten Leistungen nach anerkannten Regeln (\u00a7 3.1 AGB).\nDer Auftraggeber verpflichtet sich zur Mitwirkung gem\u00e4\u00df \u00a7 5 AGB.\n\nWir freuen uns auf die Zusammenarbeit.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  order_intake_intro: 'Sehr geehrte Damen und Herren,\n\nvielen Dank f\u00fcr Ihren Auftrag. Hiermit best\u00e4tigen wir die Ausf\u00fchrung der nachfolgend aufgef\u00fchrten Leistungen.\nEs gelten die unsere AGB.',
+  order_intake_closing: 'Wir schulden die Erstellung der vereinbarten Leistungen nach anerkannten Regeln (\u00a7 3.1 AGB).\nDer Auftraggeber verpflichtet sich zur Mitwirkung gem\u00e4\u00df \u00a7 5 AGB.\n\nWir freuen uns auf die Zusammenarbeit.\n\nMit freundlichen Gr\u00fc\u00dfen\nIhre Firma',
   delivery_note_intro: 'Sehr geehrte Damen und Herren,\n\nmit diesem Lieferschein best\u00e4tigen wir die Erbringung bzw. \u00dcbergabe der nachfolgend aufgef\u00fchrten Leistungen.',
-  delivery_note_closing: 'Bitte best\u00e4tigen Sie den Empfang der aufgef\u00fchrten Leistungen/Unterlagen.\nBei M\u00e4ngeln oder Beanstandungen bitten wir um unverz\u00fcgliche schriftliche Mitteilung.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
-  invoice_intro: 'Sehr geehrte Damen und Herren,\n\nf\u00fcr die erbrachten Leistungen stellen wir Ihnen nachfolgend vereinbarungsgem\u00e4\u00df in Rechnung.\nEs gelten die AGB der Energieberatung Rolf Krause (EBRK), insbesondere \u00a7 4 (Preise und Verg\u00fctung).',
-  invoice_closing: 'Die Verg\u00fctung ist nach Erhalt der Rechnung ohne jeden Abzug auf das unten genannte Konto zu leisten (\u00a7 4.2 AGB).\nDer Abzug von Skonto bedarf besonderer schriftlicher Vereinbarung.\nBitte geben Sie bei der \u00dcberweisung die Rechnungsnummer als Verwendungszweck an.\n\nMit freundlichen Gr\u00fc\u00dfen\ningenieurbüro rolf krause',
+  delivery_note_closing: 'Bitte best\u00e4tigen Sie den Empfang der aufgef\u00fchrten Leistungen/Unterlagen.\nBei M\u00e4ngeln oder Beanstandungen bitten wir um unverz\u00fcgliche schriftliche Mitteilung.\n\nMit freundlichen Gr\u00fc\u00dfen\nIhre Firma',
+  invoice_intro: 'Sehr geehrte Damen und Herren,\n\nf\u00fcr die erbrachten Leistungen stellen wir Ihnen nachfolgend vereinbarungsgem\u00e4\u00df in Rechnung.\nEs gelten die unsere AGB, insbesondere \u00a7 4 (Preise und Verg\u00fctung).',
+  invoice_closing: 'Die Verg\u00fctung ist nach Erhalt der Rechnung ohne jeden Abzug auf das unten genannte Konto zu leisten (\u00a7 4.2 AGB).\nDer Abzug von Skonto bedarf besonderer schriftlicher Vereinbarung.\nBitte geben Sie bei der \u00dcberweisung die Rechnungsnummer als Verwendungszweck an.\n\nMit freundlichen Gr\u00fc\u00dfen\nIhre Firma',
   invoice_payment_terms: 'Zahlbar innerhalb von 30 Tagen',
   dunning_1_intro: 'Sehr geehrte Damen und Herren,\n\nbei der Durchsicht unserer Konten haben wir festgestellt, dass die nachstehend aufgef\u00fchrte Rechnung noch nicht beglichen wurde.\nWir m\u00f6chten Sie freundlich an die Zahlung erinnern und bitten um zeitnahe \u00dcberweisung.',
   dunning_2_intro: 'Sehr geehrte Damen und Herren,\n\ntrotz unserer Zahlungserinnerung konnten wir leider keinen Zahlungseingang feststellen.\nWir bitten Sie dringend, den offenen Betrag innerhalb von 7 Tagen auf unser Konto zu \u00fcberweisen.\nSollte die Zahlung bereits erfolgt sein, bitten wir um kurze Mitteilung unter Angabe des Buchungsdatums.',
