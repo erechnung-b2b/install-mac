@@ -1,0 +1,41 @@
+# Getestete Paketversionen (pip install -c). Erzeugt 14.09.2026 fuer Python 3.12:
+# macOS arm64 und x86_64, Windows x64 — alle als fertige Pakete (Wheels) verfuegbar.
+# Pakete mit Bereich: aeltere Intel-Macs erhalten dort aeltere, ebenfalls fertige Wheels.
+bleach==6.4.0
+blinker==1.9.0
+certifi==2026.7.22
+cffi>=2.0.0,<3
+charset-normalizer==3.5.1
+click==8.5.0
+cryptography>=48.0.1,<51
+deprecated==1.3.1
+elementpath==5.1.4
+enum-tools==0.12.0
+fints==5.0.0
+flask==3.1.3
+idna==3.19
+itsdangerous==2.2.0
+jinja2==3.1.6
+lxml==6.0.4
+markupsafe==3.0.3
+mt-940==5.1.1
+packaging==26.3
+pdfminer-six>=20251230
+pdfplumber>=0.11.9,<1
+pikepdf>=8.15.1,<11
+pillow==12.3.0
+pycparser==3.0
+pygments==2.21.0
+pypdfium2>=4.30.0,<6
+qrcode==8.2
+reportlab==5.0.1
+requests==2.34.2
+sepaxml==2.7.0
+text-unidecode==1.3
+typing-extensions==4.16.0
+urllib3==2.7.0
+waitress==3.0.2
+webencodings==0.6.1
+werkzeug==3.1.8
+wrapt==2.4.1
+xmlschema==4.3.2

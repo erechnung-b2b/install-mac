@@ -107,6 +107,12 @@ def _find_scenarios(validator_jar: Path) -> Optional[Path]:
 
 def _find_java() -> Optional[str]:
     """Sucht java in PATH und gängigen Installationsorten."""
+    # 0. Mitgelieferte Laufzeit im Programmordner (Erstinstallation legt sie dort ab)
+    basis = Path(__file__).resolve().parent / "laufzeit" / "java"
+    for candidate in (basis / "Contents" / "Home" / "bin" / "java",   # macOS
+                      basis / "bin" / "java", basis / "bin" / "java.exe"):
+        if candidate.exists():
+            return str(candidate)
     # 1. PATH
     found = shutil.which("java")
     if found:

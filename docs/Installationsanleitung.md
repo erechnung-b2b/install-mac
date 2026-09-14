@@ -1,133 +1,119 @@
 # Installationsanleitung
 
-**E-Rechnungssystem** — Version 1.0, Stand April 2026
+**E-Rechnungssystem** — Version 4.0
 
 ---
 
-## Ueberblick
+## Überblick
 
-Das E-Rechnungssystem laeuft als lokale Webanwendung. Es wird keine Datenbank und kein externer Server benoetigt. Alle Daten bleiben auf Ihrem Rechner.
+Das E-Rechnungssystem läuft als lokale Webanwendung in Ihrem Browser. Es wird
+keine Datenbank und kein externer Server benötigt, alle Daten bleiben auf Ihrem
+Rechner.
 
-Die Software laeuft auf **Windows** und **macOS**.
+**Sie müssen nichts vorab installieren.** Python, Java, alle Programmpakete und
+der offizielle KoSIT-Validator werden bei der Installation automatisch in den
+Programmordner geladen und per SHA-256-Prüfsumme kontrolliert. Administrator­rechte
+sind nicht nötig, am übrigen System wird nichts verändert.
+
+Voraussetzung ist lediglich eine Internetverbindung während der Installation
+(ca. 250 MB Download, 3–5 Minuten).
 
 ---
 
 ## Windows
 
-### Schritt 1 — Python installieren
-
-1. Oeffnen Sie https://www.python.org/downloads/
-2. Laden Sie Python 3.10 oder hoeher herunter
-3. **Wichtig:** Setzen Sie den Haken bei **"Add Python to PATH"**
-4. Klicken Sie auf **Install Now**
-
-Pruefung: Eingabeaufforderung oeffnen (Windows + R, `cmd`), eingeben:
-
-```
-python --version
-```
-
-### Schritt 2 — Software herunterladen
-
-Download-Link:
+### Schritt 1 — Software herunterladen
 
 ```
 https://github.com/erechnung-b2b/install/archive/refs/heads/main.zip
 ```
 
-Die Datei `install-main.zip` entpacken, z.B. nach:
+Die Datei `install-main.zip` mit Rechtsklick → **Alle extrahieren…** entpacken,
+z. B. nach `C:\E-Rechnungssystem\`.
+
+### Schritt 2 — Installation
+
+1. Den entpackten Ordner im Explorer öffnen
+2. Doppelklick auf **erstinstallation.bat**
+3. Erscheint eine Sicherheitswarnung: **Ausführen** bzw. **Weitere Informationen → Trotzdem ausführen**
+4. Die Installation läuft automatisch:
 
 ```
-C:\E-Rechnungssystem\install-main\
+[1/5] Python 3.12 einrichten...          OK
+[2/5] Programmumgebung und Pakete...     OK alle Pakete installiert
+[3/5] Java fuer den KoSIT-Validator...   OK Java bereit
+[4/5] KoSIT-Validator...                 OK KoSIT-Validator einsatzbereit
+[5/5] Abschluss...                       OK Installation abgeschlossen
 ```
 
-### Schritt 3 — Installation
-
-1. Ordner `C:\E-Rechnungssystem\install-main\` im Explorer oeffnen
-2. Doppelklick auf **build_windows.bat**
-3. Die Installation laeuft automatisch (1-3 Minuten):
-
-```
-[1/4] Python gefunden
-[2/4] Installiere Abhaengigkeiten...        OK
-[3/4] Pruefe Anwendung...                   OK
-[4/4] Erstelle Standalone-Anwendung...      OK
-
-Build erfolgreich!
-```
-
-### Schritt 4 — Programm starten
+### Schritt 3 — Programm starten
 
 1. Doppelklick auf **starten.bat**
-2. Browser oeffnet sich automatisch mit **http://localhost:5000**
-3. Das E-Rechnungssystem ist betriebsbereit
+2. Der Browser öffnet sich automatisch mit **http://localhost:5000**
 
-Programm beenden: Konsolenfenster schliessen oder Strg+C druecken.
+Programm beenden: Konsolenfenster schließen oder Strg+C drücken.
 
 ---
 
 ## macOS
 
-### Schritt 1 — Python installieren
+### Weg A — ein Befehl (empfohlen)
 
-Terminal oeffnen (Programme > Dienstprogramme > Terminal) und eingeben:
-
-```
-python3 --version
-```
-
-Falls Python fehlt, installieren Sie es ueber eine der folgenden Methoden:
-
-**Mit Homebrew (empfohlen):**
+1. **Terminal** öffnen (Programme → Dienstprogramme → Terminal)
+2. Diese Zeile einfügen und Enter drücken:
 
 ```
-brew install python3
+curl -fsSL https://raw.githubusercontent.com/erechnung-b2b/install-mac/main/mac-installation.sh | bash
 ```
 
-**Oder direkt von python.org:**
+Das Programm wird nach `~/E-Rechnungssystem` installiert, auf dem Schreibtisch
+erscheint **„E-Rechnung starten.command“**. Am Ende fragt die Installation, ob das
+Programm gleich gestartet werden soll.
 
-Oeffnen Sie https://www.python.org/downloads/ und laden Sie den macOS-Installer herunter.
+Derselbe Befehl bringt eine bestehende Installation später auf den neuesten Stand;
+Ihre Daten werden vorher gesichert und bleiben erhalten.
 
-### Schritt 2 — Software herunterladen
+### Weg B — Download und Doppelklick
 
-Im Terminal eingeben:
+1. Herunterladen und entpacken:
+   `https://github.com/erechnung-b2b/install-mac/archive/refs/heads/main.zip`
+2. Den Ordner an einen festen Ort verschieben (z. B. in *Dokumente*)
+3. **Rechtsklick** auf **Installieren.command** → **Öffnen** → **Öffnen**
 
-```
-cd ~/Desktop
-curl -L -o install-mac.zip https://github.com/erechnung-b2b/install-mac/archive/refs/heads/main.zip
-unzip install-mac.zip
-cd install-mac-main/mac-paket
-```
+   Bei **macOS 15 (Sequoia) und neuer** gibt es diesen Weg nicht mehr. Dort:
+   einmal doppelklicken, die Meldung schließen, dann
+   **Systemeinstellungen → Datenschutz & Sicherheit → „Dennoch öffnen“**.
+4. Die Installation läuft im Terminalfenster und bietet danach den Start an
+5. Später starten mit Doppelklick auf **„E-Rechnung starten.command“**
+   (beim ersten Mal ebenfalls Rechtsklick → Öffnen)
 
-Oder den Download-Link im Browser oeffnen und die ZIP-Datei manuell entpacken.
+Der Browser öffnet sich mit **http://localhost:5000**. Beenden: Terminalfenster
+schließen oder Strg+C.
 
-### Schritt 3 — Installation
+---
 
-Im Terminal, im entpackten Ordner:
-
-```
-chmod +x install.sh starten.sh build_mac.sh
-./install.sh
-```
-
-Die Installation laeuft automatisch:
-
-```
-[1/4] Pruefe Python...          Python 3.12.4
-[2/4] Installiere Abhaengigkeiten...   OK
-[3/4] Pruefe Anwendung...              OK
-[4/4] Erstelle Datenverzeichnisse...   OK
-
-Installation erfolgreich!
-```
-
-### Schritt 4 — Programm starten
+## Linux
 
 ```
+bash erstinstallation.sh
 ./starten.sh
 ```
 
-Der Browser oeffnet sich automatisch mit **http://localhost:5000**. Programm beenden mit Strg+C im Terminal.
+Für den Betrieb auf einem Server im Netzwerk (Anmeldung, systemd, HTTPS) siehe
+`docs/Server-Installation.md`.
+
+---
+
+## Update
+
+| System | Vorgehen |
+|---|---|
+| Windows | Doppelklick auf **update.bat** |
+| macOS | Installationsbefehl aus Weg A erneut ausführen, oder im Terminal `bash update.sh` |
+| Linux | `bash update.sh` |
+
+Vor jedem Update wird der Ordner `data/` nach `backup/backup-<Datum>` gesichert.
+Python, Java und der KoSIT-Validator werden nicht erneut geladen.
 
 ---
 
@@ -135,20 +121,22 @@ Der Browser oeffnet sich automatisch mit **http://localhost:5000**. Programm bee
 
 ### Kostenlose Testphase (28 Tage)
 
-Nach dem ersten Start laeuft die Software 28 Tage im vollen Funktionsumfang. Ein Hinweis in der Kopfzeile zeigt die verbleibenden Tage an.
+Nach dem ersten Start läuft die Software 28 Tage im vollen Funktionsumfang. Ein
+Hinweis in der Kopfzeile zeigt die verbleibenden Tage an.
 
 ### Nach Ablauf der Testphase
 
-Die Software wechselt in den Lesemodus. Vorhandene Rechnungen bleiben einsehbar, aber neue Rechnungen erstellen, freigeben oder exportieren ist nicht mehr moeglich.
+Die Software wechselt in den Lesemodus. Vorhandene Rechnungen bleiben einsehbar,
+neue Rechnungen erstellen, freigeben oder exportieren ist nicht mehr möglich.
 
 ### Lizenz aktivieren
 
 1. Starten Sie das E-Rechnungssystem
 2. Klicken Sie auf **Einstellungen** (Zahnrad-Symbol)
-3. Im Abschnitt **Lizenz** sehen Sie Ihre **Geraete-ID** (10-stellige Zahl)
-4. Teilen Sie diese Geraete-ID Ihrem Anbieter mit
-5. Sie erhalten einen Lizenzschluessel (beginnt mit `ERECH-`)
-6. Geben Sie den Schluessel ein und klicken Sie auf **Aktivieren**
+3. Im Abschnitt **Lizenz** sehen Sie Ihre **Geräte-ID** (10-stellige Zahl)
+4. Teilen Sie diese Geräte-ID Ihrem Anbieter mit
+5. Sie erhalten einen Lizenzschlüssel (beginnt mit `ERECH-`)
+6. Geben Sie den Schlüssel ein und klicken Sie auf **Aktivieren**
 
 Die Lizenz ist an Ihren Computer gebunden.
 
@@ -158,15 +146,18 @@ Die Lizenz ist an Ihren Computer gebunden.
 
 ### Rechnung hochladen
 
-Klicken Sie auf **Posteingang**, ziehen Sie eine XML- oder PDF-Datei in das Upload-Feld. Unterstuetzte Formate: XRechnung (XML) und ZUGFeRD (PDF mit XML).
+Klicken Sie auf **Posteingang** und ziehen Sie eine XML- oder PDF-Datei in das
+Upload-Feld. Unterstützte Formate: XRechnung (XML) und ZUGFeRD / Factur-X (PDF mit
+eingebettetem XML).
 
 ### Rechnung erstellen
 
-Klicken Sie auf **Rechnung erstellen**, fuellen Sie die Pflichtfelder aus, klicken Sie auf **XRechnung erzeugen**.
+Klicken Sie auf **Rechnung erstellen**, füllen Sie die Pflichtfelder aus und
+erzeugen Sie eine **XRechnung** (XML) oder ein **ZUGFeRD-PDF**.
 
 ### Rechnung freigeben und exportieren
 
-Oeffnen Sie eine Rechnung, klicken Sie auf **Freigeben**, danach auf **DATEV-Export**.
+Öffnen Sie eine Rechnung, klicken Sie auf **Freigeben**, danach auf **DATEV-Export**.
 
 ---
 
@@ -180,39 +171,25 @@ data/
   archiv/             Archivierte Originaldateien
   export/             DATEV- und CSV-Exporte
   license.json        Lizenzstatus
-  device_id.txt       Geraete-ID
+  device_id.txt       Geräte-ID
 ```
 
-Sichern Sie den Ordner `data/` regelmaessig.
-
----
-
-## Standalone-App (optional)
-
-### Windows
-
-Der `build_windows.bat` erzeugt unter `dist\erechnung\` eine Version die ohne Python laeuft. Diesen Ordner auf beliebige Windows-PCs kopieren und `E-Rechnungssystem.exe` starten.
-
-### macOS
-
-```
-./build_mac.sh
-```
-
-Erzeugt unter `dist/erechnung/` eine standalone Version. Den Ordner auf beliebige Macs kopieren und `E-Rechnungssystem` starten.
+Sichern Sie den Ordner `data/` regelmäßig.
 
 ---
 
 ## Fehlerbehebung
 
-| Problem | Windows | macOS |
-|---|---|---|
-| Python nicht gefunden | Mit "Add to PATH" neu installieren | `brew install python3` |
-| Browser oeffnet nicht | http://localhost:5000 manuell oeffnen | http://localhost:5000 manuell oeffnen |
-| Port 5000 belegt | `python webapp.py 8080` | `python3 webapp.py 8080` |
-| Abhaengigkeit fehlt | `pip install -r requirements.txt` | `pip3 install -r requirements.txt` |
-| Antivirus blockiert EXE | Ausnahme hinzufuegen | Systemeinstellungen > Sicherheit > Trotzdem oeffnen |
-| "Permission denied" (Mac) | — | `chmod +x starten.sh install.sh` |
+| Problem | Lösung |
+|---|---|
+| Download während der Installation schlägt fehl | Internetverbindung / Firmen-Proxy prüfen, Installation erneut starten – bereits geladene Teile werden übersprungen |
+| „Prüfsumme stimmt nicht“ | Download wurde verfälscht oder abgebrochen – erneut starten; tritt es wiederholt auf, Virenscanner/Proxy prüfen |
+| Browser öffnet sich nicht | http://localhost:5000 manuell öffnen |
+| Port 5000 belegt (Mac: AirPlay-Empfänger) | Windows: `starten.bat 5050` · Mac/Linux: `./starten.sh 5050`, dann http://localhost:5050 |
+| Mac: „kann nicht geöffnet werden“ | Rechtsklick → Öffnen, bzw. Systemeinstellungen → Datenschutz & Sicherheit → „Dennoch öffnen“ – oder Weg A verwenden |
+| Mac: „Permission denied“ | im Programmordner `chmod +x *.sh *.command` |
+| KoSIT-Validator fehlt | Installation erneut starten; ohne KoSIT prüft die Software mit dem eingebauten Prüfer |
+| Programm defekt nach Update | Ordner `.venv` löschen und `erstinstallation` erneut ausführen – die Daten bleiben erhalten |
 
 ---
 
@@ -220,10 +197,10 @@ Erzeugt unter `dist/erechnung/` eine standalone Version. Den Ordner auf beliebig
 
 | Komponente | Windows | macOS |
 |---|---|---|
-| Betriebssystem | Windows 10/11, 64-Bit | macOS 12 (Monterey) oder neuer |
-| Python | 3.10 oder hoeher | 3.10 oder hoeher |
+| Betriebssystem | Windows 10 (ab 1803) / 11, 64-Bit | macOS 12 (Monterey) oder neuer, Apple Silicon oder Intel |
+| Vorinstallierte Software | keine | keine |
 | RAM | mindestens 4 GB | mindestens 4 GB |
-| Festplatte | ca. 150 MB | ca. 150 MB |
+| Festplatte | ca. 500 MB | ca. 500 MB |
 | Browser | Chrome, Edge oder Firefox | Chrome, Safari oder Firefox |
 
 ---
@@ -236,4 +213,4 @@ E-Mail: beratung@rolfkrause.com
 
 ---
 
-*E-Rechnungssystem v1.0 — XRechnung | ZUGFeRD | EN 16931 — Stand April 2026*
+*E-Rechnungssystem v4.0 — XRechnung | ZUGFeRD | EN 16931*

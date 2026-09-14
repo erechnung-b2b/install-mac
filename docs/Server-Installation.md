@@ -8,7 +8,7 @@ Arbeitsplatz-PC reicht die normale Installation aus der `README.md`.
 
 | | Einzelplatz | Server |
 |---|---|---|
-| Start | `starten.bat` / `./starten.sh` | `python run.py --server` bzw. systemd-Dienst |
+| Start | `starten.bat` / `./starten.sh` | `./starten.sh --server` bzw. systemd-Dienst |
 | erreichbar | nur vom eigenen Rechner | im Netzwerk / Internet |
 | Anmeldung | nicht nötig | **Pflicht** |
 | erstes Konto | – | im Browser unter `/einrichten` mit Einrichtungscode |
@@ -17,10 +17,13 @@ Arbeitsplatz-PC reicht die normale Installation aus der `README.md`.
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip default-jre unzip
+sudo apt install -y curl unzip
 ```
 
-Java ist nur für den offiziellen KoSIT-Validator nötig (empfohlen).
+Mehr ist nicht nötig: Python 3.12, Java und der offizielle KoSIT-Validator werden
+bei der Installation automatisch in den Programmordner geladen (per SHA-256
+geprüft). Das System-Python des Servers wird nicht verwendet und nicht verändert.
+Unterstützt sind x86_64 und ARM64 mit glibc (Ubuntu, Debian, RHEL u. a.).
 
 ## 2. Programm herunterladen und installieren
 
@@ -31,11 +34,12 @@ sudo -u erechnung curl -L -o install.zip https://github.com/erechnung-b2b/instal
 sudo -u erechnung unzip install.zip
 sudo -u erechnung mv install-main app
 cd app
-sudo -u erechnung bash install.sh
+sudo -u erechnung bash erstinstallation.sh
 ```
 
-`install.sh` legt eine eigene Python-Umgebung (`.venv`) an und installiert alle
-Pakete. Alle Daten landen später im Unterordner `data/`.
+`erstinstallation.sh` richtet Python (`laufzeit/python`), die Programmumgebung
+(`.venv`), Java (`laufzeit/java`) und den KoSIT-Validator (`tools/kosit`) ein und
+schließt mit einem Selbsttest ab. Alle Daten landen später im Unterordner `data/`.
 
 ## 3. Als Dienst einrichten (startet automatisch mit dem Server)
 
@@ -103,16 +107,14 @@ Lizenzcode tragen Sie an derselben Stelle ein.
 
 ```bash
 sudo systemctl stop erechnung
-cd /opt/erechnung
-sudo -u erechnung cp -a app/data data-sicherung-$(date +%F)
-sudo -u erechnung curl -L -o install.zip https://github.com/erechnung-b2b/install/archive/refs/heads/main.zip
-sudo -u erechnung unzip -o install.zip
-sudo -u erechnung cp -a install-main/. app/
-cd app && sudo -u erechnung bash -c 'source .venv/bin/activate && pip install -r requirements.txt'
+cd /opt/erechnung/app
+sudo -u erechnung bash update.sh
 sudo systemctl start erechnung
 ```
 
-Der Ordner `data/` wird beim Update nicht überschrieben.
+`update.sh` sichert `data/` nach `backup/backup-<Datum>`, lädt die aktuelle
+Version, ersetzt die Programmdateien und aktualisiert die Pakete. Daten, Python,
+Java und der KoSIT-Validator bleiben erhalten.
 
 ## 8. Datensicherung
 

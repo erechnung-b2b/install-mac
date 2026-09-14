@@ -11,6 +11,8 @@ Ohne installierten KoSIT-Validator arbeitet die Software mit dem eingebauten
 Für produktive Ausgangsrechnungen empfehlen wir, den KoSIT-Validator zusätzlich
 einzurichten.
 
+> **Hinweis:** `erstinstallation.bat` / `erstinstallation.sh` richten Java (laufzeit/java) und den KoSIT-Validator (tools/kosit) automatisch ein. Die folgenden Schritte sind nur noetig, wenn Sie den Validator von Hand einrichten oder aktualisieren moechten.
+
 ## 1. Java installieren
 
 Der Validator ist eine Java-Anwendung und benötigt **Java 11 oder neuer**.
