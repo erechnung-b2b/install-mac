@@ -8034,14 +8034,9 @@ _zugferd_lock = __import__("threading").Lock()
 def _zugferd_worker(job_id: str, inv, xml_bytes: bytes, filename: str):
     """Erzeugt ZUGFeRD-PDF im Hintergrund."""
     try:
-        try:
-            from weasyprint import HTML
-            from zugferd_writer import _embed_xml_in_pdf
-            html_str = _render_invoice_html(inv)
-            visible_pdf = HTML(string=html_str).write_pdf()
-            pdf_bytes = _embed_xml_in_pdf(visible_pdf, xml_bytes, filename="factur-x.xml")
-        except ImportError:
-            pdf_bytes = generate_zugferd_pdf(inv, xml_bytes)
+        # Immer der normgerechte Weg: PDF/A-3b mit CII (factur-x.xml). Der fruehere
+        # WeasyPrint-Zweig bettete UBL ein und war kein gueltiges ZUGFeRD (14.09.2026).
+        pdf_bytes = generate_zugferd_pdf(inv)
 
         with _zugferd_lock:
             _zugferd_jobs[job_id] = {
@@ -8143,14 +8138,8 @@ def api_download_zugferd(inv_id):
         return _json({"error": "Rechnung nicht gefunden"}, 404)
     try:
         xml_bytes = generate_and_serialize(inv)
-        try:
-            from weasyprint import HTML
-            from zugferd_writer import _embed_xml_in_pdf
-            html_str = _render_invoice_html(inv)
-            visible_pdf = HTML(string=html_str).write_pdf()
-            pdf_bytes = _embed_xml_in_pdf(visible_pdf, xml_bytes, filename="factur-x.xml")
-        except ImportError:
-            pdf_bytes = generate_zugferd_pdf(inv, xml_bytes)
+        # Immer der normgerechte Weg: PDF/A-3b mit CII (factur-x.xml).
+        pdf_bytes = generate_zugferd_pdf(inv)
     except Exception as e:
         return _json({"error": f"ZUGFeRD-Erzeugung fehlgeschlagen: {e}"}, 500)
 

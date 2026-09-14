@@ -261,13 +261,27 @@ def _embed_xml_in_pdf(pdf_bytes: bytes, xml_bytes: bytes,
 # ── Öffentliche API ────────────────────────────────────────────────────
 
 
-def generate_zugferd_pdf(inv: Invoice, xml_bytes: bytes) -> bytes:
+def generate_zugferd_pdf(inv: Invoice, xml_bytes: bytes = None) -> bytes:
     """
-    Erzeugt ein ZUGFeRD-Hybrid-PDF (sichtbar + eingebettetes XML).
+    Erzeugt eine normgerechte ZUGFeRD-/Factur-X-Rechnung (PDF/A-3b).
 
-    Nutzt denselben doc_generator wie normale Rechnungen, damit das Layout
-    einheitlich ist, und bettet dann die XRechnung-XML ein.
+    Eingebettet wird immer die CII-Syntax (factur-x.xml, Profil XRECHNUNG) —
+    ZUGFeRD sieht kein UBL im PDF vor. Ein uebergebenes UBL-XML wird deshalb
+    nicht mehr eingebettet; der Parameter bleibt fuer bestehende Aufrufer.
+    Der sichtbare Teil nutzt denselben doc_generator wie normale Rechnungen,
+    mit eingebetteten Schriften (PDF/A).
     """
+    from cii_generator import generate_cii_bytes, ZUGFERD_PROFIL
+    from pdfa3 import zu_pdfa3_zugferd, schriften_eingebettet
+    cii_bytes = generate_cii_bytes(inv)
+    with schriften_eingebettet():
+        visible_pdf = _sichtbarer_teil(inv)
+    return zu_pdfa3_zugferd(
+        visible_pdf, cii_bytes, dateiname="factur-x.xml", profil=ZUGFERD_PROFIL,
+        titel=f"Rechnung {inv.invoice_number}", autor=inv.seller.name or "")
+
+
+def _sichtbarer_teil(inv: Invoice) -> bytes:
     try:
         from doc_generator import generate_document
         from pathlib import Path
@@ -336,8 +350,7 @@ def generate_zugferd_pdf(inv: Invoice, xml_bytes: bytes) -> bytes:
         # Fallback: einfaches Layout wenn doc_generator nicht verfügbar
         print(f"  ZUGFeRD nutzt Fallback-Layout: {e}")
         visible_pdf = _build_visible_pdf(inv)
-
-    return _embed_xml_in_pdf(visible_pdf, xml_bytes, filename="factur-x.xml")
+    return visible_pdf
 
 
 def write_zugferd_pdf(inv: Invoice, xml_bytes: bytes,

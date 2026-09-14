@@ -208,6 +208,15 @@ def detect_format(xml_bytes: bytes) -> FormatInfo:
     except etree.XMLSyntaxError:
         return info
 
+    # CII (ZUGFeRD 2.x / Factur-X / XRechnung-CII)
+    if etree.QName(root.tag).localname == "CrossIndustryInvoice":
+        from cii_parser import guideline_id
+        gid = guideline_id(xml_bytes)
+        info.customization_id = gid
+        info.format_type = "XRECHNUNG" if ("xrechnung" in gid.lower() or "xeinkauf" in gid.lower()) else "ZUGFERD"
+        info.is_hybrid = info.format_type == "ZUGFERD"
+        return info
+
     cust = _find(root, "cbc:CustomizationID")
     prof = _find(root, "cbc:ProfileID")
     info.customization_id = cust
@@ -229,8 +238,11 @@ def detect_format(xml_bytes: bytes) -> FormatInfo:
 # ── Haupt-Parser ──────────────────────────────────────────────────────
 
 def parse_xrechnung(xml_bytes: bytes, source_file: str = "") -> Invoice:
-    """Parst XRechnung UBL 2.1 XML in ein Invoice-Fachobjekt."""
+    """Parst eine E-Rechnung (XRechnung UBL 2.1 oder CII/ZUGFeRD) in ein Invoice-Fachobjekt."""
     root = etree.fromstring(xml_bytes)
+    if etree.QName(root.tag).localname == "CrossIndustryInvoice":
+        from cii_parser import parse_cii
+        return parse_cii(xml_bytes, source_file=source_file)
     fmt = detect_format(xml_bytes)
 
     inv = Invoice(

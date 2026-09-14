@@ -318,19 +318,21 @@ def _parse_kosit_report(report_bytes: bytes) -> KositResult:
                 result.warnings.append(entry)
             # "information" wird nicht gezaehlt
 
-    # 4. Gesamtergebnis: erst das valid-Attribut der Wurzel (VARL), dann
-    # accept/reject unter assessment, dann ein Textelement, sonst Fehlerzahl.
+    # 4. Gesamtergebnis: massgeblich ist die Empfehlung accept/reject unter
+    # assessment. Das valid-Attribut der Wurzel steht schon bei blossen Hinweisen
+    # (warning) auf "false" — es zuerst zu lesen, meldete gueltige XRechnungen als
+    # zurueckgewiesen (14.09.2026). Nur ohne assessment gilt das Attribut.
     accept_text = None
-    root_valid = (root.get("valid") or "").strip().lower()
-    if root_valid in ("true", "false"):
-        accept_text = root_valid
+    assessment = _find_local(root, "assessment")
+    if assessment is not None:
+        if _find_local(assessment, "reject") is not None:
+            accept_text = "false"
+        elif _find_local(assessment, "accept") is not None:
+            accept_text = "true"
     if accept_text is None:
-        assessment = _find_local(root, "assessment")
-        if assessment is not None:
-            if _find_local(assessment, "reject") is not None:
-                accept_text = "false"
-            elif _find_local(assessment, "accept") is not None:
-                accept_text = "true"
+        root_valid = (root.get("valid") or "").strip().lower()
+        if root_valid in ("true", "false"):
+            accept_text = root_valid
     if accept_text is None:
         for elem in root.iter():
             tag = etree.QName(elem.tag).localname

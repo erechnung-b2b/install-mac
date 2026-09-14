@@ -87,7 +87,17 @@ def validate_invoice(inv: Invoice) -> ValidationReport:
     report = ValidationReport(invoice_number=inv.invoice_number, timestamp=datetime.now().isoformat())
     iss = report.issues
 
-    def err(rid, msg, fld=""): iss.append(ValidationIssue(rid, Severity.ERROR, msg, fld))
+    # Die deutschen Zusatzregeln (BR-DE-*) gelten nur fuer die XRechnung. Eine
+    # eingegangene ZUGFeRD-/Factur-X-Rechnung (Profil EN 16931, BASIC …) oder eine
+    # UBL-Rechnung ohne XRechnung-Kennung ist ohne diese Angaben normkonform —
+    # dort sind BR-DE-Befunde Hinweise, keine Fehler.
+    xrechnung = (getattr(inv, "_source_format", "") or "") not in ("ZUGFERD_CII", "ZUGFERD", "UBL_GENERIC")
+
+    def err(rid, msg, fld=""):
+        if rid.startswith("BR-DE") and not xrechnung:
+            iss.append(ValidationIssue(rid, Severity.WARNING, msg + " (nur für XRechnung verpflichtend)", fld))
+        else:
+            iss.append(ValidationIssue(rid, Severity.ERROR, msg, fld))
     def warn(rid, msg, fld=""): iss.append(ValidationIssue(rid, Severity.WARNING, msg, fld))
     def info(rid, msg, fld=""): iss.append(ValidationIssue(rid, Severity.INFO, msg, fld))
 

@@ -206,11 +206,14 @@ class TestTransactionApproval:
         assert step["status"] == "ERLEDIGT"
         assert step["reference"] is not None  # Auto-generiert
 
-    def test_approval_order_enforced(self, txn_mgr):
+    def test_free_order_skips_untouched_steps(self, txn_mgr):
+        # Freie Reihenfolge: customer_quote direkt freigeben,
+        # unberuehrte Vorgaenger-Steps werden automatisch uebersprungen
         txn = txn_mgr.create({"subject": "Test"})
-        # customer_quote (3.) ohne vorherige Freigabe → Fehler
-        with pytest.raises(ValueError, match="muss zuerst"):
-            txn_mgr.approve_step(txn["id"], "customer_quote", "demo")
+        txn = txn_mgr.approve_step(txn["id"], "customer_quote", "demo")
+        assert txn["steps"]["customer_quote"]["approved"] is True
+        for key in ("supplier_quote", "purchase_order", "supplier_invoice"):
+            assert txn["steps"][key]["status"] == "UEBERSPRUNGEN"
 
     def test_skip_enables_next(self, txn_mgr):
         txn = txn_mgr.create({"subject": "Test"})

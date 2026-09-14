@@ -496,7 +496,8 @@ class TestWebApp:
         res = r.get_json()
         assert res.get("success"), f"Storno fehlgeschlagen: {res}"
         assert res["type_code"] == "381"
-        assert res["gross"] < 0
+        # XRechnung: Gutschrift-Betraege positiv, das Vorzeichen ergibt sich aus Typ 381
+        assert res["gross"] > 0
         assert inv_store[frei_id].status == "STORNIERT"
         # Doppelstorno
         r2 = self.client.post(f"/api/invoices/{frei_id}/storno",

@@ -56,7 +56,8 @@ def _build_address(parent, addr):
     house = (getattr(addr, "house_number", "") or "").strip()
     full_street = (addr.street + (" " + house if house else "")).strip() if addr.street else house
     if full_street: _txt(postal, "StreetName", full_street)
-    if house: _txt(postal, "BuildingNumber", house)
+    # cbc:BuildingNumber ist in XRechnung nicht vorgesehen (UBL-CR-155/218,
+    # KoSIT-Hinweis) — die Hausnummer steht bereits in StreetName.
     if addr.address_line_2: _txt(postal, "AdditionalStreetName", addr.address_line_2)
     _txt(postal, "CityName", addr.city)
     _txt(postal, "PostalZone", addr.post_code)

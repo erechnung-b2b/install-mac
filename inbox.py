@@ -141,13 +141,23 @@ class Inbox:
             return item
 
         # 3. Format erkennen
-        if mime == "application/xml":
-            fmt = detect_format(data)
-            item.format_type = fmt.format_type
+        # ZUGFeRD / Factur-X: die eingebettete XML ist der massgebliche Teil —
+        # sie laeuft danach genau wie eine eingegangene XML-Datei durch.
+        xml_data = data if mime == "application/xml" else None
+        if mime == "application/pdf":
+            try:
+                from zugferd import extract_xml_from_pdf
+                xml_data = extract_xml_from_pdf(data)
+            except Exception:
+                xml_data = None
+
+        if xml_data:
+            fmt = detect_format(xml_data)
+            item.format_type = fmt.format_type if mime == "application/xml" else "ZUGFERD"
 
             # 4. Parsen
             try:
-                inv = parse_xrechnung(data, source_file=filename)
+                inv = parse_xrechnung(xml_data, source_file=filename)
                 inv._sender_email = sender_email
                 inv._received_at = item.received_at
                 inv._source_file = filename
