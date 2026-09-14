@@ -11,6 +11,16 @@ from pathlib import Path
 from typing import Optional
 
 
+def _satz(wert, standard=19.0):
+    """Steuersatz als Zahl; nur fehlend/ungültig -> Standard. 0 % bleibt 0 %."""
+    if wert is None or str(wert).strip() == "":
+        return standard
+    try:
+        return float(str(wert).strip().replace(",", "."))
+    except ValueError:
+        return standard
+
+
 # ── Konstanten ───────────────────────────────────────────────────────
 
 STEP_KEYS = [
@@ -692,7 +702,7 @@ class TransactionManager:
             if "amount_net" in data:
                 p["amount_net"] = float(data.get("amount_net") or 0)
             if "tax_rate" in data:
-                p["tax_rate"] = float(data.get("tax_rate") or 19)
+                p["tax_rate"] = _satz(data.get("tax_rate"))
             if "description" in data:
                 p["description"] = str(data.get("description") or "")
             _recalc_payment_invoice_gross(p)
@@ -729,7 +739,7 @@ class TransactionManager:
                 if "amount_net" in data:
                     p["amount_net"] = float(data.get("amount_net") or 0)
                 if "tax_rate" in data:
-                    p["tax_rate"] = float(data.get("tax_rate") or 19)
+                    p["tax_rate"] = _satz(data.get("tax_rate"))
                 _recalc_payment_invoice_gross(p)
                 p.setdefault("history", []).append({"action": "GEAENDERT", "at": _ts(), "user": user})
                 t["updated_at"] = _ts()

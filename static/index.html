@@ -3002,7 +3002,7 @@ function showOcrModal(extractResult) {
   setVal('ocr-net', e.net_amount);
   setVal('ocr-tax', e.tax_amount);
   setVal('ocr-gross', e.gross_amount);
-  setVal('ocr-tax-rate', e.tax_rate || 19);
+  setVal('ocr-tax-rate', _satz(e.tax_rate));
 
   // Lieferanten-Match-Hinweis
   const matchEl = document.getElementById('ocr-supplier-match');
@@ -3059,7 +3059,7 @@ async function confirmOcrInvoice() {
       quantity: parseFloat(document.getElementById('ocr-l-qty-' + i).value) || 1,
       unit_price: parseFloat(document.getElementById('ocr-l-up-' + i).value) || 0,
       net_amount: parseFloat(document.getElementById('ocr-l-net-' + i).value) || 0,
-      tax_rate: parseFloat(document.getElementById('ocr-l-tax-' + i).value) || 19,
+      tax_rate: _satz(document.getElementById('ocr-l-tax-' + i).value),
     });
   });
   const data = {
@@ -3077,7 +3077,7 @@ async function confirmOcrInvoice() {
     net_amount: parseFloat(document.getElementById('ocr-net').value) || null,
     tax_amount: parseFloat(document.getElementById('ocr-tax').value) || null,
     gross_amount: parseFloat(document.getElementById('ocr-gross').value) || null,
-    tax_rate: parseFloat(document.getElementById('ocr-tax-rate').value) || 19,
+    tax_rate: _satz(document.getElementById('ocr-tax-rate').value),
     lines,
   };
   if (!data.seller_name) return toast('Lieferanten-Name ist Pflicht', 'error');
@@ -3124,7 +3124,7 @@ function addLine(name, qty, price, tax) {
       </select></td>
     <td><input id="cl-qty-${lc}" type="number" value="${qty||1}" min="0.01" step="1" style="text-align:right"></td>
     <td><input id="cl-price-${lc}" type="number" value="${price||100}" step="0.01" style="text-align:right"></td>
-    <td><input id="cl-tax-${lc}" type="number" value="${tax||19}" style="text-align:right"></td>
+    <td><input id="cl-tax-${lc}" type="number" value="${_satz(tax)}" style="text-align:right"></td>
     <td><button onclick="document.getElementById('line-${lc}').remove()" style="color:var(--danger);border:0;background:0">&#10007;</button></td>`;
   document.getElementById('c-lines').appendChild(row);
 }
@@ -3135,7 +3135,7 @@ function addLineFromProduct() {
   const p = _products.find(x => x.art_nr === sel.value);
   if (!p) return;
   if (p.calc_mode === 'foerder') { openFoerderRechner(null, p); sel.value = ''; return; }
-  addLine(p.name, 1, p.vk_price, p.tax_rate || 19);
+  addLine(p.name, 1, p.vk_price, _satz(p.tax_rate));
   sel.value = '';
   toast(p.name + ' hinzugefügt');
 }
@@ -3288,7 +3288,7 @@ function addSonderleistung() {
   if (!txtEl || !amtEl || !taxEl) return;
   const text = (txtEl.value || '').trim();
   const amount = parseFloat((amtEl.value || '').replace(',', '.'));
-  const tax = parseFloat(taxEl.value) || 19;
+  const tax = _satz(taxEl.value);
   if (!text) {
     toast('Bitte Beschreibung der Sonderleistung eingeben.', 'error');
     txtEl.focus();
@@ -3314,7 +3314,7 @@ function applyProductToLine(lc, artNr) {
   if (p.calc_mode === 'foerder') { openFoerderRechner(lc, p); return; }
   document.getElementById('cl-name-'+lc).value = p.name;
   document.getElementById('cl-price-'+lc).value = p.vk_price;
-  document.getElementById('cl-tax-'+lc).value = p.tax_rate || 19;
+  document.getElementById('cl-tax-'+lc).value = _satz(p.tax_rate);
 }
 
 function fillProductPicker() {
@@ -3357,7 +3357,7 @@ async function _generateInvoiceInner(download=false) {
     const qty = parseFloat(document.getElementById('cl-qty-'+id).value)||1;
     const price = parseFloat(document.getElementById('cl-price-'+id).value)||0;
     lines.push({name:document.getElementById('cl-name-'+id).value, quantity:qty, price:price,
-      net: Math.round(qty*price*100)/100, tax_rate:parseFloat(document.getElementById('cl-tax-'+id).value)||19});
+      net: Math.round(qty*price*100)/100, tax_rate:_satz(document.getElementById('cl-tax-'+id).value)});
   });
   const body = {
     number: document.getElementById('c-number').value,
@@ -5776,7 +5776,7 @@ function quickAddProduct() {
   step.positions.push({
     pos_nr: step.positions.length+1, description: p.name, quantity: 1, unit: p.unit,
     unit_price: price, discount_percent: 0, discount_amount: 0,
-    net_amount: price, tax_rate: p.tax_rate||19, art_nr: p.art_nr
+    net_amount: price, tax_rate: _satz(p.tax_rate), art_nr: p.art_nr
   });
   _positionsDirty = true;
   sel.value = '';
@@ -7575,6 +7575,17 @@ function hideBankMatchModal() {
   });
 })();
 
+// ── Steuersatz ──
+// Nur ein leeres oder ungültiges Feld wird zu 19 %. „|| 19" machte auch aus
+// einem eingetragenen 0 % (Kleinunternehmer, Reverse Charge) stillschweigend 19 %.
+function _satz(wert, standard = 19) {
+  if (wert === null || wert === undefined) return standard;
+  const t = String(wert).trim().replace(',', '.');
+  if (t === '') return standard;
+  const n = parseFloat(t);
+  return isNaN(n) ? standard : n;
+}
+
 // ── PLZ → Ort Auto-Fill ──
 // Abruf über den eigenen Server (/api/geo/plz), nicht direkt bei openPLZ.
 // Regeln: Ort nur füllen, wenn leer oder zuvor automatisch gesetzt; mehrere Orte
@@ -8519,7 +8530,7 @@ function applyProduct(idx, artNr) {
   pos.description = p.name;
   pos.unit = p.unit;
   pos.unit_price = price;
-  pos.tax_rate = p.tax_rate || 19;
+  pos.tax_rate = _satz(p.tax_rate);
   pos.art_nr = p.art_nr;
   const gross = (pos.quantity||1) * price;
   const disc = pos.discount_amount || (gross * (pos.discount_percent||0) / 100);

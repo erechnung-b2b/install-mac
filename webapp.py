@@ -94,6 +94,25 @@ _LOGIN_SKIP = {"/login", "/api/auth/change-password", "/static", "/.well-known"}
 # (siehe _load_extensions); sie pruefen den Key dann in der Route selbst.
 _API_KEY_PATHS = ["/api/external/", "/api/assistant/"]
 
+
+def _steuersatz(wert, standard=19):
+    """Steuersatz aus Eingabedaten. Nur ein FEHLENDER oder ungültiger Wert wird
+    zum Standardsatz — 0 ist ein gültiger Satz (Kleinunternehmer, Reverse Charge,
+    steuerfreie Leistung) und darf nicht wie „leer" behandelt werden.
+    Gültige Werte kommen unverändert zurück (Ausgabeformat bleibt gleich)."""
+    if wert is None:
+        return standard
+    if isinstance(wert, (int, float, Decimal)):
+        return wert
+    t = str(wert).strip().replace(",", ".")
+    if not t:
+        return standard
+    try:
+        float(t)
+    except ValueError:
+        return standard
+    return t
+
 @app.before_request
 def require_login():
     path = request.path
@@ -2495,7 +2514,7 @@ def _abschlag_registrieren(tid, txn, p):
         line_id="1", quantity=Decimal("1"),
         item_name=(p.get("description") or p.get("title") or "Abschlagsrechnung")[:200],
         unit_price=netto, line_net_amount=netto,
-        tax_rate=Decimal(str(p.get("tax_rate") or 19)),
+        tax_rate=Decimal(str(_steuersatz(p.get("tax_rate")))),
     ))
 
     report = validate_invoice(inv)
@@ -3180,7 +3199,7 @@ def _txn_invoice_registrieren(tid, txn, data=None):
             item_name=p.get("description", ""),
             unit_price=Decimal(str(p.get("unit_price", 0))),
             line_net_amount=Decimal(str(p.get("net_amount", 0))),
-            tax_rate=Decimal(str(p.get("tax_rate", 19))),
+            tax_rate=Decimal(str(_steuersatz(p.get("tax_rate")))),
         ))
 
     # Anzahlungen (BT-113): dieselben Abschlaege, die das PDF unter "Bereits
@@ -7566,7 +7585,7 @@ def _create_eingang_invoice(pdf_bytes, d, transaction_id=None):
                 item_name=(line.get("description") or "Position")[:200],
                 unit_price=Decimal(str(line.get("unit_price") or 0)),
                 line_net_amount=Decimal(str(line.get("net_amount") or 0)),
-                tax_rate=Decimal(str(line.get("tax_rate") if line.get("tax_rate") is not None else (d.get("tax_rate") or 19))),
+                tax_rate=Decimal(str(line.get("tax_rate") if line.get("tax_rate") is not None else _steuersatz(d.get("tax_rate")))),
             ))
         except Exception:
             continue
@@ -7579,7 +7598,7 @@ def _create_eingang_invoice(pdf_bytes, d, transaction_id=None):
             item_name="Rechnungsbetrag (Sammelposition aus OCR)",
             unit_price=Decimal(str(net)),
             line_net_amount=Decimal(str(net)),
-            tax_rate=Decimal(str(d.get("tax_rate") or 19)),
+            tax_rate=Decimal(str(_steuersatz(d.get("tax_rate")))),
         ))
 
     # Duplikat-Check — zwei Regeln, beide aus echten Faellen (07.09.2026):
@@ -8631,7 +8650,7 @@ def api_generate():
                 item_name=line_data.get("name", ""),
                 unit_price=Decimal(str(line_data.get("price", 0))),
                 line_net_amount=Decimal(str(line_data.get("net", 0))),
-                tax_rate=Decimal(str(line_data.get("tax_rate", 19))),
+                tax_rate=Decimal(str(_steuersatz(line_data.get("tax_rate")))),
             ))
 
         # Dubletten-Check: Rechnungsnummer bereits vergeben?
@@ -8884,7 +8903,7 @@ def api_gutschrift(inv_id):
             try:
                 qty = Decimal(str(ld.get("quantity", 1)))
                 price = Decimal(str(ld.get("price", 0)))
-                rate = Decimal(str(ld.get("tax_rate", 19)))
+                rate = Decimal(str(_steuersatz(ld.get("tax_rate"))))
             except Exception:
                 return _json({"error": f"Position {i}: Menge/Preis/Steuersatz ungueltig."}, 400)
             if qty <= 0 or price < 0:
@@ -9686,7 +9705,7 @@ def _epbd_invoice_lines(cert, products):
             missing.append(v)
             continue
         net = float(prod.get("vk_price") or 0)
-        tax_rate = float(prod.get("tax_rate") or 19)
+        tax_rate = float(_steuersatz(prod.get("tax_rate")))
         lines.append({
             "quantity": 1,
             "name": prod.get("name") or f"Energieausweis {v}",
