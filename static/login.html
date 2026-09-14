@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — b2b-e-rechnung</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: linear-gradient(135deg, #0D3A5C 0%, #1B4B82 60%, #00A0D2 100%);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .card {
+    background: #fff;
+    border-radius: 16px;
+    padding: 48px 40px 40px;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: 0 24px 60px rgba(0,0,0,0.25);
+  }
+  .logo {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .logo h1 {
+    font-size: 22px;
+    font-weight: 800;
+    color: #0D3A5C;
+    letter-spacing: -0.4px;
+  }
+  .logo p {
+    font-size: 13px;
+    color: #64748B;
+    margin-top: 4px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 6px;
+  }
+  input[type=text], input[type=password] {
+    width: 100%;
+    padding: 10px 14px;
+    border: 1.5px solid #D1D5DB;
+    border-radius: 8px;
+    font-size: 15px;
+    color: #111827;
+    outline: none;
+    transition: border-color .15s;
+    margin-bottom: 18px;
+  }
+  input:focus { border-color: #00A0D2; }
+  button[type=submit] {
+    width: 100%;
+    padding: 12px;
+    background: linear-gradient(135deg, #1B4B82, #00A0D2);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity .15s;
+    margin-top: 4px;
+  }
+  button[type=submit]:hover { opacity: 0.92; }
+  .error {
+    background: #FEE2E2;
+    border: 1px solid #FECACA;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #DC2626;
+    margin-bottom: 18px;
+  }
+  .change-pw {
+    margin-top: 28px;
+    border-top: 1px solid #E5E7EB;
+    padding-top: 24px;
+  }
+  .change-pw summary {
+    font-size: 13px;
+    color: #64748B;
+    cursor: pointer;
+    user-select: none;
+  }
+  .change-pw-form { margin-top: 14px; }
+  .pw-msg {
+    font-size: 13px;
+    margin-top: 8px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    display: none;
+  }
+  .pw-msg.ok   { background:#D1FAE5; color:#065F46; display:block; }
+  .pw-msg.err  { background:#FEE2E2; color:#DC2626; display:block; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="logo">
+    <h1>b2b-e-rechnung</h1>
+    <p>E-Rechnungssystem · Privater Bereich</p>
+  </div>
+
+  {% if error %}
+  <div class="error">{{ error }}</div>
+  {% endif %}
+
+  <form method="POST" action="/login">
+    <label for="username">Benutzername</label>
+    <input type="text" id="username" name="username" value="{{ username or '' }}" autocomplete="username" autofocus required>
+    <label for="password">Passwort</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required>
+    <button type="submit">Anmelden →</button>
+  </form>
+
+  <details class="change-pw">
+    <summary>Passwort ändern</summary>
+    <div class="change-pw-form">
+      <label>Benutzername</label>
+      <input type="text" id="cpw-user" autocomplete="username">
+      <label>Aktuelles Passwort</label>
+      <input type="password" id="cpw-old" autocomplete="current-password">
+      <label>Neues Passwort</label>
+      <input type="password" id="cpw-new" autocomplete="new-password">
+      <label>Neues Passwort (Wiederholung)</label>
+      <input type="password" id="cpw-new2" autocomplete="new-password">
+      <button type="button" onclick="changePw()">Passwort speichern</button>
+      <div class="pw-msg" id="pw-msg"></div>
+    </div>
+  </details>
+</div>
+
+<script>
+async function changePw() {
+  const msg = document.getElementById('pw-msg');
+  const user = document.getElementById('cpw-user').value.trim();
+  const oldPw = document.getElementById('cpw-old').value;
+  const newPw = document.getElementById('cpw-new').value;
+  const newPw2 = document.getElementById('cpw-new2').value;
+  msg.className = 'pw-msg';
+  if (!user || !oldPw || !newPw) { msg.className='pw-msg err'; msg.textContent='Alle Felder ausfüllen.'; return; }
+  if (newPw !== newPw2) { msg.className='pw-msg err'; msg.textContent='Neue Passwörter stimmen nicht überein.'; return; }
+  if (newPw.length < 6) { msg.className='pw-msg err'; msg.textContent='Neues Passwort muss mindestens 6 Zeichen haben.'; return; }
+  try {
+    const r = await fetch('/api/auth/change-password', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({username: user, old_password: oldPw, new_password: newPw})
+    });
+    const d = await r.json();
+    if (d.ok) { msg.className='pw-msg ok'; msg.textContent='Passwort erfolgreich geändert.'; }
+    else { msg.className='pw-msg err'; msg.textContent = d.error || 'Fehler beim Ändern.'; }
+  } catch(e) { msg.className='pw-msg err'; msg.textContent='Verbindungsfehler.'; }
+}
+</script>
+</body>
+</html>

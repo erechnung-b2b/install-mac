@@ -1,0 +1,25 @@
+# systemd-Dienst für den Serverbetrieb des E-Rechnungssystems
+# Installation: siehe docs/Server-Installation.md
+#   sudo cp erechnung.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now erechnung
+
+[Unit]
+Description=E-Rechnungssystem (XRechnung / ZUGFeRD)
+After=network.target
+
+[Service]
+Type=simple
+User=erechnung
+Group=erechnung
+WorkingDirectory=/opt/erechnung/app
+Environment=ERECHNUNG_SERVER=1
+Environment=ERECHNUNG_PORT=5000
+# Hinter nginx/HTTPS nur lokal lauschen lassen:
+#Environment=ERECHNUNG_HOST=127.0.0.1
+ExecStart=/opt/erechnung/app/.venv/bin/python run.py --server
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

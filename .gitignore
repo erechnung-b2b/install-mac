@@ -1,0 +1,10 @@
+data/
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+tools/kosit/
+.deps_installed
+backup*.zip
+*.log
