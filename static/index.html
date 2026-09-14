@@ -405,7 +405,7 @@ th.c,td.c{text-align:center}
     <div class="card"><div class="card-header"><h3>Verkäufer</h3><span style="font-size:11px;color:var(--text2)">(aus Stammdaten)</span></div><div class="card-body">
       <div class="form-row"><label>Firma</label><input id="c-seller-name" placeholder="Wird aus Stammdaten geladen"></div>
       <div class="form-row-2"><div class="form-row"><label>Straße</label><input id="c-seller-street"></div>
-        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:8px"><input id="c-seller-plz" style="width:80px"><input id="c-seller-city"></div></div></div>
+        <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:8px"><input id="c-seller-plz" style="width:80px" maxlength="5" inputmode="numeric" oninput="plzLookup(this,'c-seller-city')"><input id="c-seller-city"></div></div></div>
       <div class="form-row-2"><div class="form-row"><label>USt-ID</label><input id="c-seller-vat"></div>
         <div class="form-row"><label>E-Mail</label><input id="c-seller-email"></div></div>
       <div class="form-row-2"><div class="form-row"><label>Kontakt</label><input id="c-seller-contact"></div>
@@ -7575,28 +7575,70 @@ function hideBankMatchModal() {
   });
 })();
 
-// ── PLZ → Stadt Auto-Fill ──
-
-let _plzTimer = null;
+// ── PLZ → Ort Auto-Fill ──
+// Abruf über den eigenen Server (/api/geo/plz), nicht direkt bei openPLZ.
+// Regeln: Ort nur füllen, wenn leer oder zuvor automatisch gesetzt; mehrere Orte
+// zur PLZ = Auswahl; ein von Hand eingetragener Ort wird nie überschrieben.
+const _plzState = {};
+function _plzAuswahl(cityEl, orte, text) {
+  const id = cityEl.id + '-plzwahl';
+  let box = document.getElementById(id);
+  if (!orte || !orte.length) { if (box) box.remove(); return; }
+  if (!box) {
+    box = document.createElement('div');
+    box.id = id;
+    box.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;align-items:center;font-size:11px;color:#64748b;margin-top:4px';
+    (cityEl.closest('.form-row') || cityEl.parentElement).appendChild(box);
+  }
+  box.innerHTML = '';
+  const t = document.createElement('span'); t.textContent = text; box.appendChild(t);
+  orte.forEach(o => {
+    const b = document.createElement('button');
+    b.type = 'button'; b.textContent = o;
+    b.style.cssText = 'font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid #BAE6FD;background:#F0F9FF;color:#0D3A5C;cursor:pointer;width:auto';
+    b.onclick = () => { _plzOrtSetzen(cityEl, o, true); box.remove(); };
+    box.appendChild(b);
+  });
+}
+function _plzOrtSetzen(cityEl, ort, vonKlick) {
+  cityEl.value = ort;
+  cityEl.dataset.plzAuto = vonKlick ? '' : ort;
+  cityEl.dispatchEvent(new Event('input', { bubbles: true }));
+  cityEl.dispatchEvent(new Event('change', { bubbles: true }));
+  cityEl.style.background = '#f0fdf4';
+  setTimeout(() => cityEl.style.background = '', 1500);
+}
 function plzLookup(input, cityFieldId) {
-  clearTimeout(_plzTimer);
+  const st = _plzState[cityFieldId] || (_plzState[cityFieldId] = { timer: null, nr: 0, letzte: '' });
+  clearTimeout(st.timer);
+  const cityEl = document.getElementById(cityFieldId);
   const plz = input.value.trim();
-  if (plz.length !== 5 || !/^\d{5}$/.test(plz)) return;
-  _plzTimer = setTimeout(async () => {
+  if (!cityEl) return;
+  if (!/^\d{5}$/.test(plz)) { st.letzte = ''; _plzAuswahl(cityEl, null); return; }
+  if (plz === st.letzte) return;
+  st.timer = setTimeout(async () => {
+    st.letzte = plz;
+    const nr = ++st.nr;
     try {
-      const res = await fetch('https://openplzapi.org/de/Localities?postalCode='+plz);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.length > 0) {
-        const city = data[0].name || '';
-        const el = document.getElementById(cityFieldId);
-        if (el && !el.value) {
-          el.value = city;
-          el.style.background = '#f0fdf4';
-          setTimeout(() => el.style.background = '', 1500);
-        }
+      const res = await fetch('/api/geo/plz/' + plz, { credentials: 'same-origin' });
+      if (!res.ok || nr !== st.nr) return;
+      const d = await res.json();
+      const orte = (d && d.orte && d.orte.length) ? d.orte : (d && d.ort ? [d.ort] : []);
+      let dl = document.getElementById(cityFieldId + '-liste');
+      if (!dl) { dl = document.createElement('datalist'); dl.id = cityFieldId + '-liste'; cityEl.after(dl); cityEl.setAttribute('list', dl.id); }
+      dl.innerHTML = orte.map(o => '<option value="' + String(o).replace(/"/g, '&quot;') + '">').join('');
+      if (!orte.length) { _plzAuswahl(cityEl, null); return; }
+      const ist = (cityEl.value || '').trim();
+      const frei = !ist || (cityEl.dataset.plzAuto && cityEl.dataset.plzAuto === ist);
+      if (orte.some(o => o.toLowerCase() === ist.toLowerCase())) { _plzAuswahl(cityEl, null); return; }
+      if (frei && orte.length === 1) { _plzOrtSetzen(cityEl, orte[0], false); _plzAuswahl(cityEl, null); return; }
+      if (frei) {
+        if (ist) { cityEl.value = ''; cityEl.dataset.plzAuto = ''; cityEl.dispatchEvent(new Event('input', { bubbles: true })); }
+        _plzAuswahl(cityEl, orte, orte.length + ' Orte zu ' + plz + ':');
+        return;
       }
-    } catch(e) { /* offline – kein Problem */ }
+      _plzAuswahl(cityEl, orte, '„' + ist + '“ gehört nicht zu ' + plz + ' — übernehmen:');
+    } catch (e) { /* offline – kein Problem */ }
   }, 300);
 }
 

@@ -585,6 +585,43 @@ def _next_gutschrift_number(advance: bool = False) -> str:
     return number
 
 
+# ── PLZ → Ort ───────────────────────────────────────────────────────────
+# Serverseitiger Abruf der openPLZ-API: der Browser spricht nie direkt mit dem
+# Fremddienst (Besucher-IP bleibt beim eigenen Server). Ergebnis im Speicher
+# zwischengespeichert; ohne Internetverbindung liefert die Route eine leere Liste.
+_PLZ_CACHE = {}
+
+@app.route("/api/geo/plz/<plz>")
+def api_geo_plz(plz):
+    import urllib.request
+    plz = re.sub(r"\D", "", plz or "")[:5]
+    if len(plz) != 5:
+        return jsonify({"error": "PLZ ungültig"})
+    if plz in _PLZ_CACHE:
+        return jsonify(_PLZ_CACHE[plz])
+    try:
+        req = urllib.request.Request(
+            "https://openplzapi.org/de/Localities?postalCode=" + plz,
+            headers={"Accept": "application/json", "User-Agent": "e-rechnung-plz/1.0"})
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            arr = json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return jsonify({"plz": plz, "ort": "", "orte": [], "error": "Lookup fehlgeschlagen"})
+    out = {"plz": plz, "ort": "", "orte": []}
+    if isinstance(arr, list) and arr:
+        orte = []
+        for x in arr:
+            n = (x or {}).get("name")
+            if n and n not in orte:
+                orte.append(n)
+        out = {"plz": plz, "ort": orte[0] if orte else "", "orte": orte,
+               "bundesland": ((arr[0] or {}).get("federalState") or {}).get("name", "")}
+    if len(_PLZ_CACHE) > 5000:
+        _PLZ_CACHE.clear()
+    _PLZ_CACHE[plz] = out
+    return jsonify(out)
+
+
 @app.route("/api/mandant/settings")
 def api_mandant_settings_get():
     return _json(_load_mandant_settings())
