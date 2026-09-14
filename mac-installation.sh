@@ -57,7 +57,7 @@ if [ "$(uname -s)" = "Darwin" ] && [ -d "$HOME/Desktop" ]; then
 fi
 
 # stdin ist bei "curl | bash" die Pipe – Rückfrage deshalb über das Terminal
-if [ -r /dev/tty ]; then
+if (exec </dev/tty) 2>/dev/null; then
   read -r -p "  Jetzt starten? [J/n] " antwort < /dev/tty || antwort=n
   case "${antwort:-J}" in
     [nN]*) ;;
