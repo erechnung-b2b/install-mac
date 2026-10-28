@@ -5,7 +5,7 @@ E-Rechnungssystem – Auftragsmanagement / Vorgänge
 Jede Stufe: Datum, Häkchen-Freigabe, eigene Positionen, Audit-Trail.
 """
 from __future__ import annotations
-import json, uuid
+import copy, hashlib, json, uuid
 from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
@@ -58,6 +58,17 @@ DOC_PREFIXES = {
     "invoice":             "RE",
     "dunning":             "MAH",
 }
+
+
+class SpaetereStufeFreigegeben(ValueError):
+    """Anpassen/Stornieren berührt eine Stufe, nach der schon etwas freigegeben ist.
+
+    Kein harter Fehler: die Oberfläche fragt nach und darf mit `erzwingen` fortfahren.
+    """
+
+    def __init__(self, nachricht: str, stufen: list):
+        super().__init__(nachricht)
+        self.stufen = stufen
 
 
 def _ts() -> str:
@@ -418,7 +429,10 @@ class TransactionManager:
                      # Ohne Flag haengt der Generator ihn an JEDES Kundenangebot, sobald
                      # keine Position ein "Vertrag separat"-Produkt ist — beim TGA-Paket
                      # ist das nie der Fall, dort gehoert er aber nicht dran.
-                     "kein_vertrag"):
+                     "kein_vertrag",
+                     # Vertragswahl + Gebäude für den ausgefüllten Dienstvertrag (16.10.2026) —
+                     # standen bisher nicht in der Liste und wurden still verworfen
+                     "vertrag_dateien", "vertrag_datei", "vertrag_gebaeude"):
             if key in data:
                 step[key] = data[key]
 
@@ -464,6 +478,14 @@ class TransactionManager:
         txn = self._find(txns, txn_id)
         if not txn:
             raise ValueError(f"Vorgang {txn_id} nicht gefunden.")
+
+        # Eine stornierte Stufe wird nicht stillschweigend wieder freigegeben —
+        # sonst liefe der Vorgang nach einer Absage doch wieder mit (21.09.2026).
+        if (txn["steps"].get(step_key) or {}).get("status") == "STORNIERT":
+            raise ValueError(
+                f"'{STEP_LABELS.get(step_key, step_key)}' ist storniert — "
+                "erst das Storno aufheben (Vorgang wieder öffnen)."
+            )
 
         ok, reason = self.can_approve(txn, step_key)
         if not ok:
@@ -528,18 +550,7 @@ class TransactionManager:
         next_key = FORWARD_MAP.get(step_key)
         if next_key and step.get("positions"):
             next_step = txn["steps"].get(next_key, {})
-            if not next_step.get("positions"):
-                import copy
-                next_step["positions"] = copy.deepcopy(step["positions"])
-                next_step["history"].append({
-                    "action": "POSITIONEN_UEBERNOMMEN",
-                    "user": "system",
-                    "at": _ts(),
-                    "comment": f"Positionen aus {step_key} übernommen",
-                })
-                # Betrag berechnen
-                totals = calc_step_totals(next_step)
-                next_step["amount"] = totals["total_gross"]
+            self._positionen_weiterreichen(step, step_key, next_step, next_key, user)
 
         # Gesamtstatus prüfen
         if all(txn["steps"][k].get("approved") or
@@ -584,6 +595,320 @@ class TransactionManager:
         })
 
         txn["status"] = "IN_BEARBEITUNG"
+        txn["updated_at"] = _ts()
+        self._save(txns)
+        return txn
+
+    # ── Angebot anpassen und stornieren (21.09.2026) ──
+    #
+    # „Der Vorgang Angebot an Kunde braucht zwei Ergänzungen: einmal anpassen
+    #  und eine Stornierung, damit es nicht immer mitläuft."
+    #
+    # ANPASSEN erzeugt eine neue FASSUNG: die freigegebene Fassung wandert
+    # unverändert nach step["versions"], die Belegnummer bekommt „-V2", „-V3" …
+    # So bleibt belegbar, was der Kunde zuerst bekommen hat — ein bloßes
+    # Zurücknehmen der Freigabe würde die erste Fassung überschreiben.
+    #
+    # STORNIEREN schließt standardmäßig den ganzen Vorgang (der Regelfall ist
+    # die Absage des Kunden). Der Vorgang verschwindet damit aus den offenen
+    # Vorgängen, bleibt vollständig erhalten und kann wieder geöffnet werden.
+
+    # ── Positionen zwischen den Stufen (21.09.2026) ──
+    #
+    # „Bei Änderung des Angebots muss sich der Wert für Auftragseingang auch ändern"
+    # und „bei Stornierung muss Auftragseingang gelöscht werden."
+    #
+    # Bis dahin wurden Positionen NUR weitergereicht, wenn die Folgestufe leer war.
+    # Nach einer Anpassung blieb dort der alte Betrag stehen — der Vorgang zeigte
+    # zwei verschiedene Summen. Jetzt gilt: übernommene Werte werden mitgeführt,
+    # von Hand geänderte werden NICHT überschrieben, sondern gemeldet.
+
+    @staticmethod
+    def _positions_fingerprint(positions) -> str:
+        roh = json.dumps(positions or [], sort_keys=True, default=str)
+        return hashlib.sha256(roh.encode("utf-8")).hexdigest()[:16]
+
+    def _positionen_weiterreichen(self, step: dict, step_key: str,
+                                  next_step: dict, next_key: str,
+                                  user: str = "system") -> None:
+        """Reicht Positionen an die Folgestufe weiter bzw. hält sie aktuell."""
+        if not next_step or next_step.get("approved"):
+            return                      # freigegebener Beleg wird nie still geändert
+
+        quelle = next_step.get("positions_quelle") or {}
+        vorhanden = next_step.get("positions") or []
+        leer = not vorhanden
+        unveraendert = (quelle.get("step") == step_key
+                        and quelle.get("fingerprint") == self._positions_fingerprint(vorhanden))
+
+        # Altbestand: vor dem 21.09.2026 wurde die Herkunft nicht vermerkt. Stimmen die
+        # Positionen der Folgestufe mit dieser oder einer früheren Fassung der Vorstufe
+        # überein, stammen sie von dort — dann dürfen sie mitgezogen werden. Sonst bliebe
+        # in jedem Altvorgang der alte Betrag stehen (V-2026-0047: Angebot 2.975 €,
+        # Auftragseingang noch 4.165 € vom 18.08.).
+        if not leer and not unveraendert and not quelle:
+            fp = self._positions_fingerprint(vorhanden)
+            frueher = [v.get("positions") for v in (step.get("versions") or [])]
+            frueher.append(step.get("positions"))
+            unveraendert = any(p and self._positions_fingerprint(p) == fp for p in frueher)
+
+        if not (leer or unveraendert):
+            # Von Hand angepasst → nicht überschreiben, aber sichtbar machen.
+            next_step["positions_abweichung"] = {
+                "quelle": step_key,
+                "seit": _ts(),
+                "hinweis": f"{STEP_LABELS.get(step_key, step_key)} wurde geändert; "
+                           f"die Positionen hier stammen aus einer eigenen Eingabe.",
+            }
+            next_step["history"].append({
+                "action": "POSITIONEN_ABWEICHEND", "user": user, "at": _ts(),
+                "comment": f"{STEP_LABELS.get(step_key, step_key)} geändert — "
+                           f"eigene Positionen hier beibehalten",
+            })
+            return
+
+        next_step["positions"] = copy.deepcopy(step.get("positions") or [])
+        totals = calc_step_totals(next_step)
+        next_step["amount"] = totals["total_gross"]
+        next_step["positions_quelle"] = {
+            "step": step_key,
+            "fingerprint": self._positions_fingerprint(next_step["positions"]),
+            "at": _ts(),
+            "version": step.get("version", 1),
+        }
+        next_step.pop("positions_abweichung", None)
+        next_step["history"].append({
+            "action": "POSITIONEN_UEBERNOMMEN" if leer else "POSITIONEN_AKTUALISIERT",
+            "user": user,
+            "at": _ts(),
+            "comment": (f"Positionen aus {step_key} übernommen" if leer else
+                        f"Positionen aus {step_key} aktualisiert "
+                        f"(Fassung {step.get('version', 1)}) — neuer Betrag "
+                        f"{next_step['amount']:.2f}"),
+        })
+
+    def _folgestufen_leeren(self, txn: dict, step_key: str, user: str,
+                            grund: str) -> list[str]:
+        """Löscht übernommene Werte in allen nachfolgenden, nicht freigegebenen Stufen."""
+        geleert = []
+        idx = STEP_KEYS.index(step_key)
+        for key in STEP_KEYS[idx + 1:]:
+            nxt = txn["steps"].get(key) or {}
+            if nxt.get("approved"):
+                continue
+            quelle = nxt.get("positions_quelle") or {}
+            if not nxt.get("positions"):
+                continue
+            if not quelle:
+                # Eigene Eingabe → stehen lassen, aber vermerken.
+                nxt["history"].append({
+                    "action": "EIGENE_POSITIONEN_BEHALTEN", "user": user, "at": _ts(),
+                    "comment": f"{grund} — eigene Positionen hier nicht gelöscht",
+                })
+                continue
+            nxt["positions"] = []
+            nxt["amount"] = 0
+            nxt["date"] = None
+            nxt.pop("positions_quelle", None)
+            nxt.pop("positions_abweichung", None)
+            if nxt.get("status") in ("IN_BEARBEITUNG", "ERLEDIGT"):
+                nxt["status"] = "OFFEN"
+            nxt["history"].append({
+                "action": "POSITIONEN_GELOESCHT", "user": user, "at": _ts(),
+                "comment": grund,
+            })
+            geleert.append(STEP_LABELS.get(key, key))
+        return geleert
+
+    FORWARD_MAP = {
+        "supplier_quote":     "purchase_order",
+        "purchase_order":     "supplier_invoice",
+        "customer_quote":     "order_intake",
+        "order_intake":       "order_confirmation",
+        "order_confirmation": "delivery_note",
+        "delivery_note":      "invoice",
+    }
+
+    def sync_positions(self, txn_id: str, step_key: str, user: str = "system") -> dict:
+        """Übernimmt die Positionen der Vorstufe ausdrücklich (überschreibt auch Eigenes)."""
+        txns = self._load()
+        txn = self._find(txns, txn_id)
+        if not txn:
+            raise ValueError(f"Vorgang {txn_id} nicht gefunden.")
+        quelle_key = next((v for v, n in self.FORWARD_MAP.items() if n == step_key), None)
+        if not quelle_key:
+            raise ValueError(f"Für '{STEP_LABELS.get(step_key, step_key)}' gibt es keine Vorstufe.")
+        step = txn["steps"].get(step_key) or {}
+        if step.get("approved"):
+            raise ValueError("Stufe ist freigegeben — erst die Freigabe zurücknehmen.")
+        vor = txn["steps"].get(quelle_key) or {}
+        if not vor.get("positions"):
+            raise ValueError(f"{STEP_LABELS.get(quelle_key, quelle_key)} hat keine Positionen.")
+
+        step["positions"] = copy.deepcopy(vor["positions"])
+        totals = calc_step_totals(step)
+        step["amount"] = totals["total_gross"]
+        step["positions_quelle"] = {
+            "step": quelle_key, "fingerprint": self._positions_fingerprint(step["positions"]),
+            "at": _ts(), "version": vor.get("version", 1),
+        }
+        step.pop("positions_abweichung", None)
+        step["history"].append({
+            "action": "POSITIONEN_UEBERNOMMEN_MANUELL", "user": user, "at": _ts(),
+            "comment": f"Positionen aus {STEP_LABELS.get(quelle_key, quelle_key)} "
+                       f"übernommen — neuer Betrag {step['amount']:.2f}",
+        })
+        txn["updated_at"] = _ts()
+        self._save(txns)
+        return txn
+
+    def revise_step(self, txn_id: str, step_key: str,
+                    user: str = "system", reason: str = "",
+                    erzwingen: bool = False) -> dict:
+        """Legt eine neue Fassung eines Steps an (Angebot anpassen)."""
+        txns = self._load()
+        txn = self._find(txns, txn_id)
+        if not txn:
+            raise ValueError(f"Vorgang {txn_id} nicht gefunden.")
+        step = txn["steps"].get(step_key)
+        if step is None:
+            raise ValueError(f"Stufe {step_key} unbekannt.")
+        if step.get("status") == "STORNIERT":
+            raise ValueError("Stornierte Stufe kann nicht angepasst werden — erst wieder öffnen.")
+
+        # Nicht anpassen, wenn SPÄTER schon etwas freigegeben ist. Bis 22.09.2026 wurde
+        # nur die unmittelbar folgende Stufe geprüft — war die übersprungen, ließ sich das
+        # Angebot auch nach einer versendeten Auftragsbestätigung noch ändern. Genau das
+        # ist am 21.09. passiert (V-2026-0047: AB um 13:21, Angebot V3 um 13:22).
+        idx = STEP_KEYS.index(step_key)
+        spaeter = [STEP_LABELS.get(k, k) for k in STEP_KEYS[idx + 1:]
+                   if txn["steps"].get(k, {}).get("approved")]
+        if spaeter and not erzwingen:
+            raise SpaetereStufeFreigegeben(
+                f"'{STEP_LABELS.get(step_key, step_key)}' anpassen, obwohl "
+                + " und ".join(spaeter) + " bereits freigegeben "
+                + ("ist" if len(spaeter) == 1 else "sind") + "?", spaeter)
+
+        fassung = int(step.get("version") or 1)
+        basis = step.get("reference_base") or step.get("reference") or ""
+
+        # Alte Fassung sichern — ohne Historie und Fassungsliste, sonst wächst
+        # der Datensatz bei jeder Anpassung quadratisch.
+        archiv = {k: v for k, v in step.items() if k not in ("history", "versions")}
+        archiv["fassung"] = fassung
+        archiv["ersetzt_am"] = _ts()
+        archiv["ersetzt_von"] = user
+        archiv["ersetzt_grund"] = reason
+        step.setdefault("versions", []).append(archiv)
+
+        fassung += 1
+        step["version"] = fassung
+        if basis:
+            step["reference_base"] = basis
+            step["reference"] = f"{basis}-V{fassung}"
+        step["approved"] = False
+        step["approved_at"] = None
+        step["approved_by"] = None
+        step["status"] = "IN_BEARBEITUNG"
+        step["date"] = _today()
+        step["sent_at"] = None
+        step["history"].append({
+            "action": "ANGEPASST",
+            "user": user,
+            "at": _ts(),
+            "reason": reason,
+            "detail": f"Fassung {fassung - 1} → {fassung}"
+                      + (f" — trotz Freigabe von {', '.join(spaeter)}" if spaeter else ""),
+        })
+        if spaeter:
+            txn.setdefault("warnungen", []).append({
+                "art": "angepasst_nach_freigabe", "at": _ts(), "user": user,
+                "stufe": step_key, "betrifft": spaeter,
+                "text": f"{STEP_LABELS.get(step_key, step_key)} wurde geändert, obwohl "
+                        + ", ".join(spaeter) + " bereits freigegeben war.",
+            })
+
+        if txn.get("status") in ("ABGESCHLOSSEN", "STORNIERT"):
+            txn["status"] = "IN_BEARBEITUNG"
+        txn["updated_at"] = _ts()
+        self._save(txns)
+        return txn
+
+    def cancel_step(self, txn_id: str, step_key: str, user: str = "system",
+                    reason: str = "", close_transaction: bool = True) -> dict:
+        """Storniert eine Stufe; schließt auf Wunsch den ganzen Vorgang."""
+        txns = self._load()
+        txn = self._find(txns, txn_id)
+        if not txn:
+            raise ValueError(f"Vorgang {txn_id} nicht gefunden.")
+        step = txn["steps"].get(step_key)
+        if step is None:
+            raise ValueError(f"Stufe {step_key} unbekannt.")
+
+        # Was danach schon freigegeben ist, darf nicht stillschweigend entwertet werden.
+        idx = STEP_KEYS.index(step_key)
+        spaeter = [STEP_LABELS.get(k, k) for k in STEP_KEYS[idx + 1:]
+                   if txn["steps"].get(k, {}).get("approved")]
+        if spaeter:
+            raise ValueError(
+                "Kann nicht stornieren: " + ", ".join(spaeter) + " ist bereits freigegeben."
+            )
+
+        step["status"] = "STORNIERT"
+        step["approved"] = False
+        step["approved_at"] = None
+        step["approved_by"] = None
+        step["cancelled_at"] = _ts()
+        step["cancelled_by"] = user
+        step["cancel_reason"] = reason
+        step["history"].append({
+            "action": "STORNIERT",
+            "user": user,
+            "at": _ts(),
+            "reason": reason,
+        })
+
+        # Was aus dieser Stufe weitergereicht wurde, darf nicht stehen bleiben —
+        # sonst hinge am stornierten Angebot weiter ein Auftragseingang mit Betrag.
+        geleert = self._folgestufen_leeren(
+            txn, step_key, user,
+            f"{STEP_LABELS.get(step_key, step_key)} storniert"
+            + (f": {reason}" if reason else ""))
+        if geleert:
+            step["history"].append({
+                "action": "FOLGESTUFEN_GELEERT", "user": user, "at": _ts(),
+                "comment": "geleert: " + ", ".join(geleert),
+            })
+
+        if close_transaction:
+            txn["status"] = "STORNIERT"
+            txn["cancelled_at"] = _ts()
+            txn["cancelled_by"] = user
+            txn["cancel_reason"] = reason or f"{STEP_LABELS.get(step_key, step_key)} storniert"
+        txn["updated_at"] = _ts()
+        self._save(txns)
+        return txn
+
+    def reopen_transaction(self, txn_id: str, user: str = "system",
+                           reason: str = "") -> dict:
+        """Hebt die Stornierung auf — der Vorgang läuft wieder mit."""
+        txns = self._load()
+        txn = self._find(txns, txn_id)
+        if not txn:
+            raise ValueError(f"Vorgang {txn_id} nicht gefunden.")
+        if txn.get("status") != "STORNIERT":
+            raise ValueError("Vorgang ist nicht storniert.")
+
+        for key in STEP_KEYS:
+            step = txn["steps"].get(key) or {}
+            if step.get("status") == "STORNIERT":
+                step["status"] = "IN_BEARBEITUNG" if (step.get("reference") or step.get("date")) else "OFFEN"
+                step["reopened_at"] = _ts()
+                step["history"].append({
+                    "action": "STORNO_AUFGEHOBEN", "user": user, "at": _ts(), "reason": reason,
+                })
+        txn["status"] = "IN_BEARBEITUNG"
+        txn["reopened_at"] = _ts()
         txn["updated_at"] = _ts()
         self._save(txns)
         return txn

@@ -60,7 +60,11 @@ def protokoll(cid, ereignis, **felder):
             pass
         with open(BANK_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(eintrag, ensure_ascii=False) + "\n")
-        os.chmod(BANK_LOG, 0o600)
+        # Rechte nur setzen, wenn die Datei uns gehört (20.10.2026): der Abend-Abruf läuft als root, die App als
+        # www-data — chmod auf die root-Datei warf EPERM und meldete „Protokoll fehlgeschlagen", obwohl geschrieben war.
+        # 0o660: Gruppe www-data muss weiter anhängen können.
+        if os.stat(BANK_LOG).st_uid == os.getuid():
+            os.chmod(BANK_LOG, 0o660)
     except Exception as e:  # Protokoll darf den Abruf NIE stören
         print(f"[bank-fints] Protokoll fehlgeschlagen: {e}")
 

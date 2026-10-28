@@ -70,6 +70,15 @@
     margin-top: 4px;
   }
   button[type=submit]:hover { opacity: 0.92; }
+  .info {
+    background: #ECFDF5;
+    border: 1px solid #86EFAC;
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 13px;
+    color: #14532D;
+    margin-bottom: 18px;
+  }
   .error {
     background: #FEE2E2;
     border: 1px solid #FECACA;
@@ -109,6 +118,9 @@
     <p>E-Rechnungssystem · Privater Bereich</p>
   </div>
 
+  {% if abgemeldet %}
+  <div class="info" role="status">&#10003; Sie wurden abgemeldet. Zum Weiterarbeiten bitte erneut anmelden.</div>
+  {% endif %}
   {% if error %}
   <div class="error">{{ error }}</div>
   {% endif %}
@@ -148,7 +160,7 @@ async function changePw() {
   msg.className = 'pw-msg';
   if (!user || !oldPw || !newPw) { msg.className='pw-msg err'; msg.textContent='Alle Felder ausfüllen.'; return; }
   if (newPw !== newPw2) { msg.className='pw-msg err'; msg.textContent='Neue Passwörter stimmen nicht überein.'; return; }
-  if (newPw.length < 6) { msg.className='pw-msg err'; msg.textContent='Neues Passwort muss mindestens 6 Zeichen haben.'; return; }
+  if (newPw.length < 12) { msg.className='pw-msg err'; msg.textContent='Neues Passwort muss mindestens 12 Zeichen haben.'; return; }
   try {
     const r = await fetch('/api/auth/change-password', {
       method: 'POST',

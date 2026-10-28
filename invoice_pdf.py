@@ -112,6 +112,11 @@ def build(inv, doc_gen, buyers, mandant_settings):
     # Bemerkung aufs PDF — eigener Absatz vor dem Schlusstext; steht auch im XML.
     # Bei der Gutschrift traegt die Notiz den Grund — der gehoert aufs Papier.
     _note = (getattr(inv, "note", "") or "").strip()
+    # Die Absetz-Zeilen der Abschlaege (fuer BT-22 der XRechnung) stehen auf dem
+    # Papier als Tabelle — hier nicht noch einmal als Fliesstext.
+    _note = "\n".join(z for z in _note.split("\n")
+                      if not z.startswith(("Abzüglich Abschlagsrechnung",
+                                           "Verbleibender Zahlbetrag der Schlussrechnung"))).strip()
     if _note and not is_storno:
         closing_tpl = _note + ("\n\n" + closing_tpl if closing_tpl else "")
     # Anzahlungen: dieselben Abschlaege, die in BT-113 der XRechnung stehen,
@@ -130,6 +135,31 @@ def build(inv, doc_gen, buyers, mandant_settings):
         }])
     else:
         doc_gen._prepaid_invoices = None
+    # Dauerrechnung Online-Zugang: eigenes Konto + Nutzercode als Verwendungszweck (siehe doc_generator._zahlung_override)
+    import dauer_texte as _dt
+    _na = getattr(inv, "_nutzerabo", None) or {}
+    # Zahlkonto der Rechnung selbst (27.10.2026): steht in inv.payment ein Konto, druckt das PDF DIESES Konto — sonst
+    # zeigte es die Stammdaten, während XRechnung und GiroCode das Konto der Rechnung trugen (Zweitkonto je Rechnung).
+    _inv_iban = (inv.payment.iban if inv.payment else "") or ""
+    doc_gen._zahlung_override = ({"iban": _inv_iban, "bic": (inv.payment.bic if inv.payment else "") or "",
+                                  "verwendungszweck": _na.get("verwendungszweck", "")} if (_na.get("abo_id") or _inv_iban) else None)
+    _lieferdatum = (inv.tax_point_date or inv.period_end or "")
+    if _na.get("abo_id") and doc_type_for_pdf == "invoice":
+        # Die Standardtexte (§ 4.2 AGB, „Rechnungsnummer als Verwendungszweck") widersprechen hier: gezahlt wird
+        # monatlich im Voraus mit dem Nutzercode. Der Leistungszeitraum steht im Vermerk, nicht als ein Datum.
+        _s_name = " ".join((getattr(inv.seller, "name", "") or "").split())
+        _von = inv.period_start.strftime("%d.%m.%Y") if inv.period_start else ""
+        _bis = inv.period_end.strftime("%d.%m.%Y") if inv.period_end else ""
+        intro_tpl = ("Sehr geehrte Damen und Herren,\n\n"
+                     f"für den Online-Zugang{_dt.dienst('von')} stellen wir Ihnen das vereinbarte Nutzungsentgelt in Rechnung"
+                     + (f" (Leistungszeitraum {_von} bis {_bis}, danach monatlich)." if _von and _bis else ".")
+                     + (("\n" + _dt.DAUER_TEXT["agb_satz"]) if _dt.DAUER_TEXT.get("agb_satz") else ""))
+        closing_tpl = (_note + "\n\n" if _note else "") + (
+            "Das Entgelt ist jeweils zum 28. für den folgenden Nutzungsmonat im Voraus fällig (§ N5 Abs. 2). "
+            f"Bitte überweisen Sie auf das unten genannte Konto und geben Sie als Verwendungszweck nur Ihren Nutzercode "
+            f"{_na.get('verwendungszweck', '')} an — nicht die Rechnungsnummer. Ein Dauerauftrag ist dafür am bequemsten.\n\n"
+            f"Mit freundlichen Grüßen\n{_s_name}")
+        _lieferdatum = ""
     pdf_entry = doc_gen.generate(
         doc_type=doc_type_for_pdf,
         recipient=buyer_data,
@@ -139,12 +169,13 @@ def build(inv, doc_gen, buyers, mandant_settings):
         subject="",
         doc_date=inv.invoice_date,
         due_date=(inv.payment.due_date if inv.payment and inv.payment.due_date else ""),
-        delivery_date=(inv.tax_point_date or inv.period_end or ""),
+        delivery_date=_lieferdatum,
         intro_text=intro_tpl,
         closing_text=closing_tpl,
         original_invoice_ref=(inv.preceding_invoice or "") if is_credit else "",
     )
     doc_gen._prepaid_invoices = _vorher      # Zustand nicht am Generator zuruecklassen
+    doc_gen._zahlung_override = None
     pdf_path = doc_gen.get_filepath(pdf_entry["filename"])
     if not pdf_path or not pdf_path.exists():
         raise RuntimeError("PDF-Datei nach Generierung nicht gefunden")

@@ -536,47 +536,75 @@ def _build_giro_qr_image(beneficiary_name: str, iban: str, amount: float,
         return None
 
 
-def _build_prepaid_summary(story, styles, prepaid_invoices: list, gross_total: float) -> float:
-    """Listet bereits gezahlte/gestellte Abschlagsrechnungen auf und liefert die Summe.
-    Genutzt in der Schlussrechnung, um den Restbetrag korrekt darzustellen."""
+def _build_prepaid_summary(story, styles, prepaid_invoices: list, gross_total: float,
+                           net_total: float = None, tax_total: float = None) -> float:
+    """Setzt in der Schlussrechnung die Abschlagsrechnungen ab und liefert ihre Bruttosumme.
+
+    § 14 Abs. 5 Satz 2 UStG: abzusetzen sind die Teilentgelte UND die auf sie
+    entfallenden Steuerbetraege. Bis zum 09.10.2026 stand hier nur der
+    Bruttobetrag je Abschlag — Netto und Umsatzsteuer fehlten.
+    """
     if not prepaid_invoices:
         return 0.0
-    total = 0.0
+    total = net_sum = tax_sum = 0.0
+    teilbar = True
     rows = []
     for p in prepaid_invoices:
         gross = float(p.get("amount_gross", 0) or 0)
         if gross <= 0:
             continue
+        net = float(p.get("amount_net", 0) or 0)
+        if net <= 0 and float(p.get("tax_rate", 0) or 0) > 0:
+            net = round(gross / (1 + float(p.get("tax_rate")) / 100), 2)
+        tax = round(gross - net, 2) if net > 0 else 0.0
+        if net <= 0:
+            teilbar = False                      # Altbestand ohne Netto/Steuersatz
         status = p.get("status", "")
-        date_str = p.get("paid_at") or p.get("date") or ""
-        marker = "✓" if status == "PAID" else "·"
+        paid_at = p.get("paid_at") or ""
+        if status == "PAID":
+            stand = "Zahlung erhalten" + (f" am {_date_de(paid_at)}" if paid_at else "")
+        else:
+            stand = "gestellt, Zahlung noch offen"
+        titel = str(p.get("title", "") or "Abschlagsrechnung")
         rows.append([
-            Paragraph(marker, styles["table_cell"]),
             Paragraph(str(p.get("reference", "")), styles["table_cell"]),
-            Paragraph(str(p.get("title", "")), styles["table_cell"]),
-            Paragraph(_date_de(date_str), styles["table_cell_r"]),
+            Paragraph(f"{titel}<br/><font size='7'>{stand}</font>", styles["table_cell"]),
+            Paragraph(_date_de(p.get("date") or paid_at or ""), styles["table_cell_r"]),
+            Paragraph((_fmt(net) + " €") if net > 0 else "–", styles["table_cell_r"]),
+            Paragraph((_fmt(tax) + " €") if net > 0 else "–", styles["table_cell_r"]),
             Paragraph(_fmt(gross) + " €", styles["table_cell_r"]),
         ])
         total += gross
+        net_sum += net
+        tax_sum += tax
     if not rows:
         return 0.0
 
     story.append(Spacer(1, 4*mm))
-    story.append(Paragraph("<b>Bereits geleistete Anzahlungen / Abschläge</b>",
+    story.append(Paragraph("<b>Abzüglich Abschlagsrechnungen</b> "
+                           "<font size='7'>(§ 14 Abs. 5 UStG)</font>",
                             styles["block_label"]))
 
     usable_w = PAGE_W - MARGIN_L - MARGIN_R
-    col_widths = [6*mm, 28*mm, None, 26*mm, 28*mm]
-    rest = usable_w - sum(w for w in col_widths if w)
-    col_widths[2] = rest
+    col_widths = [27*mm, None, 20*mm, 24*mm, 22*mm, 25*mm]
+    col_widths[1] = usable_w - sum(w for w in col_widths if w)
     header = [
-        Paragraph("", styles["table_header"]),
         Paragraph("Nr.", styles["table_header"]),
         Paragraph("Bezeichnung", styles["table_header"]),
         Paragraph("Datum", styles["table_header"]),
+        Paragraph("Netto", styles["table_header"]),
+        Paragraph("USt", styles["table_header"]),
         Paragraph("Brutto", styles["table_header"]),
     ]
-    tbl = Table([header] + rows, colWidths=col_widths, repeatRows=1)
+    summe = [
+        Paragraph("", styles["table_cell"]),
+        Paragraph("<b>Summe Abschlagsrechnungen</b>", styles["table_cell"]),
+        Paragraph("", styles["table_cell_r"]),
+        Paragraph(f"<b>{_fmt(net_sum)} €</b>" if teilbar else "–", styles["table_cell_r"]),
+        Paragraph(f"<b>{_fmt(tax_sum)} €</b>" if teilbar else "–", styles["table_cell_r"]),
+        Paragraph(f"<b>{_fmt(total)} €</b>", styles["table_cell_r"]),
+    ]
+    tbl = Table([header] + rows + [summe], colWidths=col_widths, repeatRows=1)
     tbl.setStyle(TableStyle([
         ("BACKGROUND", (0,0), (-1,0), DEEP_BLUE),
         ("TEXTCOLOR", (0,0), (-1,0), WHITE),
@@ -585,16 +613,24 @@ def _build_prepaid_summary(story, styles, prepaid_invoices: list, gross_total: f
         ("TOPPADDING", (0,0), (-1,0), 4),
         ("FONTSIZE", (0,1), (-1,-1), 8.5),
         ("LINEBELOW", (0,0), (-1,-1), 0.25, BORDER_GRAY),
+        ("LINEABOVE", (0,-1), (-1,-1), 0.8, DEEP_BLUE),
         ("VALIGN", (0,0), (-1,-1), "TOP"),
     ]))
     story.append(tbl)
     story.append(Spacer(1, 2*mm))
 
-    rest_betrag = max(0, float(gross_total) - total)
-    story.append(Paragraph(
-        f"<b>Summe Anzahlungen: {_fmt(total)} €</b>  ·  "
-        f"<b>Verbleibender Restbetrag: {_fmt(rest_betrag)} €</b>",
-        styles["body_bold"]))
+    brutto_ges = float(gross_total or 0)
+    rest_betrag = max(0, round(brutto_ges - total, 2))
+    zeilen = [f"Rechnungsbetrag brutto: {_fmt(brutto_ges)} €",
+              f"abzüglich Abschlagsrechnungen: {_fmt(total)} €"]
+    rest = f"<b>Verbleibender Zahlbetrag: {_fmt(rest_betrag)} €</b>"
+    if teilbar and tax_total is not None:
+        rest_tax = round(float(tax_total) - tax_sum, 2)
+        rest_net = round(rest_betrag - rest_tax, 2)
+        if rest_net >= 0 and rest_tax >= 0:
+            rest += (f" <font size='8'>(netto {_fmt(rest_net)} € "
+                     f"zzgl. USt {_fmt(rest_tax)} €)</font>")
+    story.append(Paragraph("<br/>".join(zeilen) + "<br/>" + rest, styles["body"]))
     return total
 
 
@@ -970,6 +1006,7 @@ def generate_document(
     products_lookup: Optional[dict] = None,
     offer_settings: Optional[dict] = None,
     prepaid_invoices: Optional[list] = None,
+    payment_reference: str = "",        # abweichender Verwendungszweck im Zahlungsblock/GiroCode (Dauerrechnung: Nutzercode)
 ) -> bytes:
     """
     Erzeugt ein PDF-Dokument.
@@ -1044,6 +1081,14 @@ def generate_document(
     if doc_type in ("customer_quote", "order_confirmation"):
         _build_product_offer_blocks(story, styles, positions, products_lookup, offer_settings)
 
+    # ── Schlussrechnung: Erhaltene Anzahlungen anzeigen + vom Rechnungsbetrag abziehen ──
+    # (steht direkt unter den Summen, vor dem Schlusstext — vorher erst nach der Grussformel)
+    prepaid_total = 0.0
+    if doc_type == "invoice" and prepaid_invoices:
+        prepaid_total = _build_prepaid_summary(story, styles, prepaid_invoices,
+                                                 totals.get("gross", 0),
+                                                 tax_total=totals.get("tax"))
+
     # ── Schlusstext ──
     if not closing_text:
         closing_text = _default_closing(doc_type, seller, dunning_level)
@@ -1051,12 +1096,6 @@ def generate_document(
         closing_text = _absatz_html(closing_text)
     story.append(Spacer(1, 6*mm))
     story.append(Paragraph(closing_text, styles["body"]))
-
-    # ── Schlussrechnung: Erhaltene Anzahlungen anzeigen + vom Rechnungsbetrag abziehen ──
-    prepaid_total = 0.0
-    if doc_type == "invoice" and prepaid_invoices:
-        prepaid_total = _build_prepaid_summary(story, styles, prepaid_invoices,
-                                                 totals.get("gross", 0))
 
     # ── Zahlungsinfo (nur bei Dokumenten mit Zahlungserwartung) ──
     if doc_type in ("customer_quote", "order_intake", "order_confirmation",
@@ -1067,7 +1106,7 @@ def generate_document(
             gross = max(0, gross - prepaid_total)
         show_qr = doc_type in ("invoice", "payment_invoice", "dunning")
         _build_payment_info(story, styles, seller, gross=gross,
-                            due_date=due_date, reference=reference,
+                            due_date=due_date, reference=(payment_reference or reference),
                             show_qr=show_qr, doc_date=doc_date)
 
     # ── Auftragserteilung mit Unterschrift (nur BAFA/KFW-Angebote) ──
@@ -1112,8 +1151,29 @@ def generate_document(
         # entscheidet statt über die Produktwahl („nicht bei allen angeboten…
         # am besten steht der Vertragsanhang als auswahl beim versenden").
         vertrag_path = (offer_settings or {}).get("_vertrag_pdf_path")
-        if vertrag_path and not _sep_contract and not (step or {}).get("kein_vertrag"):
-            pdf_bytes = _merge_agb_pdf(pdf_bytes, vertrag_path)
+        # Gewählter Vertrag (21.10.2026): im Versanddialog gewählte Verträge (step.vertrag_dateien, nur Dateien aus
+        # offer_settings.vertraege) statt immer des Standard-Dienstvertrags. Ohne Wahl bleibt es beim Standard.
+        _v_pfade = []
+        if vertrag_path:
+            _erlaubt = {str(v.get("datei") or "") for v in ((offer_settings or {}).get("vertraege") or [])}
+            for _vd in ((step or {}).get("vertrag_dateien") or []):
+                _vd = Path(str(_vd or "")).name
+                _vp = Path(vertrag_path).parent / _vd
+                if _vd and _vd in _erlaubt and _vp.exists() and str(_vp) not in _v_pfade:
+                    _v_pfade.append(str(_vp))
+            if not _v_pfade:
+                _v_pfade = [vertrag_path]
+        if _v_pfade and not _sep_contract and not (step or {}).get("kein_vertrag"):
+            for vertrag_path in _v_pfade:
+                # Dienstvertrag ausgefüllt einbinden (16.10.2026) — vorher ging das leere Formular hinaus.
+                try:
+                    import vertrag_fuellen
+                    if vertrag_fuellen.fuellbar(Path(vertrag_path).name):
+                        vertrag_path = vertrag_fuellen.fuellen(vertrag_path, vertrag_fuellen.daten(recipient, step),
+                                                               Path(vertrag_path).name)
+                except Exception as _e_vf:
+                    print(f"  Dienstvertrag nicht ausgefüllt: {_e_vf}")
+                pdf_bytes = _merge_agb_pdf(pdf_bytes, vertrag_path)
 
     if doc_type in ("customer_quote", "order_confirmation") and agb_mode == "pdf":
         agb_path = (offer_settings or {}).get("_agb_pdf_path")
@@ -1128,14 +1188,17 @@ def _merge_agb_pdf(main_pdf_bytes: bytes, agb_pdf_path) -> bytes:
         from pypdf import PdfReader, PdfWriter
         from pathlib import Path as _P
         from io import BytesIO as _BIO
-        p = _P(agb_pdf_path)
-        if not p.exists():
-            return main_pdf_bytes
+        if isinstance(agb_pdf_path, (bytes, bytearray)):
+            agb_reader = PdfReader(_BIO(bytes(agb_pdf_path)))
+        else:
+            p = _P(agb_pdf_path)
+            if not p.exists():
+                return main_pdf_bytes
+            agb_reader = PdfReader(str(p))
         writer = PdfWriter()
         main_reader = PdfReader(_BIO(main_pdf_bytes))
         for page in main_reader.pages:
             writer.add_page(page)
-        agb_reader = PdfReader(str(p))
         for page in agb_reader.pages:
             writer.add_page(page)
         out = _BIO()
@@ -1271,9 +1334,8 @@ def _default_intro(doc_type, seller, recipient, reference,
     elif doc_type == "payment_invoice":
         return (f"{anrede}<br/><br/>"
                 f"vereinbarungsgemäß stellen wir Ihnen folgende Abschlagsrechnung. "
-                f"Die Endabrechnung erfolgt nach Abschluss aller vereinbarten "
-                f"Leistungen unter Berücksichtigung dieser sowie ggf. weiterer "
-                f"Anzahlungen.")
+                f"Die Abschlagszahlung wird in der Schlussrechnung mit Netto- und "
+                f"Umsatzsteuerbetrag ausgewiesen und vom Rechnungsbetrag abgezogen.")
     elif doc_type == "delivery_note":
         return (f"{anrede}<br/><br/>"
                 f"mit diesem Lieferschein bestätigen wir die Lieferung "
@@ -1442,6 +1504,14 @@ class DocumentGenerator:
 
         seller = self._load_seller()
         logo_path = self._logo()
+        # Abweichendes Zahlungskonto + Verwendungszweck fuer EIN Dokument (Dauerrechnung Online-Zugang, 11.10.2026):
+        # Die Abo-Zahlungen laufen auf ein eigenes Konto und werden am Nutzercode erkannt — stuende hier das
+        # Standardkonto mit der Rechnungsnummer, kaeme die Zahlung an und wuerde nicht zugeordnet.
+        _zo = getattr(self, "_zahlung_override", None) or {}
+        if _zo.get("iban"):
+            seller = dict(seller)
+            seller["iban"] = _zo["iban"]
+            seller["bic"] = _zo.get("bic", "")
 
         if not doc_date:
             doc_date = date.today().isoformat()
@@ -1493,6 +1563,7 @@ class DocumentGenerator:
             products_lookup=products_lookup,
             offer_settings=offer_settings,
             prepaid_invoices=getattr(self, "_prepaid_invoices", None),
+            payment_reference=_zo.get("verwendungszweck", ""),
         )
 
         # Dateiname

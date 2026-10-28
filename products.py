@@ -111,7 +111,17 @@ class ProductManager:
             # Vertrag separat: Dienstvertrag NICHT ins Angebot mergen, sondern
             # als eigener Mail-Anhang beifügbar (BAFA/KFW-Förderangebote).
             "contract_separate": bool(data.get("contract_separate", False)),
-            "status": "AKTIV",
+            # Welche Vertrags-PDF zu diesem Artikel gehört (Datei aus den Angebotseinstellungen,
+            # z. B. Vertrag_Energieberatung_rein.pdf) — leer = Standardvertrag (28.09.2026).
+            "vertrag_datei": str(data.get("vertrag_datei") or "").strip(),
+            # Mehrere Verträge je Artikel (28.09.2026: iSFP = Vertrag Energieberatung + Bestätigung Vor-Ort-Begehung).
+            "vertrag_dateien": [str(x).strip() for x in (data.get("vertrag_dateien") or []) if str(x).strip()],
+            # Fremdleistung = Leistung eines Fachplaners, die durchgereicht wird (18.09.2026).
+            # Muss in Auswertungen vom eigenen Honorar getrennt bleiben.
+            "fremdleistung": bool(data.get("fremdleistung", False)),
+            # Status darf beim Anlegen mitgegeben werden (18.09.2026): ENTWURF für Artikel,
+            # deren Preis noch fehlt — sie erscheinen nicht in Angeboten und Rechnungen.
+            "status": (data.get("status") if data.get("status") in ("AKTIV", "ENTWURF", "INAKTIV") else "AKTIV"),
             "created_at": _ts(),
         }
 
@@ -139,6 +149,12 @@ class ProductManager:
                     p["offer_blocks"] = _normalize_offer_blocks(data.get("offer_blocks"))
                 if "contract_separate" in data:
                     p["contract_separate"] = bool(data["contract_separate"])
+                if "vertrag_datei" in data:
+                    p["vertrag_datei"] = str(data.get("vertrag_datei") or "").strip()
+                if "vertrag_dateien" in data:
+                    p["vertrag_dateien"] = [str(x).strip() for x in (data.get("vertrag_dateien") or []) if str(x).strip()]
+                if "fremdleistung" in data:
+                    p["fremdleistung"] = bool(data["fremdleistung"])
                 self._save(products)
                 return p
         return None

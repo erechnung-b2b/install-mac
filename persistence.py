@@ -6,6 +6,7 @@ Wird beim Beenden automatisch gespeichert und beim Start geladen.
 from __future__ import annotations
 import json
 import os
+import threading
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -16,6 +17,27 @@ from models import (
     PaymentInfo, InvoiceLine, AllowanceCharge, AuditEvent,
 )
 
+
+
+_SPEICHER_SPERRE = threading.RLock()
+
+
+def _atomar_schreiben(ziel, daten):
+    """JSON vollständig in eine eigene Zwischendatei (Prozess + Thread im Namen) schreiben, auf Platte bringen,
+    dann atomar über das Ziel legen. Leser sehen immer die alte oder die neue, nie eine halbe Datei."""
+    tmp = f"{ziel}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(daten, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, str(ziel))
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 class InvoiceStore:
     """Speichert und laedt Rechnungen als JSON-Dateien."""
@@ -59,6 +81,9 @@ class InvoiceStore:
             "_paid_at": getattr(inv, '_paid_at', None),
             "_paid_amount": getattr(inv, '_paid_amount', None),
             "_paid_via_booking": getattr(inv, '_paid_via_booking', None),
+            # Dauerrechnung Online-Zugang (11.10.2026): Bezug zum Abo der Haupt-App + die Monatszahlungen nach der ersten
+            "_nutzerabo": getattr(inv, '_nutzerabo', None),
+            "_dauer_zahlungen": getattr(inv, '_dauer_zahlungen', None),
             "seller": {
                 "name": inv.seller.name,
                 "street": inv.seller.address.street,
@@ -260,6 +285,10 @@ class InvoiceStore:
             inv._paid_at = d["_paid_at"]
         if d.get("_paid_amount") is not None:
             inv._paid_amount = d["_paid_amount"]
+        if d.get("_nutzerabo"):
+            inv._nutzerabo = d["_nutzerabo"]
+        if d.get("_dauer_zahlungen"):
+            inv._dauer_zahlungen = list(d["_dauer_zahlungen"])
         if d.get("_paid_via_booking"):
             inv._paid_via_booking = d["_paid_via_booking"]
 
@@ -276,7 +305,15 @@ class InvoiceStore:
         auto_save auslöst — der Zweitprozess hat einen leeren Store, gewinnt aber
         auf der Platte. Der Bestand bleibt dann einfach stehen.
         """
-        data = {inv_id: self._serialize_invoice(inv) for inv_id, inv in invoices.items()}
+        # Sperre + eigene Zwischendatei je Thread (20.10.2026): Flask bedient Anfragen parallel; bei Scanner-Wellen
+        # schrieben zwei auto_save gleichzeitig in DIESELBE invoices.json.tmp — einer scheiterte am os.replace
+        # („No such file …tmp", 41× an einem Tag), und eine halb geschriebene Datei konnte übernommen werden
+        # (db_pg las „Expecting value …"). Jetzt immer nur ein Schreiber, vollständig auf Platte, dann atomar ersetzen.
+        with _SPEICHER_SPERRE:
+            self._save_gesperrt(invoices)
+
+    def _save_gesperrt(self, invoices: dict[str, Invoice]):
+        data = {inv_id: self._serialize_invoice(inv) for inv_id, inv in list(invoices.items())}
         if not data and self.invoices_file.exists():
             try:
                 with open(self.invoices_file, "r", encoding="utf-8") as f:
@@ -288,11 +325,7 @@ class InvoiceStore:
                       f"gespeicherte Rechnung(en) überschreiben — Datei bleibt unverändert.",
                       flush=True)
                 return
-        tmp = str(self.invoices_file) + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        # Atomarer Schreibvorgang
-        os.replace(tmp, str(self.invoices_file))
+        _atomar_schreiben(self.invoices_file, data)
 
     def load(self) -> dict[str, Invoice]:
         """Laedt alle Rechnungen von der Festplatte."""
@@ -318,10 +351,8 @@ class InvoiceStore:
 
     def save_state(self, state: dict):
         """Speichert zusaetzlichen Zustand (Duplikate, Suggestions etc.)."""
-        tmp = str(self.state_file) + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(state, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, str(self.state_file))
+        with _SPEICHER_SPERRE:
+            _atomar_schreiben(self.state_file, state)
 
     def load_state(self) -> dict:
         """Laedt zusaetzlichen Zustand."""

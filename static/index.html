@@ -231,6 +231,7 @@ th.c,td.c{text-align:center}
   <div class="nav-item" onclick="navigate('mails')"><span class="icon">&#128231;</span>Mails</div>
   <div style="border-top:1px solid var(--border);margin:12px 0"></div>
   <div class="nav-item" onclick="navigate('settings')"><span class="icon">&#9881;</span>Einstellungen</div>
+  <div class="nav-item" onclick="location.href='/logout'" title="Sitzung beenden" data-rueckmeldung="aus"><span class="icon">&#9211;</span>Abmelden</div>
 </div>
 
 <div class="main">
@@ -479,7 +480,8 @@ th.c,td.c{text-align:center}
         <input id="c-preceding" placeholder="RE-2026-00012 – leer lassen für eine freie Gutschrift ohne Bezug" title="Wird eine Rechnungsnummer angegeben, mindert die Gutschrift deren offenen Betrag. Tipp: Gutschriften zu einer bestehenden Rechnung lassen sich bequemer im Rechnungsdetail über „↺ Gutschrift“ anlegen."></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
-      <div class="form-row"><label id="c-number-label">Rechnungsnummer</label><input id="c-number" placeholder="Wird automatisch vergeben" readonly style="background:var(--bg3)"></div>
+      <div class="form-row"><label id="c-number-label">Rechnungsnummer</label><input id="c-number" placeholder="Wird automatisch vergeben" readonly style="background:var(--bg3)">
+        <input id="c-number-name" placeholder="Name in der Nummer" title="Nummer + Name (19.10.2026): wird aus Firma bzw. Nachname vorgeschlagen, hier änderbar" oninput="this.dataset.manuell=this.value?'1':'';updateInvoiceNumber()" style="margin-top:4px;font-size:12px"></div>
       <div class="form-row"><label>Rechnungsdatum</label><input type="date" id="c-date"></div>
       <div class="form-row"><label>Leistungsdatum</label><input type="date" id="c-delivery-date" title="Tag/Ende der Leistung (BT-72)"></div>
       <div class="form-row"><label>Zahlungsziel</label>
@@ -802,10 +804,29 @@ th.c,td.c{text-align:center}
         <div class="form-row"><label>VK-Preis (netto)</label><input id="prod-vk" type="number" step="0.01" value="0" placeholder="0.00"></div>
         <div class="form-row"><label>Einheit</label><input id="prod-unit" value="Stk" placeholder="Stk"></div>
       </div>
+      <div style="display:grid;grid-template-columns:200px 1fr;gap:8px;margin-top:8px">
+        <div class="form-row"><label>Status</label>
+          <select id="prod-status">
+            <option value="AKTIV">AKTIV &mdash; in Angeboten w&auml;hlbar</option>
+            <option value="ENTWURF">ENTWURF &mdash; erst Preis festlegen</option>
+            <option value="INAKTIV">INAKTIV &mdash; stillgelegt</option>
+          </select>
+        </div>
+      </div>
       <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-size:13px;cursor:pointer">
         <input type="checkbox" id="prod-contract-separate" style="width:auto;margin-top:3px">
         <span>Vertrag separat (nicht ins Angebot)
           <span style="display:block;font-size:11px;color:var(--text2);margin-top:2px">Für BAFA/KFW-Förderangebote: Der Dienstvertrag wird NICHT ins Angebot-PDF eingebunden, sondern kann beim Versand per Klick als separater Anhang beigefügt werden. Die AGB bleiben Bestandteil des Angebots.</span>
+        </span>
+      </label>
+      <div class="form-row" style="margin-top:8px"><label>Vertrag zu diesem Artikel</label>
+        <select id="prod-vertrag-datei" multiple size="3"></select>
+        <span style="display:block;font-size:11px;color:var(--text2);margin-top:2px">Welche Vertrags-PDFs beim Versand vorbelegt werden (Strg-Klick für mehrere, z. B. Vertrag Energieberatung + Bestätigung Vor-Ort-Begehung). Nichts gewählt = Standardvertrag. Die Liste stammt aus den Angebotseinstellungen.</span>
+      </div>
+      <label style="display:flex;align-items:flex-start;gap:8px;margin-top:8px;font-size:13px;cursor:pointer">
+        <input type="checkbox" id="prod-fremdleistung" style="width:auto;margin-top:3px">
+        <span>Fremdleistung (wird durchgereicht)
+          <span style="display:block;font-size:11px;color:var(--text2);margin-top:2px">Leistung eines Fachplaners, die unver&auml;ndert weitergereicht wird &mdash; Preis je Vorhaben. Bleibt in Auswertungen vom eigenen Honorar getrennt.</span>
         </span>
       </label>
       <div style="margin-top:10px;font-size:11px;color:var(--text2);padding:6px 10px;background:var(--bg-soft,#fafbfc);border-left:3px solid var(--accent);border-radius:4px">
@@ -836,7 +857,7 @@ th.c,td.c{text-align:center}
         </div>
       </div>
       <table class="data-table"><thead><tr>
-        <th>Art.-Nr.</th><th>Bezeichnung</th><th>Kategorie</th><th style="text-align:right">EK</th><th style="text-align:right">VK</th><th>Einh.</th><th style="text-align:right">Bestand</th><th style="width:50px"></th>
+        <th>Art.-Nr.</th><th>Bezeichnung</th><th>Kategorie</th><th style="text-align:right">EK</th><th style="text-align:right">VK</th><th>Einh.</th><th style="text-align:right">Bestand</th><th>Status</th><th style="width:50px"></th>
       </tr></thead><tbody id="prod-table-body"></tbody></table>
     </div>
   </div>
@@ -983,6 +1004,8 @@ th.c,td.c{text-align:center}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <h3 style="margin:0">Vorgangsliste</h3>
       <div style="display:flex;gap:8px;align-items:center">
+        <input id="txn-search" placeholder="Suchen: Nr., Betreff, Kunde, Belegnummer …" oninput="renderTxnTable()" style="font-size:12px;padding:4px 8px;width:240px" autocomplete="off">
+        <span id="txn-search-count" style="font-size:11px;color:var(--text2);white-space:nowrap"></span>
         <select id="txn-filter-status" onchange="loadTransactions()" style="font-size:12px;padding:2px 6px">
           <option value="">Alle Status</option>
           <option value="NEU">Neu</option>
@@ -1004,6 +1027,11 @@ th.c,td.c{text-align:center}
   <div class="topbar"><div>
     <h2 id="txn-detail-title">Vorgang</h2>
     <div class="sub" id="txn-detail-sub"></div>
+    <!-- Bleibt stehen, bis der Vorgang gewechselt wird: WAS ging an WEN, und in welchem
+         Vorgang man sich weiterhin befindet (22.09.2026 — drei Freigaben landeten
+         nacheinander beim selben Kunden, weil die Maske nach dem Senden neu aussieht). -->
+    <div id="txn-versand-hinweis" style="display:none;margin-top:8px;padding:8px 12px;border-radius:6px;
+         background:var(--success-bg,#ECFDF5);border:1px solid var(--success,#059669);font-size:12.5px"></div>
   </div>
   <div style="display:flex;gap:8px">
   <button onclick="openVertrag()" style="font-size:12px;padding:4px 12px" title="Dienstvertrag (gefüllt) im neuen Tab zum Drucken &amp; Unterschreiben">&#128196; Dienstvertrag</button>
@@ -1286,6 +1314,19 @@ th.c,td.c{text-align:center}
 </div>
 
 <!-- ═══ Bank-Match-Dialog ═══ -->
+<!-- Zuordnung prüfen (16.10.2026: „beim Anklicken auf die Rechnung wird die zur Prüfung geöffnet und dann erst bestätigt") -->
+<div class="modal-overlay" id="bank-pruef-modal" style="z-index:120">
+  <div class="modal" style="max-width:1100px;width:96vw;height:90vh;display:flex;flex-direction:column;gap:10px">
+    <h3 style="margin:0">Zuordnung prüfen</h3>
+    <div id="bank-pruef-daten" style="font-size:13px"></div>
+    <iframe id="bank-pruef-pdf" title="Rechnung" style="flex:1;width:100%;border:1px solid var(--border,#E2E8F0);border-radius:6px;background:#fff"></iframe>
+    <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
+      <a id="bank-pruef-tab" href="#" target="_blank" style="margin-right:auto;font-size:12px">PDF in neuem Tab öffnen</a>
+      <button onclick="bankPruefSchliessen()">Abbrechen</button>
+      <button class="primary" id="bank-pruef-ok" onclick="bankPruefBestaetigen()">✓ Zuordnung bestätigen</button>
+    </div>
+  </div>
+</div>
 <div class="modal-overlay" id="bank-match-modal">
   <div class="modal" style="max-width:640px;width:96%">
     <h3>🔗 Buchung verlinken</h3>
@@ -1658,6 +1699,11 @@ th.c,td.c{text-align:center}
           <select id="s-mandant-currency"><option value="EUR" selected>EUR</option><option value="CHF">CHF</option><option value="USD">USD</option></select>
         </div>
       </div>
+      <label id="s-zahlkonto-box" style="display:flex;gap:10px;align-items:flex-start;margin-top:10px;padding:10px 12px;border:1px solid var(--border,#ddd);border-radius:8px;cursor:pointer">
+        <input type="checkbox" id="s-zahlkonto-alt" onchange="toggleZahlkonto(this.checked)" style="margin-top:3px">
+        <span><b>Kundenzahlungen auf <span id="s-zahlkonto-alt-bank">Zweitkonto</span>: <span id="s-zahlkonto-alt-iban" style="font-family:var(--mono,monospace)">—</span></b><br>
+        <span style="font-size:12px;color:var(--text2)">Ist das Häkchen gesetzt, stehen auf allen <b>neuen</b> Rechnungen, im GiroCode und in den Zahlungsdaten dieses Konto. Ohne Häkchen gilt die IBAN oben. Verschickte Rechnungen bleiben unverändert. <span id="s-zahlkonto-status"></span></span></span>
+      </label>
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="primary" onclick="saveMandantSettings()">Stammdaten speichern</button>
         <span id="mandant-save-result" style="font-size:12px;line-height:32px"></span>
@@ -1977,7 +2023,8 @@ th.c,td.c{text-align:center}
     <div style="font-size:11px;color:var(--text2,#64748B);margin:-4px 0 4px">Text vor dem Versand beliebig anpassen oder persönlichen Zusatztext einfügen. Das Dokument wird nach der Freigabe als PDF angehängt.</div>
     <label id="txn-send-merge-row" style="display:none;align-items:flex-start;gap:8px;margin-top:12px;font-size:13px;cursor:pointer;padding:10px 12px;background:var(--bg2,#F8FAFC);border:1px solid var(--border,#E2E8F0);border-radius:var(--radius,6px)">
       <input type="checkbox" id="txn-send-merge-contract" style="width:auto;margin-top:3px">
-      <span>&#128196; Dienstvertrag beif&uuml;gen
+      <span>&#128196; Vertrag beif&uuml;gen
+        <div id="txn-send-vertrag-dateien" style="display:none;margin-top:4px;font-size:12px" title="Welche Verträge mitgehen — Auswahl aus den Angebotseinstellungen"></div>
         <span id="txn-send-vertrag-hinweis" style="display:block;font-size:11px;color:var(--text2);margin-top:2px"></span>
       </span>
     </label>
@@ -1996,7 +2043,7 @@ th.c,td.c{text-align:center}
       <button onclick="previewTxnSendPdf()" style="background:var(--accent);color:#fff;border:none">&#128196; PDF prüfen</button>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button onclick="hideTxnSendDialog()">Abbrechen</button>
-        <button class="primary" id="txn-send-confirm-btn" onclick="confirmTxnSend()" disabled title="Bitte zuerst die PDF prüfen">Freigeben + Senden</button>
+        <button class="primary" id="txn-send-confirm-btn" onclick="confirmTxnSend()" disabled title="Bitte zuerst die PDF prüfen">Freigeben + Senden</button><span id="txn-send-an" style="font-size:11px;color:var(--text2);margin-left:8px"></span>
       </div>
     </div>
   </div>
@@ -2335,6 +2382,35 @@ function invPartnerCell(i) {
 }
 
 // ── Detail ──
+/* Zahlkonto je Rechnung (27.10.2026): in der Karte „Zahlung" das Zweitkonto als Alternative zum Anhaken.
+ * Gilt nur für DIESE Rechnung (PDF, GiroCode, XRechnung), gesperrt nach Versand/Export/Bezahlung. */
+function zahlkontoWahlHtml(inv) {
+  const z = inv.zahlkonto;
+  if (!z || !z.alt || !z.alt.iban) return '';
+  const std = z.standard || {}, alt = z.alt;
+  const zeile = (k, an) => '<b>' + esc(k.bank || '') + '</b> <span style="font-family:var(--mono,monospace)">' + formatIban(k.iban) + '</span>' + (an ? ' <span style="color:var(--success)">✓ auf der Rechnung</span>' : '');
+  return '<div style="grid-column:1/-1;margin-top:8px;padding:8px 10px;border:1px solid var(--border,#ddd);border-radius:8px;font-size:12px;line-height:1.6">'
+    + '<div>Konto: ' + zeile(std, !z.auf_alt) + '</div>'
+    + '<label style="display:flex;gap:8px;align-items:flex-start;cursor:' + (z.gesperrt ? 'not-allowed' : 'pointer') + '">'
+    + '<input type="checkbox" ' + (z.auf_alt ? 'checked ' : '') + (z.gesperrt ? 'disabled ' : '') + 'onchange="zahlkontoRechnungSetzen(this)" style="margin-top:3px">'
+    + '<span>Alternative: Zahlung auf ' + zeile(alt, z.auf_alt)
+    + (z.gesperrt ? '<br><span style="color:var(--text2)">nicht mehr änderbar — ' + esc(z.grund || '') + '</span>'
+                  : '<br><span style="color:var(--text2)">gilt nur für diese Rechnung: PDF, GiroCode und XRechnung tragen dann dieses Konto</span>')
+    + '</span></label></div>';
+}
+async function zahlkontoRechnungSetzen(cb) {
+  const an = cb.checked; cb.disabled = true;
+  try {
+    const r = await fetch(API + '/api/invoices/' + encodeURIComponent(currentInvoiceId) + '/zahlkonto', {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({alt: an})});
+    const j = await r.json();
+    if (!r.ok || !j.success) throw new Error(j.error || ('HTTP ' + r.status));
+    await openDetail(currentInvoiceId);
+  } catch (e) {
+    cb.checked = !an; cb.disabled = false;
+    alert('Zahlkonto nicht geändert: ' + e.message);
+  }
+}
 async function openDetail(id) {
   currentInvoiceId = id;
   const res = await fetch(API+`/api/invoices/${id}`);
@@ -2450,7 +2526,8 @@ async function openDetail(id) {
     <span style="color:var(--text2)">IBAN</span><span>${p.iban||'—'}</span>
     <span style="color:var(--text2)">BIC</span><span>${p.bic||'—'}</span>
     <span style="color:var(--text2)">Fällig</span><span>${p.due_date||'—'}</span>
-    <span style="color:var(--text2)">Bedingung</span><span>${p.terms||'—'}</span>`;
+    <span style="color:var(--text2)">Bedingung</span><span>${p.terms||'—'}</span>`
+    + zahlkontoWahlHtml(inv);
 
   document.getElementById('det-status').innerHTML = `${statusBadge(inv.status, inv.direction)} <span style="font-size:12px;color:var(--text2);margin-left:8px">Zugewiesen: ${inv.assigned_to||'—'}</span>`;
 
@@ -3109,7 +3186,7 @@ async function confirmOcrInvoice() {
 
 // ── Rechnung erstellen ──
 let lineCount = 0;
-function addLine(name, qty, price, tax) {
+function addLine(name, qty, price, tax, artNr) {
   lineCount++;
   const row = document.createElement('tr');
   row.id = 'line-' + lineCount;
@@ -3119,14 +3196,21 @@ function addLine(name, qty, price, tax) {
     '<option value="'+p.art_nr+'">'+esc(p.art_nr+' '+p.name)+' ('+fmt(p.vk_price)+' €)</option>'
   ).join('');
   row.innerHTML = `<td><input id="cl-name-${lc}" placeholder="Bezeichnung" value="${esc(name||'Dienstleistung')}" style="width:100%">
-      <select onchange="applyProductToLine(${lc}, this.value)" style="font-size:11px;padding:1px 4px;margin-top:2px;max-width:200px">
+      <input type="hidden" id="cl-artnr-${lc}" value="${esc(artNr||'')}">
+      <select id="cl-prodsel-${lc}" onchange="applyProductToLine(${lc}, this.value)" style="font-size:11px;padding:1px 4px;margin-top:2px;max-width:200px">
         <option value="">Produkt...</option>${prodOpts}
-      </select></td>
+      </select>
+      <span id="cl-artlabel-${lc}" style="font-size:10px;color:var(--text2);margin-left:6px"></span></td>
     <td><input id="cl-qty-${lc}" type="number" value="${qty||1}" min="0.01" step="1" style="text-align:right"></td>
     <td><input id="cl-price-${lc}" type="number" value="${price||100}" step="0.01" style="text-align:right"></td>
     <td><input id="cl-tax-${lc}" type="number" value="${_satz(tax)}" style="text-align:right"></td>
     <td><button onclick="document.getElementById('line-${lc}').remove()" style="color:var(--danger);border:0;background:0">&#10007;</button></td>`;
   document.getElementById('c-lines').appendChild(row);
+  if (artNr) {
+    const _p = (typeof _products !== 'undefined') ? _products.find(x => x.art_nr === artNr) : null;
+    const _sel = document.getElementById('cl-prodsel-' + lc); if (_sel) _sel.value = artNr;
+    _setLineArtNr(lc, artNr, _p && _p.fremdleistung);
+  }
 }
 
 function addLineFromProduct() {
@@ -3135,7 +3219,7 @@ function addLineFromProduct() {
   const p = _products.find(x => x.art_nr === sel.value);
   if (!p) return;
   if (p.calc_mode === 'foerder') { openFoerderRechner(null, p); sel.value = ''; return; }
-  addLine(p.name, 1, p.vk_price, _satz(p.tax_rate));
+  addLine(p.name, 1, p.vk_price, _satz(p.tax_rate), p.art_nr);
   sel.value = '';
   toast(p.name + ' hinzugefügt');
 }
@@ -3308,13 +3392,25 @@ function addSonderleistung() {
 }
 
 function applyProductToLine(lc, artNr) {
-  if (!artNr) return;
+  if (!artNr) { _setLineArtNr(lc, ''); return; }
   const p = _products.find(x => x.art_nr === artNr);
   if (!p) return;
   if (p.calc_mode === 'foerder') { openFoerderRechner(lc, p); return; }
   document.getElementById('cl-name-'+lc).value = p.name;
   document.getElementById('cl-price-'+lc).value = p.vk_price;
   document.getElementById('cl-tax-'+lc).value = _satz(p.tax_rate);
+  _setLineArtNr(lc, p.art_nr, p.fremdleistung);
+}
+
+// Artikelnummer an der Position festhalten (18.09.2026): sie wandert in die
+// Rechnung und macht auswertbar, welche Leistung verkauft wurde.
+function _setLineArtNr(lc, artNr, fremd) {
+  const h = document.getElementById('cl-artnr-'+lc); if (h) h.value = artNr || '';
+  const l = document.getElementById('cl-artlabel-'+lc);
+  if (l) l.innerHTML = artNr
+    ? esc(artNr) + (fremd ? ' <span style="color:#1B4B82;font-weight:600">durchgereicht</span>' : '')
+      + ' <a href="#" onclick="_setLineArtNr(' + lc + ',\'\');document.getElementById(\'cl-prodsel-' + lc + '\').value=\'\';return false" title="Artikelbezug entfernen" style="color:var(--text2)">&#10005;</a>'
+    : '';
 }
 
 function fillProductPicker() {
@@ -3356,8 +3452,10 @@ async function _generateInvoiceInner(download=false) {
     const id = tr.id.split('-')[1];
     const qty = parseFloat(document.getElementById('cl-qty-'+id).value)||1;
     const price = parseFloat(document.getElementById('cl-price-'+id).value)||0;
+    const _art = (document.getElementById('cl-artnr-'+id)||{}).value || '';
     lines.push({name:document.getElementById('cl-name-'+id).value, quantity:qty, price:price,
-      net: Math.round(qty*price*100)/100, tax_rate:_satz(document.getElementById('cl-tax-'+id).value)});
+      net: Math.round(qty*price*100)/100, tax_rate:_satz(document.getElementById('cl-tax-'+id).value),
+      item_id:_art});
   });
   const body = {
     number: document.getElementById('c-number').value,
@@ -3393,6 +3491,7 @@ async function _generateInvoiceInner(download=false) {
     lines: lines,
     type: _docType(),
     preceding_invoice: _docType() === '381' ? ((document.getElementById('c-preceding')||{}).value || '').trim() : '',
+    nur_pruefen: !download,   // „Validieren" prüft nur — angelegt wird erst mit „XRechnung erzeugen" (09.10.2026)
   };
   const res = await fetch(API+'/api/generate', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
   const el = document.getElementById('c-result');
@@ -3403,6 +3502,7 @@ async function _generateInvoiceInner(download=false) {
 
   el.scrollIntoView({behavior:'smooth', block:'nearest'});
   toast((download ? 'Rechnung erstellt: ' : 'Geprüft: ') + res.number);
+  if (res.geprueft) { el.insertAdjacentHTML('beforeend', '<div style="font-size:12px;color:var(--text2);margin-top:6px">Nur geprüft — es wurde noch keine Rechnung angelegt und keine Nummer vergeben. Anlegen mit „XRechnung erzeugen".</div>'); return; }
 
   // Nummernfeld sofort auf die nächste freie Nummer stellen — sonst schickt ein
   // zweites Anlegen dieselbe Nummer erneut und läuft in „existiert bereits" (409)
@@ -3424,7 +3524,13 @@ async function loadArchive() {
   const q = (document.getElementById('arch-search')?.value || '').toLowerCase();
   const filterStatus = document.getElementById('arch-filter-status')?.value || '';
   const filterDir    = document.getElementById('arch-filter-dir')?.value || '';
-  const res = await fetch(API+'/api/archive').then(r=>r.json());
+  const [res, _sm] = await Promise.all([
+    fetch(API+'/api/archive').then(r=>r.json()),
+    fetch(API+'/api/sent-mails').then(r=>r.json()).catch(()=>({mails:[]}))
+  ]);
+  // Letzter Versand je Rechnungsnummer (Liste kommt neueste zuerst) — für „Nochmal senden“
+  const _lastMail = {};
+  (_sm.mails || []).forEach(m => { if (m.reference && !_lastMail[m.reference]) _lastMail[m.reference] = m; });
   let records = res.records.slice().reverse();  // neueste Rechnung zuoberst
   const totalBeforeFilter = records.length;
 
@@ -3487,6 +3593,15 @@ async function loadArchive() {
     const preceding = meta.preceding_invoice || '';
 
     let actionsHtml = `<button onclick="archiveView('${invId}')" style="font-size:11px;padding:3px 8px">Beleg</button>`;
+    if (invId && (r.direction || '').toUpperCase() === 'AUSGANG') {
+      const lm = _lastMail[r.invoice_number];
+      const dl = lm ? (lm.delivery || 'ANGENOMMEN') : '';
+      const bad = dl === 'UNZUSTELLBAR';
+      const tip = lm
+        ? 'Zuletzt gesendet ' + (lm.sent_at || '').substring(0,16).replace('T',' ') + ' an ' + (lm.to || '') + ' – ' + dl + (lm.delivery_reason ? ': ' + lm.delivery_reason : '')
+        : 'Noch nicht per Mail versendet';
+      actionsHtml += ` <button onclick="archiveResend('${invId}')" title="${esc(tip).replace(/"/g,'&quot;')}" style="font-size:11px;padding:3px 8px${bad ? ';color:#fff;background:var(--danger);border-color:var(--danger)' : ''}">${bad ? '&#9888; Unzustellbar – nochmal senden' : (lm ? '&#9993; Nochmal senden' : '&#9993; Senden')}</button>`;
+    }
     if (r.stornierbar) {
       actionsHtml += ` <button onclick="stornoFromArchive('${invId}')" style="font-size:11px;padding:3px 8px;color:var(--danger);border-color:var(--danger)">Storno</button>`;
     }
@@ -3521,6 +3636,19 @@ async function loadArchive() {
       <td onclick="event.stopPropagation()" style="white-space:nowrap">${actionsHtml}</td>
     </tr>`;
   }).join('') || '<tr><td colspan="10" style="text-align:center;color:var(--text3);padding:20px">Keine Einträge</td></tr>';
+}
+
+async function archiveResend(invId) {
+  // Wie sendStornoFromList: Detail laden, dann den normalen Versand-Dialog (PDF-Prüfung, Anrede, Text)
+  currentInvoiceId = invId;
+  try {
+    const inv = await fetch(API + '/api/invoices/' + invId).then(r => r.json());
+    if (!inv || inv.error) throw new Error(inv && inv.error);
+    window._currentInvoiceData = inv;
+  } catch(e) {
+    toast('Rechnung konnte nicht geladen werden', 'error'); return;
+  }
+  showSendDialog();
 }
 
 function archiveClick(invId) {
@@ -4073,8 +4201,13 @@ async function loadMandantSettings() {
     document.getElementById('s-mandant-email').value = m.email || '';
     document.getElementById('s-mandant-contact').value = m.contact_name || '';
     document.getElementById('s-mandant-phone').value = m.contact_phone || '';
-    document.getElementById('s-mandant-iban').value = m.iban || '';
-    document.getElementById('s-mandant-bic').value = m.bic || '';
+    document.getElementById('s-mandant-iban').value = m.iban_standard || m.iban || '';
+    document.getElementById('s-mandant-bic').value = m.bic_standard || m.bic || '';
+    const za = m.zahlkonto_alt_info || {};
+    if (za.iban) document.getElementById('s-zahlkonto-alt-iban').textContent = formatIban(za.iban);
+    if (za.bank) document.getElementById('s-zahlkonto-alt-bank').textContent = za.bank;
+    document.getElementById('s-zahlkonto-alt').checked = !!m.zahlkonto_alt_aktiv;
+    zahlkontoMarkieren(!!m.zahlkonto_alt_aktiv);
     if (m.currency) document.getElementById('s-mandant-currency').value = m.currency;
   } catch(e) {}
 }
@@ -4087,6 +4220,23 @@ async function resetAllData() {
     loadDashboard();
   } else {
     document.getElementById('reset-result').innerHTML = '<span style="color:var(--danger)">Fehler beim Loeschen</span>';
+  }
+}
+function zahlkontoMarkieren(an) {
+  const b = document.getElementById('s-zahlkonto-box');
+  if (b) { b.style.background = an ? 'rgba(22,163,74,.08)' : ''; b.style.borderColor = an ? '#16a34a' : ''; }
+}
+async function toggleZahlkonto(an) {
+  const st = document.getElementById('s-zahlkonto-status');
+  try {
+    const res = await fetch(API+'/api/mandant/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({zahlkonto_alt_aktiv: an})}).then(r=>r.json());
+    if (!res.saved) throw new Error('nicht gespeichert');
+    zahlkontoMarkieren(an);
+    st.innerHTML = '<span style="color:var(--success)">&#10003; ' + (an ? 'Zweitkonto aktiv' : 'Standardkonto aktiv') + '</span>';
+    toast(an ? 'Kundenzahlungen jetzt auf das Zweitkonto' : 'Kundenzahlungen wieder auf das Standardkonto');
+  } catch(e) {
+    document.getElementById('s-zahlkonto-alt').checked = !an;
+    st.innerHTML = '<span style="color:var(--danger)">Fehler beim Speichern</span>';
   }
 }
 async function saveMandantSettings() {
@@ -4128,6 +4278,7 @@ async function fillSellerFromMandant() {
     const nr = await fetch(API+'/api/mandant/next-number?type=' + _docType()).then(r=>r.json());
     if (nr.number) {
       window._baseInvoiceNumber = nr.number;
+      const _nf = document.getElementById('c-number-name'); if (_nf) { _nf.dataset.manuell = ''; _nf.value = ''; }
       updateInvoiceNumber();
     }
   } catch(e) {}
@@ -4416,14 +4567,34 @@ function exportBuyersCsv() {
   toast('CSV exportiert: ' + _buyers.length + ' Empfaenger');
 }
 // _selectedBuyerId declared at top
-function selectBuyer(idx) {
+// 24.09.2026 (Raphael Becker): ein seit dem Morgen offener Tab zeigte den Kunden OHNE die Telefonnummer, die
+// das Kundendaten-Formular um 13:48 eingetragen hatte; beim Speichern schrieb der Tab Straße und Referenz auf den
+// alten Stand zurück. Deshalb: beim Auswählen den Datensatz FRISCH vom Server holen, und beim Speichern prüfen,
+// ob er sich seit dem Öffnen geändert hat.
+var _buyerFormBasis = null;   // Server-Stand beim Öffnen (Vergleichsfelder als JSON)
+function _buyerVergleich(b) {
+  return JSON.stringify(['name','street','house_number','post_code','city','email','phone','reference','salutation','contact_name','vat_id']
+    .reduce((o, k) => { o[k] = (b && b[k] || '').toString().trim(); return o; }, {}));
+}
+async function _buyerFrisch(id) {
+  try {
+    const res = await fetch(API + '/api/buyers?_=' + Date.now(), { cache: 'no-store' }).then(r => r.json());
+    const list = res.buyers || [];
+    const f = list.find(x => x.id === id);
+    if (f) { const i = _buyers.findIndex(x => x.id === id); if (i >= 0) _buyers[i] = f; }
+    return f || null;
+  } catch (e) { return null; }
+}
+async function selectBuyer(idx) {
   if (idx === '' || idx === undefined) {
-    _selectedBuyerId = null;
+    _selectedBuyerId = null; _buyerFormBasis = null;
     document.getElementById('btn-buyer-update').disabled = true;
     return;
   }
-  const b = _buyers[parseInt(idx)];
+  let b = _buyers[parseInt(idx)];
   if (!b) return;
+  b = (await _buyerFrisch(b.id)) || b;
+  _buyerFormBasis = _buyerVergleich(b);
   _selectedBuyerId = b.id;
   document.getElementById('btn-buyer-update').disabled = false;
   const _set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
@@ -4442,6 +4613,7 @@ function selectBuyer(idx) {
   if (b.is_private && !b.reference) {
     document.getElementById('c-buyer-ref').value = 'PRIV-' + b.id;
   }
+  { const _nf = document.getElementById('c-number-name'); if (_nf) _nf.dataset.manuell = ''; }
   document.getElementById('buyer-save-result').innerHTML = `<span style="color:var(--text2)">ID: ${b.id}${b.is_private?' · <span style="color:var(--info)">Privatperson</span>':''}</span>`;
   updateInvoiceNumber();
 }
@@ -4463,6 +4635,19 @@ function _buyerFormPayload() {
 }
 async function updateSelectedBuyer() {
   if (!_selectedBuyerId) { toast('Kein Empfaenger ausgewaehlt', 'error'); return; }
+  // Hat jemand anders (Kundendaten-Formular, PM, zweiter Tab) den Datensatz seit dem Öffnen geändert?
+  const frisch = await _buyerFrisch(_selectedBuyerId);
+  if (frisch && _buyerFormBasis && _buyerVergleich(frisch) !== _buyerFormBasis) {
+    const alt = JSON.parse(_buyerFormBasis), jetzt = JSON.parse(_buyerVergleich(frisch));
+    const diff = Object.keys(jetzt).filter(k => alt[k] !== jetzt[k]).map(k => k + ': „' + (alt[k] || '—') + '" → „' + (jetzt[k] || '—') + '"');
+    if (!confirm('Dieser Kunde wurde zwischenzeitlich geändert (z. B. über das Kundendaten-Formular):\n\n' + diff.join('\n')
+      + '\n\nOK = deine Eingaben überschreiben das · Abbrechen = Formular mit dem aktuellen Stand neu füllen')) {
+      const i = _buyers.findIndex(x => x.id === _selectedBuyerId);
+      if (i >= 0) await selectBuyer(String(i));
+      toast('Formular auf den aktuellen Stand gesetzt');
+      return;
+    }
+  }
   const res = await fetch(API+'/api/buyers/'+_selectedBuyerId, {
     method:'PUT', headers:{'Content-Type':'application/json'},
     body: JSON.stringify(_buyerFormPayload())
@@ -4470,6 +4655,7 @@ async function updateSelectedBuyer() {
   if (res.saved) {
     document.getElementById('buyer-save-result').innerHTML = `<span style="color:var(--success)">&#10003; Aktualisiert (${_selectedBuyerId})</span>`;
     toast('Empfaenger aktualisiert');
+    _buyerFormBasis = _buyerVergleich(res.buyer || _buyerFormPayload());
     loadBuyers();
   } else {
     toast(res.error || 'Fehler', 'error');
@@ -4519,11 +4705,45 @@ async function onDocTypeChange() {
     if (nr.number) { window._baseInvoiceNumber = nr.number; updateInvoiceNumber(); }
   } catch(e) {}
 }
+// Rechnungsnummer = Nummer + Name (19.10.2026, auch für Energieausweise): Firma → erstes prägendes Wort,
+// Privatperson → Nachname. Kundennr./EA-ID bleiben in der Buyer Reference (XRechnung BT-10) und in der Notiz —
+// darüber laufen Zahlungsabgleich und .team-Zuordnung, nicht über die Nummer. Gleiche Regel serverseitig: _name_fuer_nummer().
+const _NR_FORM = new Set(['gmbh','mbh','ag','kg','ohg','gbr','egbr','ug','se','ev','ek','eg','kgaa','co','ltd','inc','sarl','sàrl','partg','partgmbb','gmbhcokg']);
+const _NR_ANREDE = /^(herr|herrn|frau|familie|fam|eheleute|dr|prof|dipl|diplling|ing|und|u)$/i;
+const _NR_ALLGEMEIN = /^(regionalentwicklungsgesellschaft|gesellschaft|ingenieur[b](?:ü|ue)ro|büro|buero|firma|immobilien|hausverwaltung|verwaltung|finanzkontor|property|retail|management)$/i;
+function _nameFuerNummer(firma, kontakt) {
+  const roh = t => (t || '').split(/[\s,;\/|&+]+/).map(w => w.replace(/[^A-Za-zÄÖÜäöüßÀ-ÿ0-9-]/g, '').replace(/^-+|-+$/g, '')).filter(Boolean);
+  const klein = w => w.toLowerCase().replace(/-/g, '');
+  const ohneAnrede = t => roh(t).filter(w => !_NR_ANREDE.test(klein(w)) && w.length > 1);
+  firma = (firma || '').trim(); kontakt = (kontakt || '').trim();
+  const fw = roh(firma);
+  const istFirma = fw.some(w => _NR_FORM.has(klein(w))) || /\s-\s|\||&|\+|\bc\/o\b/i.test(firma) || (fw.length > 4 && !/\bund\b/i.test(firma));
+  let n = '';
+  if (firma && istFirma) {
+    const kern = ohneAnrede(firma).filter(w => !_NR_FORM.has(klein(w)) && !/^\d/.test(w));
+    const kn = ohneAnrede(kontakt); const nach = kn[kn.length - 1] || '';
+    // Ansprechpartner-Nachname steckt im Firmennamen (Charlie Manz Blockhaus GmbH, Kontakt Manz) → der
+    n = (nach && kern.some(w => klein(w) === klein(nach))) ? kern.find(w => klein(w) === klein(nach))
+      : (kern.find(w => !_NR_ALLGEMEIN.test(w)) || kern[0] || '');
+  } else {
+    const w = ohneAnrede(firma || kontakt);
+    const kn = ohneAnrede(kontakt); const nach = kn[kn.length - 1] || '';
+    // „Radinger Michael“ mit Kontakt „Michael Radinger“ → Radinger; sonst das letzte Wort = Nachname
+    n = (nach && w.some(x => klein(x) === klein(nach))) ? w.find(x => klein(x) === klein(nach)) : (w[w.length - 1] || '');
+  }
+  if (n.length > 3 && n === n.toUpperCase()) n = n.charAt(0) + n.slice(1).toLowerCase();   // VELTEN → Velten
+  return n.slice(0, 30);
+}
 function updateInvoiceNumber() {
   const base = window._baseInvoiceNumber || '';
-  const ref = (document.getElementById('c-buyer-ref').value || '').trim();
-  document.getElementById('c-number').value = ref ? base + '-' + ref : base;
+  const nf = document.getElementById('c-number-name');
+  if (nf && !nf.dataset.manuell) {
+    nf.value = _nameFuerNummer(document.getElementById('c-buyer-name')?.value, document.getElementById('c-buyer-contact')?.value);
+  }
+  const name = (nf ? nf.value : '').trim().replace(/[^A-Za-zÄÖÜäöüßÀ-ÿ0-9-]/g, '');
+  document.getElementById('c-number').value = (base && name) ? base + '-' + name : base;
 }
+document.addEventListener('input', e => { if (e.target && (e.target.id === 'c-buyer-name' || e.target.id === 'c-buyer-contact')) updateInvoiceNumber(); });
 
 // ── Lieferanten ──
 // _suppliers declared at top
@@ -4834,7 +5054,21 @@ function renderTxnTable() {
     (b.id||'').localeCompare(a.id||''));
   const statusMap = {NEU:'neu',IN_BEARBEITUNG:'pruefung',ABGESCHLOSSEN:'freigegeben',STORNIERT:'abgelehnt'};
   const statusLabel = {NEU:'Neu',IN_BEARBEITUNG:'In Bearbeitung',ABGESCHLOSSEN:'Abgeschlossen',STORNIERT:'Storniert'};
-  tbody.innerHTML = _transactions.map(t => {
+  /* Suche in der Vorgangsliste (09.10.2026): jedes Wort muss vorkommen — in Nummer, Betreff, Kunde, Lieferant, Status, Stufe, Datum
+   * oder irgendwo in den Belegen des Vorgangs (Belegnummern, Beträge, Texte). Gesucht wird in den bereits geladenen Vorgängen. */
+  const _q = (document.getElementById('txn-search')?.value || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const _liste = !_q.length ? _transactions : _transactions.filter(t => {
+    if (!t._such) {
+      const cur = findCurrentStep(t);
+      let roh = ''; try { roh = JSON.stringify(t.steps || {}); } catch (e) {}
+      t._such = [t.id, t.subject, t.supplier_name, t.buyer_name, statusLabel[t.status] || t.status, cur ? STEP_LABELS[cur] : 'Fertig', (t.created_at || '').substring(0, 10), roh].join(' ').toLowerCase();
+    }
+    return _q.every(w => t._such.includes(w));
+  });
+  const _cnt = document.getElementById('txn-search-count');
+  if (_cnt) _cnt.textContent = _q.length ? (_liste.length + ' von ' + _transactions.length) : '';
+  if (!_liste.length) { tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Kein Vorgang passt zur Suche</td></tr>'; return; }
+  tbody.innerHTML = _liste.map(t => {
     const cur = findCurrentStep(t);
     const curLabel = cur ? STEP_LABELS[cur] : 'Fertig';
     return `<tr style="cursor:pointer" onclick="openTxnDetail('${t.id}')">
@@ -4856,6 +5090,50 @@ function findCurrentStep(txn) {
     if (!s.approved && s.status !== 'UEBERSPRUNGEN') return k;
   }
   return null;
+}
+
+/* Kunde am Vorgang nachträglich wählen (21.10.2026): wurde der Vorgang mit einem frei
+ * getippten Namen angelegt (Kunde gab es noch nicht), fehlte im Angebot die Anschrift — und es gab keinen Weg, den
+ * Kundensatz nachzutragen. Nur bestehende Kunden; gesperrt, sobald ein Schritt freigegeben/versendet ist. */
+function _txnKundeKnopf() {
+  const sub = document.getElementById('txn-detail-sub'); if (!sub || !_currentTxn) return;
+  const gesperrt = Object.values(_currentTxn.steps || {}).some(st => st && (st.approved || st.status === 'GESENDET' || st.sent_at));
+  const ohne = !_currentTxn.buyer_id;
+  const b = document.createElement('button');
+  b.type = 'button'; b.className = 'btn btn-sm';
+  b.style.cssText = 'margin-left:10px;padding:2px 8px;font-size:12px' + (ohne ? ';border-color:var(--warning);color:var(--warning)' : '');
+  b.textContent = ohne ? '⚠ Kunde wählen (kein Kundensatz)' : '✎ Kunde ändern';
+  b.title = gesperrt ? 'Gesperrt: ein Schritt ist bereits freigegeben oder versendet' : 'Kunde aus der Kundenliste zuordnen — Anschrift und Anrede kommen dann ins Dokument';
+  b.disabled = gesperrt;
+  b.onclick = _txnKundeWaehlen;
+  sub.appendChild(b);
+}
+async function _txnKundeWaehlen() {
+  if (!_currentTxn) return;
+  try { const res = await fetch(API+'/api/buyers').then(r=>r.json()); _buyers = res.buyers || res || []; } catch(e) {}
+  const sub = document.getElementById('txn-detail-sub'); if (!sub || document.getElementById('txn-kunde-wahl')) return;
+  const box = document.createElement('span');
+  box.id = 'txn-kunde-wahl'; box.style.cssText = 'display:inline-flex;gap:6px;align-items:center;margin-left:10px';
+  const namen = _buyers.map(x => x.name || x.contact_name || '').filter(Boolean).sort((x, y) => x.localeCompare(y, 'de', {sensitivity:'base'}));
+  box.innerHTML = '<input id="txn-kunde-wahl-in" list="txn-kunde-wahl-list" placeholder="Kunde suchen…" autocomplete="off" style="padding:3px 6px;font-size:12px;width:220px">'
+    + '<datalist id="txn-kunde-wahl-list">' + namen.map(v => '<option value="' + esc(v) + '">').join('') + '</datalist>'
+    + '<button type="button" class="btn btn-sm btn-primary" id="txn-kunde-wahl-ok" style="padding:2px 8px;font-size:12px">Übernehmen</button>';
+  sub.appendChild(box);
+  const inp = document.getElementById('txn-kunde-wahl-in');
+  inp.value = _currentTxn.buyer_name || ''; inp.focus(); inp.select();
+  document.getElementById('txn-kunde-wahl-ok').onclick = async () => {
+    const q = (inp.value || '').trim().toLowerCase(), nameOf = o => (o.name || o.contact_name || '').toLowerCase();
+    const genau = _buyers.filter(o => nameOf(o) === q), teil = _buyers.filter(o => q && nameOf(o).includes(q));
+    const wahl = genau.length === 1 ? genau[0] : (!genau.length && teil.length === 1 ? teil[0] : null);   // nie raten: mehrdeutig = keine Wahl
+    if (!wahl) { toast((genau.length > 1 || teil.length > 1) ? 'Mehrere Kunden passen — bitte aus der Liste den vollen Namen wählen' : 'Kein Kunde mit diesem Namen in der Kundenliste', 'error'); return; }
+    const nm = wahl.name || wahl.contact_name || '';
+    if (!confirm('Vorgang ' + _currentTxn.id + ' dem Kunden\n\n' + nm + (wahl.street ? '\n' + [wahl.street, wahl.house_number].filter(Boolean).join(' ') : '') + (wahl.city ? '\n' + [wahl.post_code, wahl.city].filter(Boolean).join(' ') : '') + '\n\nzuordnen?')) return;
+    const r = await fetch(API+'/api/transactions/'+_currentTxn.id, { method:'PUT', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ buyer_id: wahl.id, buyer_name: nm }) }).then(x => x.json()).catch(e => ({error: e.message}));
+    if (r.error) { toast('Nicht gespeichert: ' + r.error, 'error'); return; }
+    toast('Kunde zugeordnet: ' + nm + ' — bitte die PDF neu prüfen', 'success');
+    openTxnDetail(_currentTxn.id);
+  };
 }
 
 async function createTransaction() {
@@ -4896,7 +5174,24 @@ function openVertrag() {
   window.open(API + '/api/transactions/' + _currentTxn.id + '/vertrag', '_blank');
 }
 
+var _letzterVersand = null;      // was zuletzt aus DIESEM Vorgang hinausging
+
+function zeigeVersandHinweis() {
+  const el = document.getElementById('txn-versand-hinweis');
+  if (!el) return;
+  const v = _letzterVersand;
+  if (!v || !_currentTxn || v.txn !== _currentTxn.id) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  el.innerHTML = '&#9993; <b>' + esc(v.beleg) + '</b> um ' + esc(v.am) + ' Uhr an <b>' + esc(v.an) + '</b> gesendet.'
+    + '<br><span style="color:var(--text2)">Sie arbeiten weiterhin im Vorgang <b>' + esc(v.txn) + '</b>'
+    + (v.kunde ? ' · ' + esc(v.kunde) : '')
+    + ' — für einen anderen Kunden zuerst den Vorgang wechseln.</span>'
+    + ' <button onclick="_letzterVersand=null;zeigeVersandHinweis()" style="float:right;font-size:11px;padding:1px 7px">ausblenden</button>';
+}
+
 async function openTxnDetail(id) {
+  /* Hinweis gehört zum Vorgang, nicht zur Sitzung — beim Wechsel verschwindet er. */
+  if (_letzterVersand && _letzterVersand.txn !== id) _letzterVersand = null;
   try {
     await ensureProductsLoaded();
     // Templates laden falls noch nicht geschehen
@@ -4920,9 +5215,11 @@ async function openTxnDetail(id) {
     document.getElementById('txn-detail-title').textContent = _currentTxn.id + ' · ' + (_currentTxn.subject||'');
     document.getElementById('txn-detail-sub').textContent =
       'Lieferant: ' + (_currentTxn.supplier_name||'–') + '  ·  Kunde: ' + (_currentTxn.buyer_name||'–');
+    _txnKundeKnopf();
     _currentStepKey = _currentTxn._current_step || STEP_KEYS[0];
     _positionsDirty = false;
     renderStepper();
+    zeigeVersandHinweis();
     selectStep(_currentStepKey);
     loadTimeline(_currentTxn.id);
     loadTxnAttachments();
@@ -5220,14 +5517,18 @@ function renderStepper() {
     const dateStr = step.date ? step.date.substring(0,10) : '';
     const amountStr = step.amount ? fmt(step.amount)+' €' : '';
     const ref = step.reference || '';
+    /* Storniert und Fassung sichtbar machen (21.09.2026) — sonst sieht man in der
+       Leiste nicht, warum eine Stufe stillsteht oder dass es schon eine V2 gibt. */
+    if (step.status === 'STORNIERT') { icon = '&#10007;'; cls = 'color:#c0392b;font-weight:600'; }
+    const fassungStr = (step.version && step.version > 1) ? ' V'+step.version : '';
     const bg = isCurrent ? 'background:var(--accent-bg);border-radius:6px;' : '';
 
     html += `<div onclick="selectStep('${key}')" style="display:flex;gap:6px;align-items:flex-start;padding:4px 6px;cursor:pointer;${bg}">
       <div style="font-size:16px;${cls};min-width:20px;text-align:center">${icon}</div>
       <div style="flex:1;font-size:12px;${cls}">
-        <div>${STEP_LABELS[key]}</div>
+        <div>${STEP_LABELS[key]}${fassungStr}</div>
         <div style="font-size:10px;color:var(--text2)">
-          ${amountStr ? amountStr : ''}${dateStr ? ' '+dateStr : ''}
+          ${step.status === 'STORNIERT' ? 'storniert' : (amountStr ? amountStr : '')}${dateStr ? ' '+dateStr : ''}
         </div>
       </div>
       ${!isApproved && !isSkipped ? `<button onclick="event.stopPropagation();skipStep('${key}')" title="Überspringen" style="font-size:9px;padding:0 3px;color:var(--text2)">&#10140;</button>` : ''}
@@ -5370,7 +5671,7 @@ function renderStepPositions(key) {
   // PDF etwas anderes als in dieser Vorschau (das Backend ersetzt ebenfalls).
   const stepIntro = introMitAnrede(stepIntroRoh, key);
   const stepClosing = step.closing_text || _docTemplates[closingKey] || (typeof DEFAULT_TEMPLATES !== 'undefined' ? DEFAULT_TEMPLATES[closingKey] : '') || '';
-  const paymentTerms = step.payment_terms || _docTemplates['invoice_payment_terms'] || (typeof DEFAULT_TEMPLATES !== 'undefined' ? DEFAULT_TEMPLATES['invoice_payment_terms'] : '') || 'Zahlbar innerhalb von 30 Tagen';
+  const paymentTerms = step.payment_terms || _docTemplates['invoice_payment_terms'] || (typeof DEFAULT_TEMPLATES !== 'undefined' ? DEFAULT_TEMPLATES['invoice_payment_terms'] : '') || 'Zahlbar sofort ohne Abzug';
 
   // Hint-Box
   let hintHtml = hint ? '<div style="padding:6px 10px;background:var(--info-bg);border-radius:6px;font-size:12px;color:var(--info);margin-bottom:10px">'+hint+'</div>' : '';
@@ -5526,9 +5827,15 @@ function renderStepPositions(key) {
     ? '<span style="font-size:11px;color:var(--text2);margin-left:4px">&rarr; Positionen werden an Auftragsbest\u00e4tigung \u00fcbergeben</span>'
     : '';
   let approveHtml;
-  if (_currentTxn.status === 'STORNIERT') {
-    // Angebot wurde nicht angenommen \u2192 Vorgang storniert. Klare Kennzeichnung + R\u00fcckg\u00e4ngig.
-    approveHtml = '<div style="margin-top:12px;padding:10px;background:#fde8e8;border:1px solid #c0392b;border-radius:6px;font-size:13px;color:#c0392b">&#10007; Angebot nicht angenommen \u2014 Vorgang storniert.<button onclick="reactivateTxn()" style="margin-left:10px;font-size:11px;padding:2px 8px">Storno aufheben</button></div>';
+  if (_currentTxn.status === 'STORNIERT' || step.status === 'STORNIERT') {
+    // Storniert: Grund und Zeitpunkt sichtbar halten \u2014 „warum liegt der still?" ist
+    // die Frage, die Wochen sp\u00e4ter kommt (21.09.2026).
+    const _sg = step.cancel_reason || _currentTxn.cancel_reason || '';
+    const _sa = (step.cancelled_at || _currentTxn.cancelled_at || '').substring(0,16).replace('T',' ');
+    approveHtml = '<div style="margin-top:12px;padding:10px;background:#fde8e8;border:1px solid #c0392b;border-radius:6px;font-size:13px;color:#c0392b">'
+      + '&#10007; Storniert' + (_sa ? ' am ' + esc(_sa) : '') + (_sg ? ' \u2014 <b>' + esc(_sg) + '</b>' : '')
+      + '<br><span style="font-size:11px">Der Vorgang l\u00e4uft nicht mehr in den offenen Vorg\u00e4ngen mit.</span>'
+      + '<button onclick="reactivateTxn()" style="margin-left:10px;font-size:11px;padding:2px 8px">Storno aufheben</button></div>';
   } else if (step.approved) {
     /* Vertrags-Vermerk aus dem Versand mit anzeigen — der Toast ist nach Sekunden weg,
        die Frage „ging der Dienstvertrag mit?" stellt sich aber noch Wochen später
@@ -5543,19 +5850,80 @@ function renderStepPositions(key) {
           + esc(_vv.quelle||'') + ')</div>'
         : '<div style="font-size:11px;color:#c0392b;margin-top:4px">&#9888; Dienstvertrag war angehakt, ging aber NICHT mit ('
           + esc(_vv.quelle||_vv.weg||'') + ')</div>');
-    approveHtml = '<div style="margin-top:12px;padding:8px;background:var(--success-bg);border-radius:6px;font-size:13px">&#9745; Freigegeben am '+(step.approved_at||'').substring(0,10)+' von '+(step.approved_by||'')+' <button onclick="unapproveStep(\''+key+'\')" style="margin-left:8px;font-size:11px;padding:2px 8px">Zur\u00fccknehmen</button>'+weiterBtn+_vvHtml+'</div>';
+    /* Beim Kundenangebot zwei zus\u00e4tzliche Wege (21.09.2026): ANPASSEN legt eine
+       neue Fassung an (die versendete bleibt als Beleg erhalten), STORNIEREN nimmt den
+       Vorgang aus der Bearbeitung. Beides fehlte bisher nach der Freigabe \u2014 gerade dann
+       sagt der Kunde ab oder m\u00f6chte etwas ge\u00e4ndert haben. */
+    /* Erneut senden (20.10.2026): nach der Freigabe gab es keinen Weg mehr,
+       eine nicht angekommene Mail nochmal zu schicken. Öffnet denselben Versand-Dialog wie beim ersten Mal. */
+    const _resendBtn = isInternalStep ? ''
+      : ' <button onclick="approveAndSend(\''+key+'\')" title="Dokument nochmal per E-Mail an den Kunden schicken (z. B. wenn die Mail nicht angekommen ist)" style="margin-left:4px;font-size:11px;padding:2px 8px;background:var(--accent);color:#fff;border:none;border-radius:4px;cursor:pointer">&#9993; Erneut an Kunde senden</button>';
+    const _extraBtns = _resendBtn + ((key === 'customer_quote')
+      ? ' <button onclick="reviseStep(\''+key+'\')" title="Neue Fassung erstellen \u2014 die versendete bleibt als Beleg erhalten" style="margin-left:4px;font-size:11px;padding:2px 8px;background:#fff;border:1px solid var(--accent);color:var(--accent);border-radius:var(--radius);cursor:pointer">&#9998; Anpassen</button>'
+        + ' <button onclick="cancelStep(\''+key+'\')" title="Angebot stornieren \u2014 Vorgang wird geschlossen" style="margin-left:4px;font-size:11px;padding:2px 8px;background:#fff;border:1px solid #c0392b;color:#c0392b;border-radius:var(--radius);cursor:pointer">&#10007; Stornieren</button>'
+      : '');
+    approveHtml = '<div style="margin-top:12px;padding:8px;background:var(--success-bg);border-radius:6px;font-size:13px">&#9745; Freigegeben am '+(step.approved_at||'').substring(0,10)+' von '+(step.approved_by||'')+' <button onclick="unapproveStep(\''+key+'\')" style="margin-left:8px;font-size:11px;padding:2px 8px">Zur\u00fccknehmen</button>'+_extraBtns+weiterBtn+_vvHtml+'</div>';
   } else {
     // Auf dem Angebot-Schritt: Button, um ein nicht angenommenes Angebot zu stornieren
     const declineBtn = (key === 'customer_quote')
-      ? '<button onclick="declineOffer()" title="Kunde hat das Angebot nicht angenommen \u2014 Vorgang stornieren" style="white-space:nowrap;font-size:12px;padding:4px 12px;background:#fff;color:#c0392b;border:1px solid #c0392b;border-radius:var(--radius);cursor:pointer">&#10007; Angebot nicht angenommen</button>'
+      ? '<button onclick="cancelStep(\'customer_quote\')" title="Kunde hat das Angebot nicht angenommen \u2014 Vorgang stornieren" style="white-space:nowrap;font-size:12px;padding:4px 12px;background:#fff;color:#c0392b;border:1px solid #c0392b;border-radius:var(--radius);cursor:pointer">&#10007; Angebot nicht angenommen</button>'
       : '';
-    approveHtml = '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><input id="txn-step-comment" placeholder="Kommentar (optional)" style="flex:1;min-width:120px;font-size:12px"><button onclick="approveStep(\''+key+'\')" class="btn-primary" style="white-space:nowrap">&#10003; Freigeben</button>'
+    /* Die beiden Wege sind ausdrücklich GETRENNT (22.09.2026): „Freigeben" ist
+       der stille, interne Schritt und sieht auch so aus; „Senden" verlässt das Haus,
+       steht abgesetzt rechts und ist als einziger farbig. Vorher trugen beide dieselbe
+       Signalfarbe und standen nebeneinander — daraus wurden am 21.09. zwei Mails an
+       einen Kunden, die so nicht gedacht waren. */
+    approveHtml = '<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+      + '<input id="txn-step-comment" placeholder="Kommentar (optional)" style="flex:1;min-width:120px;font-size:12px">'
+      + '<button onclick="approveStep(\''+key+'\')" title="Nur intern abhaken — es geht KEINE Mail hinaus" '
+      +   'style="white-space:nowrap;font-size:12px;padding:5px 14px;background:#fff;color:var(--text);'
+      +   'border:1px solid var(--border);border-radius:var(--radius);cursor:pointer">&#10003; Nur freigeben</button>'
       + (isInternalStep
           ? internalHint
-          : '<button onclick="approveAndSend(\''+key+'\')" style="white-space:nowrap;font-size:12px;padding:4px 12px;background:var(--accent);color:#fff;border:none;border-radius:var(--radius);cursor:pointer">&#9993; Freigeben + Senden</button>')
+          : '<span style="width:1px;height:24px;background:var(--border);margin:0 4px"></span>'
+            + '<button onclick="approveAndSend(\''+key+'\')" title="Freigeben UND das Dokument per E-Mail an den Kunden schicken" '
+            +   'style="white-space:nowrap;font-size:12px;padding:5px 14px;background:var(--accent);color:#fff;'
+            +   'border:none;border-radius:var(--radius);cursor:pointer;font-weight:600">&#9993; Freigeben + an Kunde senden</button>')
       + declineBtn
       + '</div>';
   }
+  /* Laufen Vorstufe und Folgestufe auseinander, muss man das SEHEN — sonst steht im
+     Auftragseingang stillschweigend ein anderer Betrag als im Angebot (21.09.2026). */
+  const VORSTUFE = {purchase_order:'supplier_quote', supplier_invoice:'purchase_order',
+    order_intake:'customer_quote', order_confirmation:'order_intake',
+    delivery_note:'order_confirmation', invoice:'delivery_note'};
+  let abweichHtml = '';
+  const _vorKey = VORSTUFE[key];
+  if (_vorKey && !step.approved) {
+    const _vor = (_currentTxn.steps||{})[_vorKey] || {};
+    const _vorBetrag = +(_vor.amount||0), _hierBetrag = +(step.amount||0);
+    const _laeuftAuseinander = _vor.positions && _vor.positions.length
+      && _hierBetrag > 0 && Math.abs(_vorBetrag - _hierBetrag) > 0.005;
+    if (step.positions_abweichung || _laeuftAuseinander) {
+      abweichHtml = '<div style="margin-top:10px;padding:9px 12px;background:#fff8e1;border:1px solid #f0b429;border-radius:6px;font-size:12.5px;color:#7c4a03">'
+        + '&#9888; ' + esc(STEP_LABELS[_vorKey]) + ' steht auf <b>' + fmt(_vorBetrag) + ' €</b>, hier stehen <b>' + fmt(_hierBetrag) + ' €</b>.'
+        + (step.positions_abweichung ? '<br><span style="font-size:11px">' + esc(step.positions_abweichung.hinweis||'') + '</span>' : '')
+        + ' <button onclick="syncPositions(\''+key+'\')" style="margin-top:6px;font-size:11px;padding:3px 10px;background:#fff;border:1px solid #f0b429;border-radius:var(--radius);cursor:pointer">Positionen aus ' + esc(STEP_LABELS[_vorKey]) + ' übernehmen</button>'
+        + '</div>';
+    }
+  }
+
+  /* Frühere Fassungen des Angebots auflisten — was der Kunde zuerst bekommen hat,
+     muss nachlesbar bleiben (21.09.2026). */
+  let fassungenHtml = '';
+  const _vs = step.versions || [];
+  if (_vs.length) {
+    fassungenHtml = '<div style="margin-top:10px;padding:8px;background:var(--bg2,#f7f7f9);border-radius:6px;font-size:12px">'
+      + '<b>Frühere Fassungen</b>'
+      + _vs.map(function(v){
+          return '<div style="margin-top:3px;color:var(--text2)">V' + (v.fassung||1) + ' &middot; '
+            + esc(v.reference||'') + (v.amount ? ' &middot; ' + fmt(v.amount) + ' €' : '')
+            + (v.ersetzt_am ? ' &middot; ersetzt ' + esc((v.ersetzt_am||'').substring(0,10)) : '')
+            + (v.ersetzt_grund ? ' &middot; ' + esc(v.ersetzt_grund) : '') + '</div>';
+        }).join('')
+      + '</div>';
+  }
+
   let pdfBtn = '';
   if (key === 'invoice') {
     pdfBtn = '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button onclick="generateInvoiceFromTxn()" class="btn-primary" style="font-size:12px;padding:4px 12px">&#9889; XRechnung erzeugen</button><button onclick="generatePdf(\'invoice\')" style="font-size:12px;padding:4px 12px">&#128196; PDF-Vorschau</button>'+(step._registriert?'<span style="font-size:11px;color:var(--success);align-self:center" title="Im Rechnungsregister und Archiv">&#10003; Im System</span>':'<span style="font-size:11px;color:var(--warning);align-self:center" title="Nur PDF erzeugt \u2014 noch nicht im Rechnungsregister/Archiv">&#9888; noch nicht im Rechnungsregister</span>')+'</div>';
@@ -5564,7 +5932,7 @@ function renderStepPositions(key) {
   } else {
     pdfBtn = '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button onclick="generatePdf(\''+key+'\')" style="font-size:12px;padding:4px 12px">&#128196; PDF erzeugen</button>'+(step.document_id?'<a href="'+API+'/api/documents/'+(step.reference||key)+'.pdf" target="_blank" style="font-size:12px;padding:4px 12px;text-decoration:none;border:1px solid var(--border);border-radius:var(--radius);color:var(--accent)">&#128229; PDF</a>':'')+'</div>';
   }
-  totalsDiv.innerHTML += approveHtml + pdfBtn;
+  totalsDiv.innerHTML += approveHtml + abweichHtml + fassungenHtml + pdfBtn;
 }
 
 function markDirty() { _positionsDirty = true; }
@@ -5801,7 +6169,9 @@ function renderOrderIntakeStep(step) {
   const quoteDate = quoteStep.doc_date || quoteStep.approved_at?.substring(0,10) || '—';
   // Positionen im order_intake-Step vorbefüllen aus Angebot, falls leer
   // (damit FORWARD_MAP beim Freigeben sie an order_confirmation weitergibt)
-  if (!(step.positions||[]).length && !step.approved && quotePos.length) {
+  const _storniert = txn.status === 'STORNIERT' || step.status === 'STORNIERT'
+                     || quoteStep.status === 'STORNIERT';
+  if (!(step.positions||[]).length && !step.approved && quotePos.length && !_storniert) {
     step.positions = JSON.parse(JSON.stringify(quotePos));
     _positionsDirty = true;
   }
@@ -5883,6 +6253,24 @@ function renderOrderIntakeStep(step) {
   }
   afterTable += '</div>';
 
+  /* Läuft der Auftragseingang dem Angebot hinterher, muss man das SEHEN — sonst steht
+     hier stillschweigend ein anderer Betrag als im freigegebenen Angebot. Tritt nach
+     jeder Angebotsanpassung auf und bei Altvorgängen (21.09.2026, V-2026-0047:
+     Angebot 2.975 €, Auftragseingang 4.165 € vom 18.08.). */
+  if (!step.approved) {
+    const _angBetrag = +(quoteStep.amount || 0);
+    const _hierBetrag = +(step.amount || 0);
+    const _auseinander = quotePos.length && _hierBetrag > 0 && Math.abs(_angBetrag - _hierBetrag) > 0.005;
+    if (step.positions_abweichung || _auseinander) {
+      afterTable += '<div style="margin-top:12px;padding:9px 12px;background:#fff8e1;border:1px solid #f0b429;border-radius:6px;font-size:12.5px;color:#7c4a03">'
+        + '&#9888; Das Angebot steht auf <b>' + fmt(_angBetrag) + ' €</b>' + (quoteStep.version > 1 ? ' (Fassung ' + quoteStep.version + ')' : '')
+        + ', hier stehen <b>' + fmt(_hierBetrag) + ' €</b>.'
+        + (step.positions_abweichung ? '<br><span style="font-size:11px">' + esc(step.positions_abweichung.hinweis || '') + '</span>' : '')
+        + '<br><button onclick="syncPositions(\'order_intake\')" style="margin-top:6px;font-size:11px;padding:3px 10px;background:#fff;border:1px solid #f0b429;border-radius:var(--radius);cursor:pointer">Positionen aus dem Angebot übernehmen</button>'
+        + '</div>';
+    }
+  }
+
   // Freigabe-Button (KEIN Mail-Versand)
   const nextIdx = STEP_KEYS.indexOf('order_intake') + 1;
   const nextKey = nextIdx < STEP_KEYS.length ? STEP_KEYS[nextIdx] : null;
@@ -5898,7 +6286,7 @@ function renderOrderIntakeStep(step) {
   } else {
     afterTable += `<div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
       <input id="txn-step-comment" placeholder="Notiz (optional)" style="flex:1;min-width:120px;font-size:12px">
-      <button onclick="approveStep('order_intake')" class="btn-primary" style="white-space:nowrap">✓ Bestätigt — Freigabe</button>
+      <button onclick="approveStep('order_intake')" title="Nur intern abhaken — es geht KEINE Mail hinaus" style="white-space:nowrap;font-size:12px;padding:5px 14px;background:#fff;color:var(--text);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer">✓ Bestätigt — nur freigeben</button>
       <span style="font-size:11px;color:var(--text2)">→ übergibt Positionen an Auftragsbestätigung</span>
     </div>`;
   }
@@ -5988,6 +6376,73 @@ async function approveStep(key) {
   await openTxnDetail(tid);
 }
 
+/* Positionen der Vorstufe ausdrücklich übernehmen — für Vorgänge, in denen die
+   Beträge auseinandergelaufen sind (Altbestand oder eigene Eingabe). */
+async function syncPositions(key) {
+  if (!_currentTxn) return;
+  if (!confirm('Positionen aus der Vorstufe übernehmen?\n\nDie hier eingetragenen Positionen werden dabei ersetzt.')) return;
+  const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/sync-positions', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})
+  }).then(r=>r.json());
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast('Übernommen — neuer Betrag ' + fmt(res.amount||0) + ' €');
+  await openTxnDetail(_currentTxn.id);
+  selectStep(key);
+  renderTxnTable();
+}
+
+/* Angebot anpassen: neue Fassung. Der Server sichert die bisherige unter
+   step.versions und h\u00e4ngt der Belegnummer -V2, -V3 \u2026 an (21.09.2026). */
+async function reviseStep(key) {
+  if (!_currentTxn) return;
+  const step = (_currentTxn.steps||{})[key] || {};
+  const alt = step.reference || '';
+  const grund = prompt('Angebot anpassen \u2014 neue Fassung erstellen.\n\n'
+    + (alt ? 'Bisher: ' + alt + '\n' : '')
+    + 'Die versendete Fassung bleibt als Beleg erhalten.\n\nGrund der Anpassung (optional):');
+  if (grund === null) return;
+  let res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/revise', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({reason: grund})
+  }).then(r=>r.json());
+  /* Ist später schon etwas freigegeben (z. B. die Auftragsbestätigung), fragt der
+     Server zurück statt abzulehnen — genau der Fall vom 21.09.2026, als nach einer
+     versendeten Auftragsbestätigung noch eine neue Angebotsfassung entstand. */
+  if (res.rueckfrage === 'spaetere_stufe_freigegeben') {
+    const weiter = confirm('⚠ ' + res.error
+      + '\n\nDer Kunde hat dazu bereits ein Dokument bekommen. Eine neue Angebotsfassung'
+      + '\nwiderspricht dem, was bereits bestätigt wurde.'
+      + '\n\nTrotzdem anpassen?');
+    if (!weiter) return;
+    res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/revise', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({reason: grund, erzwingen: true})
+    }).then(r=>r.json());
+  }
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast('Fassung ' + (res.version||'') + ' angelegt' + (res.reference ? ' \u2014 ' + res.reference : ''));
+  await openTxnDetail(_currentTxn.id);
+  selectStep(key);
+  renderTxnTable();
+}
+
+/* Stufe stornieren \u2014 der Vorgang wird mit geschlossen, damit er nicht weiter
+   in den offenen Vorg\u00e4ngen mitl\u00e4uft. */
+async function cancelStep(key) {
+  if (!_currentTxn) return;
+  const grund = prompt('Stornieren \u2014 Grund (z. B. Kunde hat abgesagt, Preis zu hoch):');
+  if (grund === null) return;
+  if (!confirm('Vorgang \u201e'+_currentTxn.id+'\u201c wird storniert und aus der Bearbeitung genommen.\n\nDas l\u00e4sst sich sp\u00e4ter wieder aufheben. Fortfahren?')) return;
+  const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/cancel', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({reason: grund, close_transaction: true})
+  }).then(r=>r.json());
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast('Storniert \u2014 Vorgang geschlossen');
+  await openTxnDetail(_currentTxn.id);
+  renderTxnTable();
+}
+
 async function declineOffer() {
   if (!_currentTxn) return;
   if (!confirm('Angebot als NICHT angenommen markieren?\n\nDer Vorgang „'+_currentTxn.id+'" wird storniert (abgelehnt) und aus der Bearbeitung genommen. Das lässt sich später wieder aufheben.')) return;
@@ -6005,9 +6460,11 @@ async function declineOffer() {
 async function reactivateTxn() {
   if (!_currentTxn) return;
   const tid = _currentTxn.id;
-  const res = await fetch(API+'/api/transactions/'+tid, {
-    method:'PUT', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({status:'IN_BEARBEITUNG'})
+  /* über /reopen, damit auch die stornierte STUFE wieder aufmacht — ein reines
+     Status-PUT ließ sie auf STORNIERT stehen (21.09.2026). */
+  const res = await fetch(API+'/api/transactions/'+tid+'/reopen', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({})
   }).then(r=>r.json());
   if (res.error) { toast(res.error, 'error'); return; }
   toast('Storno aufgehoben — Vorgang wieder in Bearbeitung');
@@ -6165,20 +6622,62 @@ async function generatePaymentPdf(pid) {
    protokolliert die Mail mit Message-ID. */
 async function sendPaymentInvoice(pid) {
   const p = _paymentInvoices.find(x => x.id === pid) || {};
-  const vorschlag = (_currentTxn && _currentTxn.buyer_email) || '';
-  const to = prompt('Abschlagsrechnung '+(p.reference||'')+' verschicken an:', vorschlag);
-  if (!to) return;
-  toast('Wird registriert und versendet …', 'info');
-  const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/payment-invoices/'+pid+'/send', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({recipient: to})
-  }).then(r=>r.json());
-  if (res.sent) {
-    toast('Versandt an '+res.to+' · als Rechnung '+res.invoice_number+' geführt');
-    loadPaymentInvoices();
-  } else {
-    toast((res.error||'Fehler') + (res.errors ? ': '+res.errors.join('; ') : ''), 'error');
+  // Vorschlag vom Server: eigener Abschlagstext mit Vertragsbezug, Stufe und Zahlungsziel
+  let v = {};
+  try {
+    v = await fetch(API+'/api/transactions/'+_currentTxn.id+'/payment-invoices/'+pid+'/mailtext').then(r=>r.json());
+  } catch(e) { v = {}; }
+  if (v.error) { toast(v.error, 'error'); return; }
+  let m = document.getElementById('abschlag-send-modal');
+  if (!m) {
+    m = document.createElement('div');
+    m.className = 'modal-overlay'; m.id = 'abschlag-send-modal';
+    m.innerHTML = `<div class="modal" style="max-width:720px;width:96%">
+      <h3 style="margin:0 0 4px">Abschlagsrechnung versenden</h3>
+      <div id="abschlag-send-info" style="font-size:12px;color:var(--text2);margin-bottom:10px"></div>
+      <label style="font-size:12px;font-weight:600">Empfänger</label>
+      <input id="abschlag-send-to" type="email" style="width:100%;margin-bottom:8px">
+      <label style="font-size:12px;font-weight:600">Betreff</label>
+      <input id="abschlag-send-subject" type="text" style="width:100%;margin-bottom:8px">
+      <label style="font-size:12px;font-weight:600">Text</label>
+      <textarea id="abschlag-send-body" rows="18" style="width:100%;font-family:var(--mono);font-size:12px;line-height:1.45"></textarea>
+      <div style="font-size:11px;color:var(--text2);margin-top:4px">Anhänge: PDF der Abschlagsrechnung und XRechnung (XML). Das PDF wird beim Versand neu erzeugt.</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+        <button onclick="document.getElementById('abschlag-send-modal').classList.remove('show')">Abbrechen</button>
+        <button class="primary" id="abschlag-send-go">📧 Versenden</button>
+      </div></div>`;
+    document.body.appendChild(m);
   }
+  document.getElementById('abschlag-send-info').textContent =
+    (p.reference||'') + ' · ' + fmt(p.amount_gross) + ' € brutto'
+    + (v.vertrag ? ' · ' + v.vertrag + (v.stufe ? ' – ' + v.stufe : '') : ' · kein Vertrag am Vorgang erkannt')
+    + (v.faellig ? ' · zahlbar bis ' + v.faellig.split('-').reverse().join('.') : '');
+  document.getElementById('abschlag-send-to').value = v.recipient || (_currentTxn && _currentTxn.buyer_email) || '';
+  document.getElementById('abschlag-send-subject').value = v.subject || '';
+  document.getElementById('abschlag-send-body').value = v.body || '';
+  const go = document.getElementById('abschlag-send-go');
+  go.disabled = false;
+  go.onclick = async function() {
+    const to = document.getElementById('abschlag-send-to').value.trim();
+    if (!to) { toast('Bitte eine Empfängeradresse eintragen', 'error'); return; }
+    go.disabled = true;
+    toast('Wird registriert und versendet …', 'info');
+    const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/payment-invoices/'+pid+'/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({recipient: to,
+                            subject: document.getElementById('abschlag-send-subject').value,
+                            body: document.getElementById('abschlag-send-body').value})
+    }).then(r=>r.json()).catch(e => ({error: String(e)}));
+    if (res.sent) {
+      m.classList.remove('show');
+      toast('Versandt an '+res.to+' · als Rechnung '+res.invoice_number+' geführt');
+      loadPaymentInvoices();
+    } else {
+      go.disabled = false;
+      toast((res.error||'Fehler') + (res.errors ? ': '+res.errors.join('; ') : ''), 'error');
+    }
+  };
+  m.classList.add('show');
 }
 
 /* Nur vermerken — für Abschläge, die außerhalb des Systems hinausgingen.
@@ -6314,7 +6813,7 @@ async function generateInvoiceFromTxn() {
     return;
   }
   const payEl = document.getElementById('step-payment-terms');
-  const terms = (payEl ? payEl.value : '') || _docTemplates['invoice_payment_terms'] || 'Zahlbar innerhalb von 30 Tagen';
+  const terms = (payEl ? payEl.value : '') || _docTemplates['invoice_payment_terms'] || 'Zahlbar sofort ohne Abzug';
   toast('XRechnung wird erzeugt...', 'info');
   try {
     const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/generate-invoice', {
@@ -7349,7 +7848,53 @@ function bankZeigeVorschlaege() {
 }
 
 async function bankAcceptSuggestion(txnId, invoiceId) {
-  await fetch(API + '/api/bank/transactions/' + txnId + '/match/' + invoiceId, { method: 'POST' });
+  bankPruefen(txnId, invoiceId, false);
+}
+
+// ─── Zuordnung erst nach Sichtprüfung (16.10.2026) ───
+// Klick auf eine Rechnung öffnet sie neben den Buchungsdaten; verlinkt wird erst mit „Zuordnung bestätigen".
+var _bankPruef = null;
+async function bankPruefen(txnId, invoiceId, ausSuche) {
+  _bankPruef = {txnId, invoiceId, ausSuche};
+  const fmtE = n => (Number(n)||0).toLocaleString('de-DE', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
+  document.getElementById('bank-pruef-daten').innerHTML = 'Lade …';
+  const pdfUrl = API + '/api/buch/beleg/' + encodeURIComponent(invoiceId);
+  document.getElementById('bank-pruef-pdf').src = pdfUrl;
+  document.getElementById('bank-pruef-tab').href = pdfUrl;
+  document.getElementById('bank-pruef-ok').disabled = false;
+  document.getElementById('bank-pruef-modal').classList.add('show');
+  try {
+    const [tr, inv] = await Promise.all([
+      fetch(API + '/api/bank/transactions').then(r => r.json()),
+      fetch(API + '/api/invoices/' + encodeURIComponent(invoiceId)).then(r => r.json())]);
+    const t = (tr.transactions || []).find(x => x.id === txnId) || {};
+    const partner = inv.direction === 'AUSGANG' ? (inv.buyer && inv.buyer.name) : (inv.seller && inv.seller.name);
+    const brutto = (inv.totals || {}).gross || 0, betrag = Math.abs(t.amount || 0), diff = Math.round((betrag - brutto) * 100) / 100;
+    const diffTxt = Math.abs(diff) < 0.01 ? '<span style="color:#059669">Betrag passt</span>'
+      : '<span style="color:#b45309">Differenz ' + (diff > 0 ? '+' : '') + fmtE(diff) + (inv.currency && inv.currency !== 'EUR' ? ' (Rechnung in ' + esc(inv.currency) + ')' : '') + '</span>';
+    document.getElementById('bank-pruef-daten').innerHTML =
+      '<table style="width:100%;font-size:13px"><tr>' +
+      '<td style="vertical-align:top;width:50%"><strong>Buchung</strong><br>' + esc(t.booking_date || '') + ' · <strong>' + (t.direction === 'credit' ? '+' : '−') + fmtE(betrag) + '</strong><br>' +
+        esc(t.counterparty_name || '—') + '<br><span style="color:var(--text2)">' + esc((t.purpose || '').slice(0, 140)) + '</span></td>' +
+      '<td style="vertical-align:top"><strong>Rechnung ' + esc(inv.number || '') + '</strong><br>' + esc(inv.date || '') + ' · <strong>' + fmtE(brutto) + '</strong> · ' + esc(inv.status || '') + '<br>' +
+        esc(partner || '—') + '<br>' + diffTxt + '</td></tr></table>';
+  } catch (e) {
+    document.getElementById('bank-pruef-daten').textContent = 'Daten nicht ladbar: ' + e.message;
+  }
+}
+function bankPruefSchliessen() {
+  document.getElementById('bank-pruef-modal').classList.remove('show');
+  document.getElementById('bank-pruef-pdf').src = 'about:blank';
+  _bankPruef = null;
+}
+async function bankPruefBestaetigen() {
+  if (!_bankPruef) return;
+  const p = _bankPruef;
+  document.getElementById('bank-pruef-ok').disabled = true;
+  const r = await fetch(API + '/api/bank/transactions/' + p.txnId + '/match/' + p.invoiceId, { method: 'POST' }).then(r => r.json()).catch(e => ({error: e.message}));
+  bankPruefSchliessen();
+  if (!r.ok) return toast('Zuordnung fehlgeschlagen: ' + (r.error || ''), 'error');
+  if (p.ausSuche) hideBankMatchModal();
   toast('Buchung verlinkt');
   loadBankTxns();
 }
@@ -7547,10 +8092,7 @@ async function bankConfirmSplit() {
 
 async function bankConfirmMatch(invoiceId) {
   if (!_bankCurrentTxnId) return;
-  await fetch(API + '/api/bank/transactions/' + _bankCurrentTxnId + '/match/' + invoiceId, { method: 'POST' });
-  hideBankMatchModal();
-  toast('Buchung verlinkt');
-  loadBankTxns();
+  bankPruefen(_bankCurrentTxnId, invoiceId, true);
 }
 
 function hideBankMatchModal() {
@@ -7749,6 +8291,13 @@ function initAutocompletes() {
 // ── Kunden (eigene Seite) ──
 // _customers declared at top
 
+/* Nach jedem Vorgang, der Kundendaten berührt (Rechnung anlegen, Import, PM-Übernahme),
+   beide Listen nachziehen — sonst sucht man im Formular in einem alten Stand. */
+async function refreshKundenlisten() {
+  try { if (typeof loadBuyers === 'function') await loadBuyers(); } catch (e) {}
+  try { await loadCustomers(); } catch (e) {}
+}
+
 async function loadCustomers() {
   try {
     const res = await fetch(API+'/api/buyers').then(r=>r.json());
@@ -7815,6 +8364,9 @@ async function updateCustomerDocCounts() {
 
 function filterCustomers() {
   const q = document.getElementById('cust-search')?.value || '';
+  /* Wird getippt, bevor die Liste geladen ist, stand dauerhaft „Keine Kunden
+     gefunden" da — die Suche holt die Daten jetzt selbst nach. */
+  if (!_customers.length) { loadCustomers().then(() => renderCustomerTable(q)); return; }
   renderCustomerTable(q);
 }
 
@@ -7845,7 +8397,12 @@ async function saveCustomer() {
   if (res.saved || res.buyer) {
     toast('Kunde gespeichert');
     clearCustForm();
-    loadCustomers();
+    /* BEIDE Listen auffrischen: die Kundenseite arbeitet mit _customers, die
+       Rechnungsseite mit _buyers. Wurde nur die eine geladen, fand man den eben
+       gespeicherten Kunden im Suchfeld der anderen nicht (22.09.2026). */
+    await loadCustomers();
+    if (typeof loadBuyers === 'function') { try { await loadBuyers(); } catch (e) {} }
+    filterCustomers();                 // aktive Suche beibehalten statt Liste zurücksetzen
   } else { toast(res.error||'Fehler', 'error'); }
 }
 
@@ -8191,17 +8748,18 @@ function renderProductTable(catFilter, searchQ) {
   if (catFilter) list = list.filter(p => p.category === catFilter);
   if (searchQ) list = list.filter(p => _fullTextMatch(p, searchQ));
   if (!list.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="color:var(--text2);text-align:center">Keine Produkte</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2);text-align:center">Keine Produkte</td></tr>';
     return;
   }
   tbody.innerHTML = list.map(p => `<tr>
     <td style="font-family:var(--mono);font-size:11px"><a href="#" onclick="editProduct('${p.art_nr}');return false" style="color:var(--accent)">${p.art_nr}</a></td>
-    <td>${esc(p.name)}</td>
+    <td>${esc(p.name)}${p.fremdleistung ? ' <span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:9px;background:#EAF1F8;color:#1B4B82" title="Fremdleistung — wird durchgereicht, Preis je Vorhaben">durchgereicht</span>' : ''}</td>
     <td style="font-size:11px">${esc(p.category||'')}</td>
     <td style="text-align:right">${fmt(p.ek_price)}</td>
     <td style="text-align:right;font-weight:500">${fmt(p.vk_price)}</td>
     <td>${esc(p.unit)}</td>
     <td style="text-align:right">${p.stock === -1 ? '&infin;' : p.stock}</td>
+    <td>${p.status === 'AKTIV' ? '' : `<span style="font-size:10px;font-weight:600;padding:1px 6px;border-radius:9px;background:${p.status==='ENTWURF'?'#FDF0D5':'#EEF0F2'};color:${p.status==='ENTWURF'?'#8A5A00':'#6B7280'}" title="${p.status==='ENTWURF'?'Preis festlegen, dann auf AKTIV setzen — erscheint sonst nicht in Angeboten':'Stillgelegt: '+esc(p.stillgelegt_grund||'')}">${p.status}</span>`}</td>
     <td><button onclick="deleteProduct('${p.art_nr}')" style="font-size:11px;color:var(--danger);padding:1px 4px">&#10005;</button></td>
   </tr>`).join('');
 }
@@ -8428,6 +8986,10 @@ async function saveProduct() {
     unit: document.getElementById('prod-unit').value || 'Stk',
     tax_rate: 19,
     contract_separate: document.getElementById('prod-contract-separate').checked,
+    vertrag_dateien: Array.from((document.getElementById('prod-vertrag-datei') || {selectedOptions: []}).selectedOptions || []).map(o => o.value).filter(Boolean),
+    vertrag_datei: (Array.from((document.getElementById('prod-vertrag-datei') || {selectedOptions: []}).selectedOptions || []).map(o => o.value).filter(Boolean)[0]) || '',
+    status: (document.getElementById('prod-status')||{}).value || 'AKTIV',
+    fremdleistung: (document.getElementById('prod-fremdleistung')||{}).checked || false,
   };
   const blocks = _readOfferBlocks();
   if (blocks !== undefined) data.offer_blocks = blocks;
@@ -8454,6 +9016,12 @@ function editProduct(nr) {
   document.getElementById('prod-vk').value = p.vk_price;
   document.getElementById('prod-unit').value = p.unit;
   document.getElementById('prod-contract-separate').checked = !!p.contract_separate;
+  try { const vs = document.getElementById('prod-vertrag-datei'); if (vs) {
+    const _gew = Array.isArray(p.vertrag_dateien) && p.vertrag_dateien.length ? p.vertrag_dateien : (p.vertrag_datei ? [p.vertrag_datei] : []);
+    const _setzen = () => Array.from(vs.options).forEach(o => { o.selected = _gew.includes(o.value); });
+    if (!vs.options.length) { fetch(API+'/api/offer-settings').then(r=>r.json()).then(os3 => { vs.innerHTML = (os3.vertraege||[]).map(v => '<option value="'+v.datei+'">'+(v.kurz||v.titel||v.datei)+'</option>').join(''); _setzen(); }); } else _setzen(); } } catch(e) {}
+  const _st = document.getElementById('prod-status'); if (_st) _st.value = p.status || 'AKTIV';
+  const _fl = document.getElementById('prod-fremdleistung'); if (_fl) _fl.checked = !!p.fremdleistung;
   _writeOfferBlocks(p.offer_blocks);
   document.getElementById('prod-save-result').innerHTML = '<span style="color:var(--accent)">Bearbeite: '+esc(p.name)+'</span>';
 }
@@ -8465,6 +9033,8 @@ function clearProdForm() {
   document.getElementById('prod-ek').value = '0';
   document.getElementById('prod-vk').value = '0';
   document.getElementById('prod-unit').value = 'Stk';
+  const _st2 = document.getElementById('prod-status'); if (_st2) _st2.value = 'AKTIV';
+  const _fl2 = document.getElementById('prod-fremdleistung'); if (_fl2) _fl2.checked = false;
   const _cs = document.getElementById('prod-contract-separate'); if (_cs) _cs.checked = false;
   _writeOfferBlocks(null);
   document.getElementById('prod-save-result').innerHTML = '';
@@ -8601,6 +9171,8 @@ async function approveAndSend(key) {
     '<strong>'+esc(docTitle)+(ref?' '+esc(ref):'')+'</strong>'+(rName?' an '+esc(rName):'')+
     ' &middot; wird nach Freigabe als PDF angehängt';
   document.getElementById('txn-send-recipient').value = toEmail;
+  const _anEl = document.getElementById('txn-send-an');
+  if (_anEl) _anEl.textContent = toEmail ? '→ geht an ' + toEmail : '';
   document.getElementById('txn-send-subject').value = subject;
   document.getElementById('txn-send-body').value = body;
   document.getElementById('txn-send-result').innerHTML = '';
@@ -8643,7 +9215,47 @@ async function approveAndSend(key) {
    * als eigene PDF-Datei, sonst wird er ins Angebots-PDF eingebunden. Der Hinweis
    * unter der Zeile sagt, welcher der beiden Wege gilt. */
   const zeigeVertrag = showMerge || showContract;
+  /* Welcher Vertrag (28.09.2026: Dienstvertrag ODER Vertrag über eine Energieberatung):
+     Liste aus den Angebotseinstellungen (vertraege); vorbelegt mit der am Schritt gemerkten Wahl,
+     sonst mit dem Vertrag des ersten Produkts, das einen führt (vertrag_datei), sonst Standard. */
+  try {
+    const box = document.getElementById('txn-send-vertrag-dateien');
+    if (box && key === 'customer_quote') {
+      const os2 = await fetch(API+'/api/offer-settings').then(r=>r.json());
+      const liste = (os2.vertraege && os2.vertraege.length) ? os2.vertraege
+        : (os2.vertrag_pdf_filename ? [{datei: os2.vertrag_pdf_filename, kurz: 'Dienstvertrag', titel: os2.vertrag_pdf_filename}] : []);
+      let vor = Array.isArray(step.vertrag_dateien) && step.vertrag_dateien.length ? step.vertrag_dateien.slice()
+              : (step.vertrag_datei ? [step.vertrag_datei] : []);
+      if (!vor.length) {
+        try {
+          const prods = await fetch(API+'/api/products').then(r=>r.json());
+          const byNr2 = {}; (prods.products || prods || []).forEach(p => { byNr2[p.art_nr] = p; });
+          (step.positions||[]).forEach(p => { const pr = byNr2[p.art_nr]; if (!pr) return;
+            (Array.isArray(pr.vertrag_dateien) && pr.vertrag_dateien.length ? pr.vertrag_dateien : (pr.vertrag_datei ? [pr.vertrag_datei] : []))
+              .forEach(d => { if (!vor.includes(d)) vor.push(d); }); });
+        } catch(e) {}
+      }
+      if (!vor.length && (os2.vertrag_pdf_filename || liste[0])) vor = [os2.vertrag_pdf_filename || liste[0].datei];
+      box.innerHTML = liste.map(v => '<label style="display:flex;gap:6px;align-items:center;cursor:pointer;font-weight:400"><input type="checkbox" class="txn-send-vertrag-datei" value="' + v.datei + '"' + (vor.includes(v.datei) ? ' checked' : '') + ' style="width:auto"> ' + (v.titel || v.kurz || v.datei) + '</label>').join('');
+      box.style.display = liste.length > 1 ? 'block' : 'none';
+    }
+  } catch(e) {}
   const hinweisEl = document.getElementById('txn-send-vertrag-hinweis');
+  // Gebäude für den ausgefüllten Dienstvertrag (16.10.2026): am Schritt gemerkt, sonst Kundenanschrift
+  try {
+    const gebBox = document.getElementById('txn-send-vertrag-geb');
+    if (gebBox) {
+      gebBox.style.display = (zeigeVertrag && key === 'customer_quote') ? 'block' : 'none';
+      let g = step.vertrag_gebaeude || null;
+      if (!g) {
+        const bl = await fetch(API+'/api/buyers').then(r=>r.json()).catch(()=>[]);
+        const b = (Array.isArray(bl) ? bl : (bl.buyers||[])).find(x => x.id === _currentTxn.buyer_id) || {};
+        g = {strasse: [b.street, b.house_number].filter(Boolean).join(' '), plz_ort: [b.post_code, b.city].filter(Boolean).join(' ')};
+      }
+      document.getElementById('txn-send-geb-strasse').value = g.strasse || '';
+      document.getElementById('txn-send-geb-plzort').value = g.plz_ort || '';
+    }
+  } catch(e) {}
   if (mergeRow) mergeRow.style.display = zeigeVertrag ? 'flex' : 'none';
   if (mergeCb) mergeCb.checked = zeigeVertrag ? mergeVor : false;
   if (hinweisEl) {
@@ -8688,6 +9300,13 @@ function _txnVertragWahl() {
   return !!document.getElementById('txn-send-merge-contract')?.checked;
 }
 
+function _txnVertragGebaeude() {
+  const box = document.getElementById('txn-send-vertrag-geb');
+  if (!box || box.style.display === 'none') return null;
+  return {strasse: (document.getElementById('txn-send-geb-strasse').value||'').trim(),
+          plz_ort: (document.getElementById('txn-send-geb-plzort').value||'').trim()};
+}
+
 async function previewTxnSendPdf() {
   const key = _txnSendKey;
   if (!key || !_currentTxn) { toast('Kein Vorgang geladen', 'error'); return; }
@@ -8702,6 +9321,11 @@ async function previewTxnSendPdf() {
         intro_text: introEl ? introEl.value : '',
         closing_text: closingEl ? closingEl.value : '',
         payment_terms: payEl ? payEl.value : '',
+        ...(_txnVertragGebaeude() ? {vertrag_gebaeude: _txnVertragGebaeude()} : {}),
+        /* Auswahl aus dem Dialog mitschicken (21.10.2026, V-2026-0074): ohne sie band die Prüf-PDF den
+           Dienstvertrag ein, obwohl er abgewählt war — der Server kannte die Wahl erst beim Senden. */
+        ...(_txnVertragWahl() === null ? {} : {vertrag_anhaengen: _txnVertragWahl()}),
+        vertrag_dateien: Array.from(document.querySelectorAll('.txn-send-vertrag-datei:checked')).map(x => x.value),
       })
     });
     const res = await resp.json();
@@ -8721,10 +9345,13 @@ async function previewTxnSendPdf() {
       // Bewusst die hinterlegte Vertrags-PDF, NICHT /api/transactions/<id>/vertrag:
       // letztere zeigt den auto-gefüllten Vertrag zum Unterschreiben, angehängt wird
       // aber die PDF aus den Angebotseinstellungen. Geprüft gehört, was rausgeht.
-      window.open(API + '/api/offer-settings/vertrag-pdf', '_blank');
-      _vHinweis = ' Der Dienstvertrag ist als zweites Blatt geöffnet — genau diese Datei geht mit der Mail.';
+      { const _gew = Array.from(document.querySelectorAll('.txn-send-vertrag-datei:checked')).map(x => x.value);
+        const _t = '&tid=' + encodeURIComponent(_currentTxn.id);
+        if (!_gew.length) window.open(API + '/api/offer-settings/vertrag-pdf?x=1' + _t, '_blank');
+        _gew.forEach(d => window.open(API + '/api/offer-settings/vertrag-pdf?datei=' + encodeURIComponent(d) + _t, '_blank')); }
+      _vHinweis = ' Der Vertrag ist als zweites Blatt geöffnet — genau diese Datei geht mit der Mail.';
     } else if (_vAn) {
-      _vHinweis = ' Der Dienstvertrag ist im geöffneten PDF enthalten.';
+      _vHinweis = ' Der Vertrag ist im geöffneten PDF enthalten.';
     }
     const cbtn = document.getElementById('txn-send-confirm-btn');
     if (cbtn) { cbtn.disabled = false; cbtn.title = ''; }
@@ -8757,17 +9384,34 @@ async function confirmTxnSend() {
   const attachContract = !!(contractRow && contractRow.dataset.separat === '1'
     && document.getElementById('txn-send-attach-contract')?.checked);
   const vertragWahl = _txnVertragWahl();   // vor dem Schliessen lesen
+  /* Letzte Rückfrage mit Klartext: WAS geht an WEN (22.09.2026 — „ich bin
+     eigentlich sicher, das nicht gemacht zu haben"). Freigeben und Freigeben+Senden
+     liegen nebeneinander; ab hier verlässt das Dokument das Haus. */
+  const _stepBez = (STEP_LABELS && STEP_LABELS[key]) || key;
+  const _beleg = ((_currentTxn.steps||{})[key]||{}).reference || '';
+  const _kunde = (_currentTxn.buyer_name || (_currentTxnBuyer && (_currentTxnBuyer.name || _currentTxnBuyer.contact_name)) || '').trim();
+  if (!confirm('Vorgang ' + _currentTxn.id + (_kunde ? '  ·  ' + _kunde : '')
+               + '\n────────────────────────────\n'
+               + _stepBez + (_beleg ? ' ' + _beleg : '')
+               + '\n\njetzt per E-Mail senden an:\n' + toEmail
+               + '\n\nDanach ist das Dokument beim Kunden.')) return;
   hideTxnSendDialog();
   toast('Freigabe + PDF + Mail...', 'info');
   const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+key+'/approve-and-send', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify(Object.assign({user:'benutzer', comment, to_email:toEmail, subject, body,
-      attach_contract: attachContract},
+      attach_contract: attachContract,
+      vertrag_dateien: Array.from(document.querySelectorAll('.txn-send-vertrag-datei:checked')).map(x => x.value),
+      ...(_txnVertragGebaeude() ? {vertrag_gebaeude: _txnVertragGebaeude()} : {})},
       vertragWahl === null ? {} : {vertrag_anhaengen: vertragWahl}))
   }).then(r=>r.json());
 
   if (res.error && !res.approved) { toast(res.error, 'error'); return; }
   if (res.sent) {
+    /* Bleibender Hinweis statt Toast: nach dem Senden springt die Maske zur nächsten
+       Stufe und sieht neu aus — der Vorgang ist aber derselbe (22.09.2026). */
+    _letzterVersand = { txn: _currentTxn.id, kunde: _kunde, beleg: (_stepBez + (_beleg ? ' ' + _beleg : '')),
+                        an: res.sent_to || toEmail, am: new Date().toLocaleTimeString('de-DE').slice(0,5) };
     /* Nach dem Versand muss ablesbar sein, WAS mitging — insbesondere der
      * Dienstvertrag (07.09.2026: „ich habe den Dienstvertrag angekreuzt,
      * kann aber nicht erkennen ob und wie er mitgesendet wurde"). Der Server
@@ -8917,7 +9561,7 @@ const DEFAULT_TEMPLATES = {
   delivery_note_closing: 'Bitte best\u00e4tigen Sie den Empfang der aufgef\u00fchrten Leistungen/Unterlagen.\nBei M\u00e4ngeln oder Beanstandungen bitten wir um unverz\u00fcgliche schriftliche Mitteilung.\n\nMit freundlichen Gr\u00fc\u00dfen',
   invoice_intro: 'Sehr geehrte Damen und Herren,\n\nf\u00fcr die erbrachten Leistungen stellen wir Ihnen nachfolgend vereinbarungsgem\u00e4\u00df in Rechnung.\nEs gelten unsere Allgemeinen Geschäftsbedingungen (AGB), insbesondere \u00a7 4 (Preise und Verg\u00fctung).',
   invoice_closing: 'Die Verg\u00fctung ist nach Erhalt der Rechnung ohne jeden Abzug auf das unten genannte Konto zu leisten (\u00a7 4.2 AGB).\nDer Abzug von Skonto bedarf besonderer schriftlicher Vereinbarung.\nBitte geben Sie bei der \u00dcberweisung die Rechnungsnummer als Verwendungszweck an.\n\nMit freundlichen Gr\u00fc\u00dfen',
-  invoice_payment_terms: 'Zahlbar innerhalb von 30 Tagen',
+  invoice_payment_terms: 'Zahlbar sofort ohne Abzug',   // Standard seit 12.10.2026: sofort fällig
   dunning_1_intro: 'Sehr geehrte Damen und Herren,\n\nbei der Durchsicht unserer Konten haben wir festgestellt, dass die nachstehend aufgef\u00fchrte Rechnung noch nicht beglichen wurde.\nWir m\u00f6chten Sie freundlich an die Zahlung erinnern und bitten um zeitnahe \u00dcberweisung.',
   dunning_2_intro: 'Sehr geehrte Damen und Herren,\n\ntrotz unserer Zahlungserinnerung konnten wir leider keinen Zahlungseingang feststellen.\nWir bitten Sie dringend, den offenen Betrag innerhalb von 7 Tagen auf unser Konto zu \u00fcberweisen.\nSollte die Zahlung bereits erfolgt sein, bitten wir um kurze Mitteilung unter Angabe des Buchungsdatums.',
   dunning_3_intro: 'Sehr geehrte Damen und Herren,\n\nwir mussten leider feststellen, dass unsere bisherigen Zahlungsaufforderungen ohne Ergebnis geblieben sind.\nWir fordern Sie hiermit letztmalig auf, den Rechnungsbetrag zzgl. Mahngeb\u00fchren innerhalb von 5 Werktagen zu begleichen.\nNach fruchtlosem Ablauf dieser Frist sehen wir uns gezwungen, unsere Forderung an ein Inkassounternehmen bzw. einen Rechtsanwalt zu \u00fcbergeben. Die dadurch entstehenden Kosten gehen zu Ihren Lasten.',

@@ -47,6 +47,8 @@ from pdf_import import parse_energieberatung_pdf
 from zugferd_writer import generate_zugferd_pdf
 from kosit_validator import validate_with_kosit, is_available as kosit_available
 from suppliers import SupplierManager
+import transactions
+import dauer_texte as _dt
 from transactions import (TransactionManager, STEP_KEYS, STEP_LABELS,
                            DOC_PREFIXES, make_position, calc_step_totals)
 from doc_generator import DocumentGenerator, _anrede as _doc_anrede
@@ -72,6 +74,10 @@ def _load_secret_key():
     return key
 
 app.secret_key = _load_secret_key()
+# Sitzungs-Cookie (Zugriffsprüfung 12.10.2026): bisher Flask-Standard — ohne Secure, ohne SameSite, ohne Ablauf. Eine fremde Seite
+# konnte im Browser des angemeldeten Inhabers POSTs auslösen (z. B. /api/reset-data), und ein kopiertes Cookie galt unbegrenzt.
+app.config.update(SESSION_COOKIE_SAMESITE="Lax", SESSION_COOKIE_SECURE=True, SESSION_COOKIE_HTTPONLY=True,
+                  PERMANENT_SESSION_LIFETIME=timedelta(days=14))     # rollierend: 14 Tage ohne Aufruf ⇒ neu anmelden
 
 def _load_users():
     if _AUTH_FILE.exists():
@@ -81,13 +87,45 @@ def _load_users():
 def _save_users(users):
     _AUTH_FILE.write_text(json.dumps({"users": users}, indent=2))
 
+# ── Bremse gegen Durchprobieren (Zugriffsprüfung 12.10.2026) ────────────────────────────────────────────
+# Login und Passwortwechsel waren ungebremst; der Passwortwechsel geht ohne Sitzung (Formular auf der Login-Seite) und machte
+# aus einem erratenen Passwort sofort eine Übernahme. Jetzt: je Adresse 5 Fehlversuche in 15 Minuten ⇒ 15 Minuten Sperre;
+# über alle Adressen 30 Fehlversuche je Stunde ⇒ 15 Minuten Sperre für alle (im Speicher; nginx bremst zusätzlich).
+_ANM_FEHL = {}
+def _anm_ip():
+    return (request.headers.get("X-Real-IP") or request.remote_addr or "?").strip()
+def _anm_gesperrt():
+    import time as _t
+    jetzt = _t.time()
+    for k in (_anm_ip(), "*"):
+        st = _ANM_FEHL.get(k)
+        if st and st.get("bis", 0) > jetzt:
+            return int(st["bis"] - jetzt) // 60 + 1
+    return 0
+def _anm_fehlversuch():
+    import time as _t
+    jetzt = _t.time()
+    for k, grenze, fenster in ((_anm_ip(), 5, 900), ("*", 30, 3600)):
+        st = _ANM_FEHL.setdefault(k, {"z": [], "bis": 0})
+        st["z"] = [x for x in st["z"] if jetzt - x < fenster] + [jetzt]
+        if len(st["z"]) >= grenze:
+            st["bis"] = jetzt + 900
+            st["z"] = []
+            print(f"[login] Sperre 15 min für {'alle' if k == '*' else k} nach {grenze} Fehlversuchen", flush=True)
+    if len(_ANM_FEHL) > 5000:
+        for k in [k for k, v in _ANM_FEHL.items() if v.get("bis", 0) < jetzt and not v.get("z")]:
+            _ANM_FEHL.pop(k, None)
+def _anm_erfolg():
+    _ANM_FEHL.pop(_anm_ip(), None)
+
+
 def _check_login(username, password):
     for u in _load_users():
         if u["username"] == username and check_password_hash(u["password_hash"], password):
             return True
     return False
 
-_LOGIN_SKIP = {"/login", "/api/auth/change-password", "/static", "/.well-known"}
+_LOGIN_SKIP = {"/login", "/logout", "/api/auth/change-password", "/static", "/.well-known"}   # /logout: auch bei abgelaufener Sitzung mit Hinweis zur Login-Seite
 # Externe API-Endpoints haben eigene X-API-Key-Authentifizierung,
 # daher Session-Auth-Pflicht hier überspringen.
 # Liste, damit lokale Erweiterungen eigene Praefixe anmelden koennen
@@ -112,6 +150,21 @@ def _steuersatz(wert, standard=19):
     except ValueError:
         return standard
     return t
+
+
+def _steuersatz_eingang(wert, standard=19):
+    """Steuersatz einer EINGELESENEN Rechnung (OCR/externe Übergabe). Wie _steuersatz, aber ein Wert
+    zwischen 0 und 1 ist ein Anteil, kein Prozentsatz: 0,19 → 19, 0,07 → 7 (16.10.2026 — die KI-Extraktion
+    lieferte bei 11 Rechnungen „0.19“, Brutto und Vorsteuer standen dadurch um 19 % zu niedrig). 0 bleibt 0."""
+    v = _steuersatz(wert, standard)
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return v
+    if 0 < f < 1:
+        pz = round(f * 100, 2)
+        return str(int(pz)) if pz == int(pz) else str(pz)
+    return v
 
 @app.before_request
 def require_login():
@@ -147,13 +200,23 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        if _check_login(username, password):
+        _sperre = _anm_gesperrt()
+        if _sperre:
+            error = f"Zu viele Fehlversuche. Bitte in {_sperre} Minuten erneut."
+        elif _check_login(username, password):
+            _anm_erfolg()
+            session.clear()
+            session.permanent = True
             session["logged_in"] = True
             session["username"] = username
             return redirect("/")
-        error = "Ungültiger Benutzername oder Passwort."
+        else:
+            _anm_fehlversuch()
+            error = "Ungültiger Benutzername oder Passwort."
     tpl = (_BASE / "static" / "login.html").read_text(encoding="utf-8")
-    return render_template_string(tpl, error=error, username=username)
+    # Hinweis nach dem Abmelden (/logout leitet auf /login?abgemeldet=1)
+    abgemeldet = request.method == "GET" and request.args.get("abgemeldet") == "1"
+    return render_template_string(tpl, error=error, username=username, abgemeldet=abgemeldet)
 
 @app.route("/einrichten", methods=["GET", "POST"])
 def einrichten():
@@ -185,7 +248,7 @@ def einrichten():
 @app.route("/logout")
 def logout():
     session.clear()
-    return redirect("/login")
+    return redirect("/login?abgemeldet=1")
 
 @app.route("/api/auth/change-password", methods=["POST"])
 def change_password():
@@ -195,14 +258,20 @@ def change_password():
     new_pw   = data.get("new_password", "")
     if not username or not old_pw or not new_pw:
         return jsonify({"ok": False, "error": "Fehlende Felder"}), 400
-    if len(new_pw) < 6:
-        return jsonify({"ok": False, "error": "Neues Passwort muss mindestens 6 Zeichen haben"}), 400
+    if len(new_pw) < 12:
+        return jsonify({"ok": False, "error": "Neues Passwort muss mindestens 12 Zeichen haben"}), 400
+    _sperre = _anm_gesperrt()
+    if _sperre:
+        return jsonify({"ok": False, "error": f"Zu viele Fehlversuche. Bitte in {_sperre} Minuten erneut."}), 429
     users = _load_users()
     for u in users:
         if u["username"] == username and check_password_hash(u["password_hash"], old_pw):
             u["password_hash"] = generate_password_hash(new_pw)
             _save_users(users)
+            _anm_erfolg()
+            print(f"[login] Passwort geändert für {username} von {_anm_ip()}", flush=True)
             return jsonify({"ok": True})
+    _anm_fehlversuch()
     return jsonify({"ok": False, "error": "Benutzername oder aktuelles Passwort falsch"}), 401
 
 
@@ -520,10 +589,33 @@ def _load_mandant_settings() -> dict:
                     settings[dst] = master[src]
         except Exception:
             pass
+    # Zahlungskonto für Kundenzahlungen umschaltbar (17.10.2026): Häkchen
+    # zahlkonto_alt_aktiv → neue Rechnungen/GiroCode/PDF tragen das Zweitkonto.
+    # Gespeichert bleibt immer das Standardkonto (iban_standard/bic_standard).
+    settings["iban_standard"] = settings.get("iban", "")
+    settings["bic_standard"] = settings.get("bic", "")
+    alt = dict(_ZAHLKONTO_ALT, **(settings.get("zahlkonto_alt") or {}))
+    settings["zahlkonto_alt_info"] = alt
+    if settings.get("zahlkonto_alt_aktiv") and alt.get("iban"):
+        settings["iban"] = " ".join(alt["iban"][i:i + 4] for i in range(0, len(alt["iban"]), 4))
+        settings["bic"] = alt.get("bic", "")
+        settings["bank_name"] = alt.get("bank", "")
     return settings
+
+# Zweitkonto: neutral leer; die Betreiberwerte setzt eine lokale Erweiterung (_ZAHLKONTO_ALT.update).
+_ZAHLKONTO_ALT = {"iban": "", "bic": "", "bank": ""}
 
 def _save_mandant_settings(data: dict):
     """Speichert in mandant_settings.json (Counter, Templates) UND propagiert die Stammdaten zurück nach mandant.json."""
+    data = dict(data)
+    # Abgeleitete Zahlkonto-Felder nie speichern: iban/bic = immer das Standardkonto
+    if "iban_standard" in data:
+        data["iban"] = data.pop("iban_standard")
+    if "bic_standard" in data:
+        data["bic"] = data.pop("bic_standard")
+    data.pop("zahlkonto_alt_info", None)
+    if data.get("bank_name") == (data.get("zahlkonto_alt") or {}).get("bank", _ZAHLKONTO_ALT["bank"]):
+        data.pop("bank_name", None)
     _MANDANT_FILE.parent.mkdir(parents=True, exist_ok=True)
     _MANDANT_FILE.write_text(json.dumps(data, indent=2, ensure_ascii=False), "utf-8")
     # Reverse-Sync: Stammdaten aus settings → mandant.json (Master bleibt aktuell)
@@ -539,6 +631,55 @@ def _save_mandant_settings(data: dict):
                 _MANDANT_MASTER_FILE.write_text(json.dumps(master, indent=2, ensure_ascii=False), "utf-8")
         except Exception:
             pass
+
+# ── Rechnungsnummer = Nummer + Name (19.10.2026, gilt auch für Energieausweise) ──
+# Gleiche Regel wie _nameFuerNummer() in static/index.html: Firma → prägendes Wort (bzw. der Nachname des
+# Ansprechpartners, wenn er im Firmennamen steckt), Privatperson → Nachname. Kundennr./EA-ID bleiben in der
+# buyer_reference (BT-10) und Notiz — darüber laufen Zahlungsabgleich und .team-Zuordnung.
+_NR_FORM = {"gmbh", "mbh", "ag", "kg", "ohg", "gbr", "egbr", "ug", "se", "ev", "ek", "eg", "kgaa", "co", "ltd",
+            "inc", "sarl", "sàrl", "partg", "partgmbb", "gmbhcokg"}
+_NR_ANREDE = re.compile(r"^(herr|herrn|frau|familie|fam|eheleute|dr|prof|dipl|diplling|ing|und|u)$", re.I)
+_NR_ALLGEMEIN = re.compile(r"^(regionalentwicklungsgesellschaft|gesellschaft|ingenieur[b](?:ü|ue)ro|büro|buero|"
+                           r"firma|immobilien|hausverwaltung|verwaltung|finanzkontor|property|retail|management)$", re.I)
+_NR_ZEICHEN = re.compile(r"[^A-Za-zÄÖÜäöüßÀ-ÿ0-9-]")
+
+
+def _name_fuer_nummer(firma: str, kontakt: str = "") -> str:
+    def roh(t):
+        out = []
+        for w in re.split(r"[\s,;/|&+]+", t or ""):
+            w = _NR_ZEICHEN.sub("", w).strip("-")
+            if w:
+                out.append(w)
+        return out
+    klein = lambda w: w.lower().replace("-", "")
+    ohne_anrede = lambda t: [w for w in roh(t) if not _NR_ANREDE.match(klein(w)) and len(w) > 1]
+    firma, kontakt = (firma or "").strip(), (kontakt or "").strip()
+    fw = roh(firma)
+    ist_firma = (any(klein(w) in _NR_FORM for w in fw) or re.search(r"\s-\s|\||&|\+|\bc/o\b", firma, re.I)
+                 or (len(fw) > 4 and not re.search(r"\bund\b", firma, re.I)))
+    kn = ohne_anrede(kontakt)
+    nach = kn[-1] if kn else ""
+    if firma and ist_firma:
+        kern = [w for w in ohne_anrede(firma) if klein(w) not in _NR_FORM and not w[0].isdigit()]
+        treffer = [w for w in kern if nach and klein(w) == klein(nach)]
+        n = treffer[0] if treffer else next((w for w in kern if not _NR_ALLGEMEIN.match(w)), kern[0] if kern else "")
+    else:
+        w = ohne_anrede(firma or kontakt)
+        treffer = [x for x in w if nach and klein(x) == klein(nach)]
+        n = treffer[0] if treffer else (w[-1] if w else "")
+    if len(n) > 3 and n == n.upper():
+        n = n[0] + n[1:].lower()
+    return n[:30]
+
+
+def _nummer_mit_name(nummer: str, firma: str, kontakt: str = "") -> str:
+    """Hängt den Namen an eine frisch vergebene RE-/GS-Nummer (nur an die nackte Nummer)."""
+    zus = _name_fuer_nummer(firma, kontakt)
+    if zus and re.fullmatch(r"(RE|GS)-\d{4}-\d{5}", nummer or ""):
+        return f"{nummer}-{zus}"
+    return nummer
+
 
 def _next_invoice_number(advance: bool = False) -> str:
     """Erzeugt die naechste Rechnungsnummer RE-YYYY-XXXXX.
@@ -664,6 +805,13 @@ def api_mandant_settings_save():
     for k in allowed:
         if k in data:
             settings[k] = data[k]
+    # Formular zeigt das Standardkonto → als Standard übernehmen
+    if "iban" in data:
+        settings["iban_standard"] = data["iban"]
+    if "bic" in data:
+        settings["bic_standard"] = data["bic"]
+    if "zahlkonto_alt_aktiv" in data:
+        settings["zahlkonto_alt_aktiv"] = bool(data["zahlkonto_alt_aktiv"])
     _save_mandant_settings(settings)
     return _json({"saved": True})
 
@@ -879,14 +1027,51 @@ def _save_buyer_if_new(name: str, street: str = "", house_number: str = "",
     # bzw. (ohne E-Mail) der Anzeigename übereinstimmt. So gelten z.B. eine
     # Privatperson und ihre Firma mit derselben E-Mail als VERSCHIEDENE Kunden
     # (z.B. „Oliver Frentrup" privat vs. „Finanzkontor" Firma).
+    def _uebernehmen(b: dict) -> dict:
+        """Vorhandenen Kunden mit den neuen Angaben auffrischen.
+
+        Bis 22.09.2026 gab dieser Weg den gefundenen Datensatz UNVERÄNDERT zurück:
+        wer im Rechnungsformular die Anschrift oder die Mailadresse eines bekannten
+        Kunden korrigierte, bekam „gespeichert" zu sehen — in der Kundenliste stand
+        aber weiter der alte Stand (22.09.2026). Leere Felder überschreiben
+        nichts; der Name selbst bleibt, er ist hier das Erkennungsmerkmal.
+        """
+        neu_werte = {
+            "street": street, "house_number": house_number, "post_code": post_code,
+            "city": city, "email": email, "phone": phone, "reference": reference,
+            "vat_id": vat_id, "salutation": salutation,
+            "contact_salutation": contact_salutation, "contact_name": contact_name,
+        }
+        geaendert = []
+        for k, v in neu_werte.items():
+            v = (v or "").strip()
+            if v and (b.get(k) or "").strip() != v:
+                b[k] = v
+                geaendert.append(k)
+        if geaendert:
+            _save_buyers(buyers)
+            print(f"[buyers] {b.get('id')} {display}: aktualisiert ({', '.join(geaendert)})", flush=True)
+        return b
+
     for b in buyers:
         b_email = (b.get("email") or "").strip().lower()
         b_display = _flach(b.get("name", "") or b.get("contact_name", ""))
         if email_norm and b_email and b_email == email_norm and b_display == display_norm:
-            return b
+            return _uebernehmen(b)
     for b in buyers:
         if _flach(b.get("name", "") or b.get("contact_name", "")) == display_norm:
-            return b
+            return _uebernehmen(b)
+    # Derselbe Haushalt unter anderem Namen (12.10.2026, Shala: „Familie Shala" und „Nurdan … Shala" standen zweimal in der
+    # Liste): gleiche E-Mail UND gleiche Anschrift, beide Privatkunden ⇒ derselbe Kunde. Der Bestand bleibt unverändert —
+    # sein Name ist das Erkennungsmerkmal; Firma und Privatperson mit derselben E-Mail bleiben weiter zwei Kunden.
+    _adr = lambda x: (_flach(x.get("street")), _flach(x.get("house_number")), _flach(str(x.get("post_code") or "")))
+    _neu_adr = (_flach(street), _flach(house_number), _flach(str(post_code or "")))
+    if is_private and email_norm and all(_neu_adr):
+        for b in buyers:
+            if (b.get("is_private") and (b.get("email") or "").strip().lower() == email_norm and _adr(b) == _neu_adr):
+                print(f"[buyers] {display}: als vorhandener Kunde {b.get('id')} "
+                      f"{b.get('name') or b.get('contact_name')} erkannt (gleiche E-Mail + Anschrift)", flush=True)
+                return b
     buyer = {
         "id": _generate_buyer_id(display, {b.get("id") for b in buyers}),
         "name": name.strip(),           # Firma (leer bei Privatpersonen)
@@ -927,18 +1112,41 @@ def api_external_upsert_customer():
     c = request.get_json(silent=True) or {}
     vorname = (c.get("vorname") or "").strip()
     nachname = (c.get("nachname") or "").strip()
-    contact = (vorname + " " + nachname).strip() or (c.get("ansprechpartner") or "").strip()
+    # Nachname nicht doppelt: wer im Formular „Nurdan und Xhavit Shala" als Vornamen einträgt, hieß sonst „… Shala Shala".
+    if vorname and nachname and vorname.lower().split()[-1] == nachname.lower():
+        contact = vorname
+    else:
+        contact = (vorname + " " + nachname).strip() or (c.get("ansprechpartner") or "").strip()
+    firma = (c.get("firma") or "").strip()
+    # Familie / Eheleute (12.10.2026, Shala): der Kunde IST „Familie <Nachname>" — ohne Ansprechpartner, wie es Anschrift und
+    # Briefanrede erwarten. Ein vorhandener Kunde mit derselben E-Mail wird unter „Familie Shala", „Eheleute Shala" oder
+    # „Shala" wiedererkannt; bis dahin entstand daneben ein zweiter Kunde mit den Vornamen als Namen.
+    _anrede = (c.get("anrede") or "").strip()
+    if not firma and nachname and _anrede in ("Familie", "Eheleute"):
+        _fl = lambda x: " ".join((x or "").split()).lower()
+        _kand = {_fl(_anrede + " " + nachname), _fl("Familie " + nachname), _fl("Eheleute " + nachname), _fl(nachname)}
+        _mail = (c.get("email") or "").strip().lower()
+        _da = next((x for x in _load_buyers()
+                    if _mail and (x.get("email") or "").strip().lower() == _mail
+                    and _fl(x.get("name", "") or x.get("contact_name", "")) in _kand), None)
+        if _da is not None and not (_da.get("name") or "").strip():
+            firma, contact = "", (_da.get("contact_name") or "").strip()      # Bestand führt den Namen beim Ansprechpartner
+        else:
+            firma, contact = ((_da.get("name") or "").strip() if _da is not None else _anrede + " " + nachname), ""
 
     before_ids = {b.get("id") for b in _load_buyers()}
     buyer = _save_buyer_if_new(
-        name=(c.get("firma") or "").strip(),
+        name=firma,
         street=(c.get("strasse") or "").strip(),
         house_number=(c.get("hausnummer") or "").strip(),
         post_code=str(c.get("plz") or "").strip(),
         city=(c.get("ort") or "").strip(),
         email=(c.get("email") or "").strip(),
         phone=(c.get("tel") or c.get("telefon") or "").strip(),
-        reference=(c.get("quelle") or "").strip(),
+        # 16.10.2026: "quelle" ist ein Herkunftsvermerk, KEINE Käuferreferenz. Bis hierher landete er in
+        # "reference" — das ist BT-10 und wird im Rechnungsformular an die Rechnungsnummer gehängt
+        # (RE-2026-00099-kundendaten-formular AK-2026-0082 ging so an den Kunden). Jetzt eigenes Feld.
+        reference="",
         salutation=(c.get("anrede") or "").strip(),
         contact_name=contact,
         is_private=bool(c.get("is_private")),
@@ -946,6 +1154,13 @@ def api_external_upsert_customer():
     if not buyer:
         return _json({"error": "Weder Firma noch Name angegeben"}, 400)
     existed = buyer.get("id") in before_ids
+    _quelle = (c.get("quelle") or "").strip()
+    if _quelle:
+        _bl = _load_buyers()
+        _b = next((x for x in _bl if x.get("id") == buyer.get("id")), None)
+        if _b is not None and not (_b.get("quelle") or "").strip():
+            _b["quelle"] = _quelle
+            _save_buyers(_bl)
     print(f"[external/upsert-customer] {'vorhanden' if existed else 'NEU'}: "
           f"{buyer.get('name') or buyer.get('contact_name')} ({buyer.get('id')}) "
           f"quelle={c.get('quelle') or '—'}", flush=True)
@@ -994,7 +1209,7 @@ def api_buyers_update(buyer_id):
         if b.get("id") == buyer_id:
             for key in ["name", "street", "house_number", "post_code", "city", "email",
                         "phone", "reference", "vat_id", "salutation", "contact_name",
-                        "contact_salutation"]:
+                        "contact_salutation", "quelle"]:
                 if key in data:
                     b[key] = data[key].strip() if isinstance(data[key], str) else data[key]
             if "is_private" in data:
@@ -2301,6 +2516,67 @@ def api_txn_step_skip(tid, step_key):
         return _json({"error": str(e)}, 400)
 
 
+@app.route("/api/transactions/<tid>/steps/<step_key>/revise", methods=["POST"])
+def api_txn_step_revise(tid, step_key):
+    """Angebot anpassen: neue Fassung (V2, V3 …), die alte bleibt als Beleg erhalten."""
+    data = request.json or {}
+    try:
+        txn = txn_mgr.revise_step(tid, step_key,
+                                  data.get("user", "system"),
+                                  data.get("reason", ""),
+                                  bool(data.get("erzwingen")))
+        step = (txn.get("steps") or {}).get(step_key, {})
+        return _json({"revised": True, "version": step.get("version"),
+                      "reference": step.get("reference"), "transaction": txn})
+    except transactions.SpaetereStufeFreigegeben as e:
+        # Keine Ablehnung, sondern eine Rückfrage: die Oberfläche fragt nach und
+        # schickt dieselbe Anfrage mit `erzwingen` erneut (22.09.2026).
+        return _json({"error": str(e), "rueckfrage": "spaetere_stufe_freigegeben",
+                      "stufen": e.stufen}, 409)
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/cancel", methods=["POST"])
+def api_txn_step_cancel(tid, step_key):
+    """Stufe stornieren; schließt standardmäßig den ganzen Vorgang mit."""
+    data = request.json or {}
+    schliessen = data.get("close_transaction")
+    try:
+        txn = txn_mgr.cancel_step(tid, step_key,
+                                  data.get("user", "system"),
+                                  data.get("reason", ""),
+                                  True if schliessen is None else bool(schliessen))
+        return _json({"cancelled": True, "transaction_status": txn.get("status"),
+                      "transaction": txn})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/transactions/<tid>/steps/<step_key>/sync-positions", methods=["POST"])
+def api_txn_step_sync_positions(tid, step_key):
+    """Positionen der Vorstufe ausdrücklich übernehmen (z. B. nach einer Angebotsänderung)."""
+    data = request.json or {}
+    try:
+        txn = txn_mgr.sync_positions(tid, step_key, data.get("user", "system"))
+        step = (txn.get("steps") or {}).get(step_key, {})
+        return _json({"synced": True, "amount": step.get("amount"), "transaction": txn})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
+@app.route("/api/transactions/<tid>/reopen", methods=["POST"])
+def api_txn_reopen(tid):
+    """Storno aufheben — der Vorgang läuft wieder mit."""
+    data = request.json or {}
+    try:
+        txn = txn_mgr.reopen_transaction(tid, data.get("user", "system"),
+                                         data.get("reason", ""))
+        return _json({"reopened": True, "transaction": txn})
+    except ValueError as e:
+        return _json({"error": str(e)}, 400)
+
+
 @app.route("/api/transactions/<tid>/deliveries", methods=["POST"])
 def api_txn_add_delivery(tid):
     data = request.json or {}
@@ -2379,9 +2655,269 @@ def api_txn_payment_invoices_mark_sent(tid, pid):
                                                document_id=data.get("document_id", ""),
                                                to=empfaenger, channel="manuell",
                                                note=hinweis)
-        return _json({"saved": True, "payment_invoice": p})
+        # Als Rechnung registrieren und den Versand dort vermerken — sonst fehlt der
+        # Abschlag in den offenen Forderungen (16.09.2026, AR-2026-0004).
+        registriert = None
+        try:
+            txn = txn_mgr.get(tid)
+            p_neu = next((x for x in (txn or {}).get("payment_invoices", []) if x.get("id") == pid), None)
+            if txn and p_neu:
+                inv, _xml, _rep = _abschlag_registrieren(tid, txn, p_neu)
+                registriert = inv.invoice_number
+        except Exception as e:
+            print(f"  Abschlag registrieren nach mark-sent: {e}")
+        return _json({"saved": True, "payment_invoice": p, "registered": registriert})
     except ValueError as e:
         return _json({"error": str(e)}, 400)
+
+
+# ── Abschlagsrechnung: Vertragsbezug, Zahlungsziel, Mailtext (09.10.2026) ──
+# Bis hierher ging eine Abschlagsrechnung mit dem allgemeinen Rechnungstext
+# hinaus ("anbei erhalten Sie unsere Rechnung"), das PDF sagte "zahlbar sofort",
+# die XRechnung "14 Tage" und der Dienstvertrag "10 Kalendertage". Jetzt gibt es
+# EINE Quelle: den Vertrag, unter dem der Vorgang laeuft.
+_ABSCHLAG_VERTRAEGE = [
+    ("dienstvertrag", {
+        "name": "Dienstvertrag",
+        "bezug": "§ 3 Ziff. 3.2 des Dienstvertrags",
+        "tage": 10,
+        "stufen": [(40, "40 % im Voraus nach Abschluss des Vertrages"),
+                   (35, "35 % nach Einbau der Heiztechnik"),
+                   (25, "25 % nach Fertigstellung der energetischen Maßnahme")],
+    }),
+    ("vertrag_energieberatung", {
+        "name": "Vertrag über eine Energieberatung",
+        "bezug": "§ 4 Ziff. 4.2 des Vertrags über eine Energieberatung",
+        "tage": 14,
+        "stufen": [(50, "50 % nach Vertragsschluss")],
+    }),
+]
+_ABSCHLAG_TAGE_OHNE_VERTRAG = 14
+
+
+def _abschlag_vertrag(txn) -> dict:
+    """Der Vertrag, unter dem der Vorgang laeuft — oder {} wenn keiner erkennbar ist.
+
+    Reihenfolge: am Angebot gemerkte Vertragsdateien → Vertrag des Artikels →
+    Standardvertrag, wenn ein Artikel "Vertrag separat" traegt oder der Vertrag
+    ins Angebots-PDF eingebunden wurde.
+    """
+    steps = txn.get("steps") or {}
+    cq = steps.get("customer_quote") or {}
+    dateien = list(cq.get("vertrag_dateien") or [])
+    if cq.get("vertrag_datei"):
+        dateien.append(cq.get("vertrag_datei"))
+    positionen = []
+    for k in ("order_confirmation", "order_intake", "customer_quote"):
+        positionen = (steps.get(k) or {}).get("positions") or []
+        if positionen:
+            break
+    try:
+        prod = {p.get("art_nr"): p for p in _load_products()}
+    except Exception:
+        prod = {}
+    separat = False
+    for pos in positionen:
+        pr = prod.get(pos.get("art_nr")) or {}
+        dateien += list(pr.get("vertrag_dateien") or [])
+        if pr.get("vertrag_datei"):
+            dateien.append(pr.get("vertrag_datei"))
+        separat = separat or bool(pr.get("contract_separate"))
+    if not dateien:
+        try:
+            os_ = _load_offer_settings()
+        except Exception:
+            os_ = {}
+        eingebunden = (os_.get("vertrag_mode") == "pdf" and cq.get("reference")
+                       and not cq.get("kein_vertrag"))
+        if separat or eingebunden:
+            dateien.append(os_.get("vertrag_pdf_filename") or "Dienstvertrag.pdf")
+    for d in dateien:
+        low = str(d).lower()
+        for schluessel, v in _ABSCHLAG_VERTRAEGE:
+            if low.startswith(schluessel):
+                return dict(v, datei=d)
+    return {}
+
+
+def _abschlag_bedingungen(txn, p) -> dict:
+    """Zahlungsziel, Vertragsbezug und Stufe einer Abschlagsrechnung."""
+    v = _abschlag_vertrag(txn)
+    tage = int(v.get("tage") or _ABSCHLAG_TAGE_OHNE_VERTRAG)
+    try:
+        datum = date.fromisoformat(str(p.get("date") or date.today().isoformat())[:10])
+    except Exception:
+        datum = date.today()
+    steps = txn.get("steps") or {}
+    auftrag_netto, auftrag_ref, auftrag_datum = 0.0, "", ""
+    for k in ("order_confirmation", "order_intake", "customer_quote"):
+        st = steps.get(k) or {}
+        pos = st.get("positions") or []
+        if pos and not auftrag_netto:
+            auftrag_netto = (sum(float(x.get("net_amount") or 0) for x in pos)
+                             - float(st.get("doc_discount_amount") or 0)
+                             + float(st.get("doc_surcharge_amount") or 0))
+        if st.get("reference") and not auftrag_ref:
+            auftrag_ref, auftrag_datum = st.get("reference"), str(st.get("date") or "")[:10]
+    netto = float(p.get("amount_net") or 0)
+    anteil = round(netto / auftrag_netto * 100, 1) if auftrag_netto > 0 else None
+    stufe = ""
+    if anteil is not None:
+        for prozent, text in (v.get("stufen") or []):
+            if abs(anteil - prozent) <= 0.5:
+                stufe = text
+                break
+    kal = "Kalendertagen" if v else "Tagen"
+    return {
+        "vertrag": v.get("name", ""), "bezug": v.get("bezug", ""), "tage": tage,
+        "zahlungsziel": f"Zahlbar innerhalb von {tage} {kal} ab Rechnungsdatum ohne Abzug",
+        "faellig": datum + timedelta(days=tage), "datum": datum,
+        "stufe": stufe, "anteil": anteil, "auftrag_netto": auftrag_netto,
+        "auftrag_ref": auftrag_ref, "auftrag_datum": auftrag_datum,
+    }
+
+
+def _eur(x) -> str:
+    return f"{float(x or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _abschlag_einleitung(txn, p) -> str:
+    """Einleitungstext fuers Abschlags-PDF (Anrede setzt der Dokumentgenerator)."""
+    b = _abschlag_bedingungen(txn, p)
+    grund = f"gemäß {b['bezug']}" if b["bezug"] else "vereinbarungsgemäß"
+    auftrag = (f" zu unserer Auftragsbestätigung {b['auftrag_ref']}"
+               + (f" vom {_de_datum(b['auftrag_datum'])}" if b["auftrag_datum"] else "")
+               if b["auftrag_ref"] else "")
+    stufe = f" ({b['stufe']})" if b["stufe"] else ""
+    return ("Sehr geehrte Damen und Herren,\n\n"
+            f"{grund} stellen wir Ihnen{auftrag} die folgende Abschlagsrechnung{stufe}. "
+            "Die Abschlagszahlung wird in der Schlussrechnung mit Netto- und "
+            "Umsatzsteuerbetrag ausgewiesen und vom Rechnungsbetrag abgezogen.\n"
+            f"{b['zahlungsziel']}.")
+
+
+def _de_datum(d) -> str:
+    try:
+        return date.fromisoformat(str(d)[:10]).strftime("%d.%m.%Y")
+    except Exception:
+        return str(d or "")
+
+
+def _abschlag_mailtext(txn, p, buyer=None) -> tuple:
+    """(Betreff, Text) der Mail, mit der eine Abschlagsrechnung hinausgeht."""
+    ms = _load_mandant_settings()
+    b = _abschlag_bedingungen(txn, p)
+    buyer = buyer or {"name": txn.get("buyer_name", "")}
+    try:
+        anrede = _doc_anrede(buyer)
+    except Exception:
+        anrede = "Sehr geehrte Damen und Herren,"
+    absender = " ".join((ms.get("name", "") or "").split())
+    nr = p.get("reference", "")
+    titel = (p.get("title") or "Abschlagsrechnung").strip()
+    if "abschlag" not in titel.lower() and "anzahlung" not in titel.lower() \
+            and "teilrechnung" not in titel.lower():
+        titel = f"Abschlagsrechnung – {titel}"
+    vorhaben = (txn.get("subject") or "").strip()
+    netto = float(p.get("amount_net") or 0)
+    brutto = float(p.get("amount_gross") or 0)
+    satz = float(p.get("tax_rate") or 0)
+    ust = round(brutto - netto, 2)
+    satz_txt = (f"{satz:.1f}".rstrip("0").rstrip(".")).replace(".", ",")
+
+    betreff = f"Abschlagsrechnung {nr} vom {b['datum'].strftime('%d.%m.%Y')}"
+    if vorhaben:
+        betreff += f" – {vorhaben}"
+    elif absender:
+        betreff += f" – {absender}"
+
+    grund = f"gemäß {b['bezug']}" if b["bezug"] else "vereinbarungsgemäß"
+    auftrag = (f" zu unserer Auftragsbestätigung {b['auftrag_ref']}"
+               + (f" vom {_de_datum(b['auftrag_datum'])}" if b["auftrag_datum"] else "")
+               if b["auftrag_ref"] else "")
+    zeilen = [anrede, "",
+              f"{grund} erhalten Sie anbei unsere {titel} (Nr. {nr}) vom "
+              f"{b['datum'].strftime('%d.%m.%Y')}{auftrag}."
+              + (f"\nVorhaben: {vorhaben}" if vorhaben else ""), ""]
+    if b["stufe"]:
+        zeilen.append(f"  Fällige Stufe:    {b['stufe']}")
+    if b["auftrag_netto"] > 0:
+        zeilen.append(f"  Auftragssumme:    {_eur(b['auftrag_netto'])} EUR netto")
+    zeilen += [
+        f"  Abschlag netto:   {_eur(netto)} EUR",
+        f"  USt {satz_txt} %:".ljust(20) + f"{_eur(ust)} EUR",
+        f"  Abschlagsbetrag:  {_eur(brutto)} EUR",
+        f"  Zahlbar bis:      {b['faellig'].strftime('%d.%m.%Y')}"
+        f" ({b['tage']} {'Kalendertage' if b['vertrag'] else 'Tage'} ab Rechnungsdatum)",
+        f"  Verwendungszweck: {nr}", "",
+        "Die Abschlagszahlung wird in der Schlussrechnung mit Netto- und "
+        "Umsatzsteuerbetrag ausgewiesen und vom Rechnungsbetrag abgezogen.", "",
+        "Die Abschlagsrechnung liegt als PDF bei, zusätzlich im strukturierten "
+        "XRechnung-Format (EN 16931).", "",
+        "Bei Rückfragen wenden Sie sich bitte an:",
+    ]
+    for k in ("contact_name", "contact_phone", "email"):
+        if ms.get(k):
+            zeilen.append(f"  {ms.get(k)}")
+    zeilen += ["", "Mit freundlichen Grüßen", absender]
+    return betreff, "\n".join(zeilen) + "\n"
+
+
+def _abschlag_pdf_bauen(tid, txn, p) -> dict:
+    """Erzeugt das Abschlags-PDF (Text, Zahlungsziel aus dem Vertrag) und merkt es am Abschlag."""
+    buyers = _load_buyers()
+    buyer = next((b for b in buyers if b.get("id") == txn.get("buyer_id")), None)
+    recipient = buyer if buyer else {"name": txn.get("buyer_name", "")}
+    bed = _abschlag_bedingungen(txn, p)
+    pos = [{
+        "pos_nr": 1,
+        "description": (p.get("description") or p.get("title") or "Abschlagsrechnung")
+                       + (f" – {bed['stufe']}" if bed["stufe"] else ""),
+        "quantity": 1, "unit": "psch.",
+        "unit_price": float(p.get("amount_net", 0)),
+        "net_amount": float(p.get("amount_net", 0)),
+        "tax_rate": float(p.get("tax_rate", 19)),
+        "discount_percent": 0,
+    }]
+    fake_step = {"positions": pos, "intro_text": "", "closing_text": "",
+                 "doc_discount_amount": 0, "doc_surcharge_amount": 0}
+    templates = _load_mandant_settings().get("doc_templates", {})
+    intro = templates.get("payment_invoice_intro", "") or _abschlag_einleitung(txn, p)
+    closing = templates.get("payment_invoice_closing", "")
+    doc_gen._prepaid_invoices = None
+    doc_entry = doc_gen.generate(
+        doc_type="payment_invoice",
+        recipient=recipient,
+        positions=pos,
+        step=fake_step,
+        reference=p.get("reference", ""),
+        subject=p.get("title", "Abschlagsrechnung"),
+        doc_date=p.get("date", ""),
+        due_date=bed["faellig"].isoformat(),
+        transaction_id=tid,
+        step_key="payment_invoice",
+        intro_text=intro,
+        closing_text=closing,
+    )
+    txn_mgr.update_payment_invoice(tid, p["id"], {"document_id": doc_entry["id"]})
+    return doc_entry
+
+
+@app.route("/api/transactions/<tid>/payment-invoices/<pid>/mailtext", methods=["GET"])
+def api_txn_payment_invoice_mailtext(tid, pid):
+    """Vorschlag fuer Empfaenger, Betreff und Text — der Versanddialog zeigt ihn zum Aendern."""
+    txn = txn_mgr.get(tid)
+    if not txn:
+        return _json({"error": "Vorgang nicht gefunden"}, 404)
+    p = next((x for x in txn.get("payment_invoices", []) if x.get("id") == pid), None)
+    if not p:
+        return _json({"error": "Abschlag nicht gefunden"}, 404)
+    buyer = next((b for b in _load_buyers() if b.get("id") == txn.get("buyer_id")), None) or {}
+    betreff, text = _abschlag_mailtext(txn, p, buyer or None)
+    bed = _abschlag_bedingungen(txn, p)
+    return _json({"recipient": buyer.get("email", ""), "subject": betreff, "body": text,
+                  "vertrag": bed["vertrag"], "bezug": bed["bezug"], "stufe": bed["stufe"],
+                  "faellig": bed["faellig"].isoformat(), "tage": bed["tage"]})
 
 
 @app.route("/api/transactions/<tid>/payment-invoices/<pid>/generate-pdf", methods=["POST"])
@@ -2394,50 +2930,39 @@ def api_txn_payment_invoice_generate_pdf(tid, pid):
     if not p:
         return _json({"error": "Abschlag nicht gefunden"}, 404)
 
-    # Empfänger (Kunde)
-    buyers = _load_buyers()
-    buyer = next((b for b in buyers if b.get("id") == txn.get("buyer_id")), None)
-    recipient = buyer if buyer else {"name": txn.get("buyer_name", "")}
-
-    # Pauschal-Position auf Basis von amount_net + tax_rate
-    pos = [{
-        "pos_nr": 1,
-        "description": p.get("description") or p.get("title") or "Abschlagsrechnung",
-        "quantity": 1, "unit": "pauschal",
-        "unit_price": float(p.get("amount_net", 0)),
-        "net_amount": float(p.get("amount_net", 0)),
-        "tax_rate": float(p.get("tax_rate", 19)),
-        "discount_percent": 0,
-    }]
-    fake_step = {"positions": pos, "intro_text": "", "closing_text": "",
-                  "doc_discount_amount": 0, "doc_surcharge_amount": 0}
-    templates = _load_mandant_settings().get("doc_templates", {})
-    intro = templates.get("payment_invoice_intro", "")
-    closing = templates.get("payment_invoice_closing", "")
-
     try:
-        doc_gen._prepaid_invoices = None
-        doc_entry = doc_gen.generate(
-            doc_type="payment_invoice",
-            recipient=recipient,
-            positions=pos,
-            step=fake_step,
-            reference=p.get("reference", ""),
-            subject=p.get("title", "Abschlagsrechnung"),
-            doc_date=p.get("date", ""),
-            due_date=p.get("date", ""),
-            transaction_id=tid,
-            step_key="payment_invoice",
-            intro_text=intro,
-            closing_text=closing,
-        )
-        # document_id ans Payment-Invoice hängen
-        txn_mgr.update_payment_invoice(tid, pid, {"document_id": doc_entry["id"]})
+        doc_entry = _abschlag_pdf_bauen(tid, txn, p)
         return _json({"generated": True, "document": doc_entry,
                        "download_url": f"/api/documents/{doc_entry['filename']}"})
     except Exception as e:
         import traceback; traceback.print_exc()
         return _json({"error": f"PDF-Erzeugung fehlgeschlagen: {e}"}, 500)
+
+
+def _abschlag_versand_vermerken(inv, p) -> bool:
+    """Ein am Vorgang als versendet/bezahlt gefuehrter Abschlag muss das auch an
+    der registrierten Rechnung tragen — sonst zaehlt `_is_invoice_sent` sie nicht,
+    und sie fehlt in den offenen Forderungen (16.09.2026, AR-2026-0004
+    Goldmann: am 07.09. von Hand als versendet vermerkt, aber nie registriert).
+    Idempotent; Rueckgabe True, wenn etwas geaendert wurde."""
+    st = (p.get("status") or "").upper()
+    if st not in ("SENT", "PAID"):
+        return False
+    geaendert = False
+    if not any(getattr(e, "event_type", "") == "EMAIL_VERSENDET" for e in (inv.audit_trail or [])):
+        wie = (p.get("sent_channel") or "manuell")
+        an = p.get("sent_to") or ""
+        inv.add_audit("EMAIL_VERSENDET", user="system",
+                      comment=(f"Abschlag laut Vorgang versendet am {str(p.get('sent_at') or '')[:10]}"
+                               f" ({wie}{', an ' + an if an else ''})"
+                               + (f" — {p.get('sent_note')}" if p.get("sent_note") else "")).strip())
+        if inv.status in ("NEU", "IN_PRUEFUNG", "IN_FREIGABE"):
+            _alt = inv.status
+            inv.status = "FREIGEGEBEN"
+            inv.add_audit("FREIGEGEBEN", user="system",
+                          comment="Freigegeben: Abschlag war bereits versendet", old_value=_alt)
+        geaendert = True
+    return geaendert
 
 
 def _abschlag_registrieren(tid, txn, p):
@@ -2463,6 +2988,8 @@ def _abschlag_registrieren(tid, txn, p):
     vorhanden = next((i for i in invoices.values()
                       if (i.invoice_number or "").strip() == nummer), None)
     if vorhanden is not None:
+        if _abschlag_versand_vermerken(vorhanden, p):
+            auto_save()
         return vorhanden, generate_and_serialize(vorhanden), validate_invoice(vorhanden)
 
     netto = Decimal(str(p.get("amount_net") or 0))
@@ -2477,8 +3004,9 @@ def _abschlag_registrieren(tid, txn, p):
     }
 
     inv_date = date.fromisoformat(str(p.get("date") or date.today().isoformat())[:10])
-    zahlungsziel = "Zahlbar innerhalb von 14 Tagen"
-    faellig = inv_date + timedelta(days=14)
+    _bed = _abschlag_bedingungen(txn, p)      # Vertrag des Vorgangs: 10 bzw. 14 Kalendertage
+    zahlungsziel = _bed["zahlungsziel"]
+    faellig = inv_date + timedelta(days=_bed["tage"])
 
     inv = Invoice(
         invoice_number=nummer,
@@ -2487,7 +3015,10 @@ def _abschlag_registrieren(tid, txn, p):
         currency_code="EUR",
         buyer_reference=buyer_data.get("reference", "") or txn.get("buyer_name", ""),
         note=(f"Abschlagsrechnung zum Vorgang {txn.get('number') or txn.get('id')}: "
-              f"{txn.get('subject', '')}").strip(),
+              f"{txn.get('subject', '')}"
+              + (f" — {_bed['stufe']} ({_bed['bezug']})" if _bed["stufe"] and _bed["bezug"] else "")
+              + ". Die Abschlagszahlung wird in der Schlussrechnung mit Netto- und "
+                "Umsatzsteuerbetrag abgesetzt.").strip(),
         seller=Seller(
             name=ms.get("name", ""),
             address=Address(street=ms.get("street", ""), house_number=ms.get("house_number", ""),
@@ -2497,7 +3028,9 @@ def _abschlag_registrieren(tid, txn, p):
             vat_id=ms.get("vat_id", ""), tax_registration_id=ms.get("tax_registration_id", ""),
         ),
         buyer=Buyer(
-            name=buyer_data.get("name", ""),
+            # Privatkunden tragen den Namen nur beim Ansprechpartner (name leer) — ohne diesen Rückgriff fehlte der
+            # Käufername (BT-44), die XRechnung war ungültig und der Versand blieb aus (RE-2026-00097, 12.10.2026).
+            name=(buyer_data.get("name", "") or "").strip() or (buyer_data.get("contact_name", "") or "").strip(),
             address=Address(street=buyer_data.get("street", ""),
                             house_number=buyer_data.get("house_number", ""),
                             city=buyer_data.get("city", ""),
@@ -2526,6 +3059,7 @@ def _abschlag_registrieren(tid, txn, p):
         pass
     invoices[inv._id] = inv
     inbox.duplicates.register(inv, inv._id)
+    _abschlag_versand_vermerken(inv, p)
 
     # Das schon erzeugte Abschlags-PDF ins Archiv legen, statt ein zweites zu bauen
     _pdf = None
@@ -2538,8 +3072,11 @@ def _abschlag_registrieren(tid, txn, p):
     _archive_ausgang(inv, xml_bytes, report, pdf_bytes=_pdf)
     auto_save()
 
-    txn_mgr.update_payment_invoice(tid, p["id"],
-                                   {"invoice_id": inv._id, "invoice_number": nummer})
+    try:   # bezahlte Abschlaege sind am Vorgang gesperrt — die Rechnung steht trotzdem im Register
+        txn_mgr.update_payment_invoice(tid, p["id"],
+                                       {"invoice_id": inv._id, "invoice_number": nummer})
+    except ValueError as e:
+        print(f"  Abschlag {nummer}: Verweis am Vorgang nicht gesetzt ({e})")
     return inv, xml_bytes, report
 
 
@@ -2606,6 +3143,16 @@ def api_txn_payment_invoice_send(tid, pid):
                       "errors": [i.message for i in report.issues
                                  if i.severity.value == "ERROR"]}, 400)
 
+    # Entwurf: PDF frisch bauen — ein frueher erzeugtes traegt noch "zahlbar sofort"
+    # und den alten Einleitungstext. Schon versandte bleiben, wie sie hinausgingen.
+    if p.get("status") == "DRAFT":
+        try:
+            _abschlag_pdf_bauen(tid, txn, p)
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            return _json({"error": "Versand abgebrochen: Das Abschlags-PDF konnte nicht "
+                                   "erzeugt werden.", "details": str(e)}, 500)
+
     # PDF: das im Vorgang erzeugte Abschlags-PDF hat Vorrang
     pdf_anhang = []
     try:
@@ -2621,9 +3168,14 @@ def api_txn_payment_invoice_send(tid, pid):
                                "werden. Der Empfaenger soll IMMER ein PDF erhalten.",
                       "details": str(e)}, 500)
 
+    # Eigener Text fuer Abschlaege — der allgemeine Rechnungstext nannte weder
+    # "Abschlagsrechnung" noch Vorhaben, Vertrag oder die spaetere Verrechnung.
+    _betreff_std, _text_std = _abschlag_mailtext(txn, p, buyer or None)
+    _betreff = (data.get("subject") or "").strip() or _betreff_std
+    _mailtext = (data.get("body") or "").strip() or _text_std
     send_log = email_sender.send_invoice(
         invoice=inv, recipient=recipient,
-        subject=data.get("subject", ""), body_text=data.get("body", ""),
+        subject=_betreff, body_text=_mailtext,
         xml_bytes=xml_bytes, additional_attachments=pdf_anhang,
     )
     if not send_log.success:
@@ -2637,7 +3189,7 @@ def api_txn_payment_invoice_send(tid, pid):
         inv.status = "FREIGEGEBEN"
         inv.add_audit("FREIGEGEBEN", user="system",
                       comment="Automatisch freigegeben durch Versand", old_value=_alt)
-    _log_sent_mail(recipient, send_log.subject or "", data.get("body", ""),
+    _log_sent_mail(recipient, send_log.subject or "", _mailtext,
                    doc_type="payment_invoice", reference=inv.invoice_number,
                    attachments=[send_log.attachment_filename] + [a[0] for a in pdf_anhang],
                    from_addr=getattr(getattr(email_sender, "config", None),
@@ -2817,6 +3369,19 @@ def api_txn_generate_pdf(tid, step_key):
         if step.get("kein_vertrag") != _kv:
             txn_mgr.update_step(tid, step_key, {"kein_vertrag": _kv})
         step["kein_vertrag"] = _kv
+    if data.get("vertrag_dateien") or data.get("vertrag_datei"):
+        _vds = _vertrag_dateien_waehlen(_load_offer_settings(), data.get("vertrag_dateien") or data.get("vertrag_datei"))
+        if _vds and step.get("vertrag_dateien") != _vds:
+            txn_mgr.update_step(tid, step_key, {"vertrag_dateien": _vds, "vertrag_datei": _vds[0]})
+            step["vertrag_dateien"] = _vds
+            step["vertrag_datei"] = _vds[0]
+    # Gebäude für den ausgefüllten Dienstvertrag (16.10.2026) — aus dem Versanddialog, am Schritt gemerkt.
+    if isinstance(data.get("vertrag_gebaeude"), dict):
+        _vg = {"strasse": str(data["vertrag_gebaeude"].get("strasse") or "").strip(),
+               "plz_ort": str(data["vertrag_gebaeude"].get("plz_ort") or "").strip()}
+        if step.get("vertrag_gebaeude") != _vg:
+            txn_mgr.update_step(tid, step_key, {"vertrag_gebaeude": _vg})
+            step["vertrag_gebaeude"] = _vg
 
     # Empfänger bestimmen
     if step_key in ("supplier_quote", "purchase_order"):
@@ -2831,6 +3396,17 @@ def api_txn_generate_pdf(tid, step_key):
 
     # Referenz – entweder schon vorhanden oder neu generieren
     ref = step.get("reference") or ""
+    # Stornierte Rechnung (12.10.2026, V-2026-0066 / RE-2026-00097): die Nummer ist verbraucht. Hängt der Schritt noch an ihr,
+    # zieht die neue Rechnung eine NEUE Nummer — sonst bliebe der Vorgang an der stornierten Rechnung kleben.
+    if step_key == "invoice" and ref:
+        _alt_inv = _txn_invoice_registriert(ref)
+        if _alt_inv is not None and _alt_inv.status == "STORNIERT":
+            _st_alt = list(step.get("stornierte_referenzen") or [])
+            if ref not in _st_alt:
+                _st_alt.append(ref)
+            txn_mgr.update_step(tid, step_key, {"reference": "", "invoice_id": "", "stornierte_referenzen": _st_alt})
+            step["reference"] = ""
+            ref = ""
     if not ref:
         if step_key == "invoice":
             # Rechnungen ziehen ihre Nummer IMMER aus dem zentralen Rechnungskreis
@@ -2839,6 +3415,8 @@ def api_txn_generate_pdf(tid, step_key):
             # die spätere XRechnung-Registrierung übernahm dann diese 4-stellige
             # Nummer oder vergab eine andere → Nummern-Chaos (20.07.2026).
             ref = _next_invoice_number(advance=True)
+            ref = _nummer_mit_name(ref, (recipient or {}).get("name", "") or txn.get("buyer_name", ""),
+                                   (recipient or {}).get("contact_name", ""))
         else:
             prefix = DOC_PREFIXES.get(step_key, "DOK")
             ref = txn_mgr.numbers.next(prefix)
@@ -3099,10 +3677,18 @@ def _txn_anzahlungen(txn) -> Decimal:
         if brutto <= 0:
             continue
         summe += brutto
+        try:
+            netto = Decimal(str(p.get("amount_net") or 0)).quantize(Decimal("0.01"))
+        except Exception:
+            netto = Decimal("0.00")
         nachweis.append({
             "reference": p.get("reference", ""),
             "title": p.get("title", ""),
-            "date": p.get("paid_at") or p.get("date") or "",
+            "date": p.get("date") or "",              # Datum der Abschlagsrechnung
+            "paid_at": p.get("paid_at") or "",
+            "amount_net": float(netto),
+            "tax_rate": float(p.get("tax_rate") or 0),
+            "tax_amount": float((brutto - netto).quantize(Decimal("0.01"))) if netto > 0 else 0.0,
             "amount_gross": float(brutto),
             "status": p.get("status", ""),
         })
@@ -3145,10 +3731,14 @@ def _txn_invoice_registrieren(tid, txn, data=None):
     # Rechnungsdatum / Fälligkeit
     inv_date_str = inv_step.get("date") or data.get("date", date.today().isoformat())
     inv_date = date.fromisoformat(inv_date_str[:10])
-    payment_terms = data.get("payment_terms", "Zahlbar innerhalb von 30 Tagen")
+    # Standard = sofort fällig (12.10.2026: „alle Rechnungen im Standard immer sofort fällig"). Das Zahlungsziel kommt
+    # aus dem Schritt, sonst aus der Dokumentvorlage. Bis dahin: Vorgabe 30 Tage — und „Zahlbar sofort" bekam trotzdem ein
+    # Fälligkeitsdatum in 30 Tagen, weil nur nach einer Tageszahl gesucht wurde.
+    payment_terms = (data.get("payment_terms") or inv_step.get("payment_terms")
+                     or (ms.get("doc_templates") or {}).get("invoice_payment_terms") or "Zahlbar sofort ohne Abzug")
     import re as _re
     _m = _re.search(r'(\d+)\s*Tag', payment_terms)
-    due_date = inv_date + timedelta(days=int(_m.group(1))) if _m else inv_date + timedelta(days=30)
+    due_date = inv_date + timedelta(days=int(_m.group(1))) if _m else inv_date
 
     inv = Invoice(
         invoice_number=number,
@@ -3172,7 +3762,9 @@ def _txn_invoice_registrieren(tid, txn, data=None):
             tax_registration_id=ms.get("tax_registration_id", ""),
         ),
         buyer=Buyer(
-            name=buyer_data.get("name", ""),
+            # Privatkunden tragen den Namen nur beim Ansprechpartner (name leer) — ohne diesen Rückgriff fehlte der
+            # Käufername (BT-44), die XRechnung war ungültig und der Versand blieb aus (RE-2026-00097, 12.10.2026).
+            name=(buyer_data.get("name", "") or "").strip() or (buyer_data.get("contact_name", "") or "").strip(),
             address=Address(
                 street=buyer_data.get("street", ""),
                 house_number=buyer_data.get("house_number", ""),
@@ -3197,6 +3789,7 @@ def _txn_invoice_registrieren(tid, txn, data=None):
             line_id=str(p.get("pos_nr", 1)),
             quantity=Decimal(str(p.get("quantity", 1))),
             item_name=p.get("description", ""),
+            item_id=str(p.get("art_nr") or "")[:60],   # Artikelnummer aus dem Vorgangs-Positionspicker
             unit_price=Decimal(str(p.get("unit_price", 0))),
             line_net_amount=Decimal(str(p.get("net_amount", 0))),
             tax_rate=Decimal(str(_steuersatz(p.get("tax_rate")))),
@@ -3207,6 +3800,21 @@ def _txn_invoice_registrieren(tid, txn, data=None):
     # 07.09.2026 stand dort fest 0,00 — das PDF forderte den Rest, die
     # maschinenlesbare Rechnung den vollen Betrag.
     inv.prepaid_amount, inv.prepaid_details = _txn_anzahlungen(txn)
+    # § 14 Abs. 5 Satz 2 UStG: In der Endrechnung sind die Teilentgelte UND die auf
+    # sie entfallenden Steuerbetraege abzusetzen. BT-113 kennt nur den Bruttobetrag —
+    # Netto und Steuer je Abschlag stehen deshalb zusaetzlich im Rechnungshinweis
+    # (BT-22) der XRechnung. Das PDF zeigt dieselben Zahlen als Tabelle.
+    if inv.prepaid_details:
+        _z = []
+        for _d in inv.prepaid_details:
+            _z.append(f"Abzüglich Abschlagsrechnung {_d.get('reference','')} vom "
+                      f"{_de_datum(_d.get('date',''))}: netto {_eur(_d.get('amount_net'))} EUR, "
+                      f"USt {_eur(_d.get('tax_amount'))} EUR, brutto {_eur(_d.get('amount_gross'))} EUR"
+                      + (f" (Zahlung erhalten am {_de_datum(_d.get('paid_at'))})"
+                         if _d.get("paid_at") else " (gestellt, Zahlung noch offen)"))
+        _rest = inv.amount_due()
+        _z.append(f"Verbleibender Zahlbetrag der Schlussrechnung: {_eur(_rest)} EUR.")
+        inv.note = ((inv.note or "").rstrip() + "\n" + "\n".join(_z)).strip()
 
     # Duplikat-Check
     if any(v.invoice_number == inv.invoice_number for v in invoices.values()):
@@ -3469,6 +4077,40 @@ def api_offer_settings_put():
 _AGB_DIR = _DATA / "data" / "agb"
 
 
+def _vertrag_datei_waehlen(settings: dict, wunsch) -> str:
+    """Welche Vertrags-PDF geht mit? Erlaubt sind nur Dateien aus settings['vertraege']
+    (plus der bisherige Standard) — kein freier Dateiname aus dem Browser."""
+    erlaubt = [str(v.get("datei") or "") for v in (settings.get("vertraege") or []) if v.get("datei")]
+    standard = settings.get("vertrag_pdf_filename") or (erlaubt[0] if erlaubt else "")
+    w = str(wunsch or "").strip()
+    if w and (w in erlaubt or w == standard):
+        return w
+    return standard
+
+
+def _vertrag_bytes(fname: str, txn: dict, step: dict) -> bytes:
+    """Vertragsdatei für Versand/Vorschau — geht unverändert mit."""
+    pfad = _DATA / "data" / "vertrag" / fname
+    roh = pfad.read_bytes()
+    return roh
+
+
+def _vertrag_dateien_waehlen(settings: dict, wunsch) -> list:
+    """Mehrere Verträge je Angebot (28.09.2026) — nur Dateien aus settings['vertraege']."""
+    erlaubt = [str(v.get("datei") or "") for v in (settings.get("vertraege") or []) if v.get("datei")]
+    roh = wunsch if isinstance(wunsch, list) else ([wunsch] if wunsch else [])
+    raus = []
+    for w in roh:
+        w = str(w or "").strip()
+        if w and w in erlaubt and w not in raus:
+            raus.append(w)
+    if not raus:
+        std = settings.get("vertrag_pdf_filename") or (erlaubt[0] if erlaubt else "")
+        if std:
+            raus.append(std)
+    return raus
+
+
 @app.route("/api/offer-settings/vertrag-pdf", methods=["GET"])
 def api_offer_vertrag_pdf():
     """Liefert die Dienstvertrags-PDF, die beim Versand wirklich mitgeht.
@@ -3482,12 +4124,22 @@ def api_offer_vertrag_pdf():
     """
     from flask import send_file
     settings = _load_offer_settings()
-    fname = settings.get("vertrag_pdf_filename") or ""
+    # Mehrere Verträge (28.09.2026): ?datei=<Datei aus settings.vertraege>, sonst der Standard.
+    fname = _vertrag_datei_waehlen(settings, request.args.get("datei"))
     if not fname:
         return _json({"error": "In den Angebotseinstellungen ist keine Vertrags-PDF hinterlegt."}, 404)
     pfad = _DATA / "data" / "vertrag" / fname
     if not pfad.exists():
         return _json({"error": f"Vertrags-PDF '{fname}' fehlt im Ablageordner."}, 404)
+    # Mit ?tid= zeigt die Vorschau den für DIESEN Vorgang ausgefüllten Vertrag — genau das, was mitgeht (16.10.2026).
+    _tid = request.args.get("tid")
+    _txn = txn_mgr.get(_tid) if _tid else None
+    if _txn:
+        from io import BytesIO as _BIO
+        _b = _vertrag_bytes(fname, _txn, (_txn.get("steps") or {}).get("customer_quote") or {})
+        _ref = ((_txn.get("steps") or {}).get("customer_quote") or {}).get("reference") or ""
+        return send_file(_BIO(_b), mimetype="application/pdf", as_attachment=False,
+                         download_name=(f"Dienstvertrag_{_ref}.pdf" if _ref else pfad.name))
     return send_file(str(pfad), mimetype="application/pdf",
                      as_attachment=False, download_name=pfad.name)
 
@@ -3586,6 +4238,19 @@ def api_txn_approve_and_send(tid, step_key):
         if step.get("kein_vertrag") != _kv:
             txn_mgr.update_step(tid, step_key, {"kein_vertrag": _kv})
         step["kein_vertrag"] = _kv
+    if data.get("vertrag_dateien") or data.get("vertrag_datei"):
+        _vds = _vertrag_dateien_waehlen(_load_offer_settings(), data.get("vertrag_dateien") or data.get("vertrag_datei"))
+        if _vds and step.get("vertrag_dateien") != _vds:
+            txn_mgr.update_step(tid, step_key, {"vertrag_dateien": _vds, "vertrag_datei": _vds[0]})
+            step["vertrag_dateien"] = _vds
+            step["vertrag_datei"] = _vds[0]
+    # Gebäude für den ausgefüllten Dienstvertrag (16.10.2026) — aus dem Versanddialog, am Schritt gemerkt.
+    if isinstance(data.get("vertrag_gebaeude"), dict):
+        _vg = {"strasse": str(data["vertrag_gebaeude"].get("strasse") or "").strip(),
+               "plz_ort": str(data["vertrag_gebaeude"].get("plz_ort") or "").strip()}
+        if step.get("vertrag_gebaeude") != _vg:
+            txn_mgr.update_step(tid, step_key, {"vertrag_gebaeude": _vg})
+            step["vertrag_gebaeude"] = _vg
 
     if step_key in ("supplier_quote", "purchase_order"):
         sup = supplier_mgr.get(txn.get("supplier_id", ""))
@@ -3620,6 +4285,13 @@ def api_txn_approve_and_send(tid, step_key):
     # Rechnungsliste, Archiv und Buchhaltung und die Mail geht ohne XRechnung-XML
     # raus (Befund 31.08.2026, RE-2026-00078). Der Aufruf ist idempotent.
     if step_key == "invoice":
+        _st_inv = _txn_invoice_registriert(step.get("reference", ""))
+        if _st_inv is not None and _st_inv.status == "STORNIERT":
+            return _json({"approved": True, "sent": False,
+                           "error": f"Die Rechnung {_st_inv.invoice_number} ist storniert und wird nicht versendet. "
+                                    f"Bitte den Rechnungsschritt einmal speichern (PDF neu erzeugen) — dabei wird eine "
+                                    f"neue Rechnungsnummer vergeben.",
+                           "document": doc_entry})
         try:
             _reg_data = {}
             if step.get("payment_terms"):
@@ -3733,6 +4405,12 @@ def api_txn_approve_and_send(tid, step_key):
     msg["From"] = formataddr((from_name, from_addr))
     msg["To"] = to_email
     msg["Subject"] = subject
+    # Date + Message-ID wie im Direktversand (20.10.2026): ohne sie weisen 1&1/web.de/online.de
+    # gern ab, und der Bounce-Abgleich findet die Mail nur über die Message-ID sicher wieder.
+    from email.utils import formatdate as _fd, make_msgid as _mm
+    msg["Date"] = _fd(localtime=True)
+    _vg_mid = _mm(domain=(from_addr.split("@")[-1] if "@" in (from_addr or "") else None))
+    msg["Message-ID"] = _vg_mid
     msg.attach(MIMEText(body, "plain", "utf-8"))
 
     # PDF anhängen
@@ -3756,21 +4434,46 @@ def api_txn_approve_and_send(tid, step_key):
     if data.get("attach_contract") and step_key == "customer_quote":
         try:
             _v_settings = _load_offer_settings()
-            _vfname = _v_settings.get("vertrag_pdf_filename") or "Dienstvertrag.pdf"
-            _vpath = _DATA / "data" / "vertrag" / _vfname
-            if _vpath.exists():
-                with open(_vpath, "rb") as vf:
-                    v_att = MIMEApplication(vf.read(), _subtype="pdf")
-                    _v_out = f"Dienstvertrag_{ref}.pdf" if ref else _vfname
-                    v_att.add_header("Content-Disposition", "attachment",
-                                     filename=_v_out)
-                    msg.attach(v_att)
-                _vertrag_spur = {"weg": "eigene_datei", "datei": _v_out, "quelle": _vfname}
+            # Welche Verträge: Wahl aus dem Versanddialog, sonst die am Schritt gemerkten, sonst Standard.
+            _vfnames = _vertrag_dateien_waehlen(_v_settings, data.get("vertrag_dateien") or data.get("vertrag_datei")
+                                                or step.get("vertrag_dateien") or step.get("vertrag_datei")) or ["Dienstvertrag.pdf"]
+            try:
+                if step.get("vertrag_dateien") != _vfnames:
+                    txn_mgr.update_step(tid, step_key, {"vertrag_dateien": _vfnames, "vertrag_datei": _vfnames[0]})
+            except Exception:
+                pass
+            _mit, _fehlt = [], []
+            for _vfname in _vfnames:
+                _vpath = _DATA / "data" / "vertrag" / _vfname
+                if _vpath.exists():
+                    _v_bytes = _vertrag_bytes(_vfname, txn, step)
+                    if _v_bytes:
+                        v_att = MIMEApplication(_v_bytes, _subtype="pdf")
+                        _v_basis = "Dienstvertrag" if _vfname.lower().startswith("dienstvertrag") else _vfname.rsplit(".", 1)[0]
+                        _v_out = f"{_v_basis}_{ref}.pdf" if ref else _vfname
+                        v_att.add_header("Content-Disposition", "attachment", filename=_v_out)
+                        msg.attach(v_att)
+                        # Mitgeschickte Vertragsdatei auch in data/documents ablegen — das Mailprotokoll verlinkt die Anhänge
+                        # als /api/documents/<name>; bisher lag der Vertrag nur in der Mail → 404 (08.10.2026, Arnold/0033).
+                        try:
+                            _dok_dir = _DATA / "data" / "documents"; _dok_dir.mkdir(parents=True, exist_ok=True)
+                            _dok_ziel = _dok_dir / _v_out
+                            # genau die versendete (ausgefüllte) Fassung ablegen — auch bei erneutem Versand
+                            _dok_ziel.write_bytes(_v_bytes)
+                        except Exception as _eDok:
+                            print(f"  Vertrag nicht nach documents kopiert: {_eDok}")
+                    _mit.append(_v_out)
+                else:
+                    # Angehakt, aber die Datei fehlt — das darf NICHT stillschweigend
+                    # durchgehen, sonst glaubt der Absender, der Vertrag sei dabei.
+                    _fehlt.append(_vfname)
+                    print(f"  Vertrags-Anhang: Datei {_vpath} fehlt — NICHT mitgesendet")
+            if _mit and not _fehlt:
+                _vertrag_spur = {"weg": "eigene_datei", "datei": ", ".join(_mit), "quelle": ", ".join(_vfnames)}
+            elif _mit:
+                _vertrag_spur = {"weg": "eigene_datei", "datei": ", ".join(_mit) + " — FEHLT: " + ", ".join(_fehlt), "quelle": ", ".join(_vfnames)}
             else:
-                # Angehakt, aber die Datei fehlt — das darf NICHT stillschweigend
-                # durchgehen, sonst glaubt der Absender, der Vertrag sei dabei.
-                _vertrag_spur = {"weg": "fehlt", "datei": "", "quelle": _vfname}
-                print(f"  Dienstvertrag-Anhang: Datei {_vpath} fehlt — NICHT mitgesendet")
+                _vertrag_spur = {"weg": "fehlt", "datei": "", "quelle": ", ".join(_vfnames)}
         except Exception as e:
             _vertrag_spur = {"weg": "fehler", "datei": "", "quelle": str(e)}
             print(f"  Dienstvertrag-Anhang: {e}")
@@ -3813,9 +4516,9 @@ def api_txn_approve_and_send(tid, step_key):
     try:
         if smtp_port == 465:
             ctx = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=15, context=ctx)
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=60, context=ctx)
         else:
-            server = smtplib.SMTP(smtp_host, smtp_port, timeout=15)
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=60)
             server.ehlo()
             server.starttls()
             server.ehlo()
@@ -3838,7 +4541,7 @@ def api_txn_approve_and_send(tid, step_key):
         _log_sent_mail(to_email, subject, body,
                        doc_type=step_key, reference=ref,
                        attachments=_anhaenge,
-                       from_addr=from_addr)
+                       from_addr=from_addr, message_id=_vg_mid)
         # Am Vorgang festhalten, damit der Verlauf es zeigt und nicht nur das Mailprotokoll
         try:
             if _vertrag_spur:
@@ -3870,6 +4573,7 @@ def api_txn_approve_and_send(tid, step_key):
                        "anhaenge": _anhaenge,
                        "vertrag": _vertrag_spur})
     except Exception as e:
+        print(f"[vorgang-versand] {tid}/{step_key} {ref} an {to_email}: {type(e).__name__}: {e}", flush=True)
         return _json({"approved": True, "sent": False,
                        "error": f"Mail-Versand fehlgeschlagen: {e}",
                        "document": doc_entry})
@@ -4279,6 +4983,11 @@ def api_stb_send():
 def api_reset_data():
     """Loescht alle Rechnungen, Archiveintraege und Inbox-Daten."""
     import shutil
+    # In der Produktivinstanz gesperrt (Zugriffsprüfung 12.10.2026): ein einziger POST ohne Inhalt und ohne Rückfrage leerte
+    # sämtliche Rechnungen samt Archiv. data/.no_demo kennzeichnet die echte Instanz; die Demo/Kundenversion ohne die Datei
+    # behält die Funktion.
+    if (_DATA / "data" / ".no_demo").exists():
+        return _json({"error": "In der Produktivinstanz gesperrt: Rechnungen werden hier nicht gesammelt gelöscht."}, 403)
 
     # Rechnungen leeren
     invoices.clear()
@@ -4832,9 +5541,11 @@ def api_invoice_detail(inv_id):
         "payment": {
             "means_code": inv.payment.means_code,
             "iban": inv.payment.iban, "bic": inv.payment.bic,
+            "bank_name": getattr(inv.payment, "bank_name", "") or "",
             "due_date": inv.payment.due_date.isoformat() if inv.payment.due_date else None,
             "terms": inv.payment.payment_terms,
         },
+        "zahlkonto": _rechnung_zahlkonto_info(inv),
         "lines": lines,
         "allowances": [{"charge": ac.is_charge, "amount": float(ac.amount),
                          "reason": ac.reason, "rate": float(ac.tax_rate)}
@@ -5260,11 +5971,23 @@ def _load_privat_filter():
         return []
 
 
+def _load_privat_zweck():
+    """Teilstrings im VERWENDUNGSZWECK, die einen Umsatz privat machen (16.10.2026: „alle
+    RechnungDarl.-Leistung sind privat“). Ein Namensfilter taugt dafür nicht — die Darlehensraten
+    laufen unter dem Namen des Kontoinhabers, und unter diesem Namen kommen auch geschäftliche Überträge."""
+    try:
+        with open(_BANK_PRIVAT_FILE) as f:
+            return [str(x).strip().lower() for x in (json.load(f).get("zweck") or []) if str(x).strip()]
+    except Exception:
+        return []
+
+
 def _is_privat_txn(t, names=None):
     nm = (t.get("counterparty_name") or "").lower()
-    if not nm:
-        return False
-    return any(p in nm for p in (_load_privat_filter() if names is None else names))
+    if nm and any(p in nm for p in (_load_privat_filter() if names is None else names)):
+        return True
+    zw = (t.get("purpose") or "").lower()
+    return bool(zw) and any(p in zw for p in _load_privat_zweck())
 
 
 def _bank_dedup_key(t):
@@ -7585,7 +8308,7 @@ def _create_eingang_invoice(pdf_bytes, d, transaction_id=None):
                 item_name=(line.get("description") or "Position")[:200],
                 unit_price=Decimal(str(line.get("unit_price") or 0)),
                 line_net_amount=Decimal(str(line.get("net_amount") or 0)),
-                tax_rate=Decimal(str(line.get("tax_rate") if line.get("tax_rate") is not None else _steuersatz(d.get("tax_rate")))),
+                tax_rate=Decimal(str(_steuersatz_eingang(line.get("tax_rate") if line.get("tax_rate") is not None else d.get("tax_rate")))),
             ))
         except Exception:
             continue
@@ -7598,7 +8321,7 @@ def _create_eingang_invoice(pdf_bytes, d, transaction_id=None):
             item_name="Rechnungsbetrag (Sammelposition aus OCR)",
             unit_price=Decimal(str(net)),
             line_net_amount=Decimal(str(net)),
-            tax_rate=Decimal(str(_steuersatz(d.get("tax_rate")))),
+            tax_rate=Decimal(str(_steuersatz_eingang(d.get("tax_rate")))),
         ))
 
     # Duplikat-Check — zwei Regeln, beide aus echten Faellen (07.09.2026):
@@ -8412,6 +9135,68 @@ def api_datev_bulk_preview():
 
 # ── API: Workflow-Aktionen ─────────────────────────────────────────────
 
+def _iban_kurz(v):
+    return (v or "").replace(" ", "").upper()
+
+
+def _rechnung_zahlkonto_info(inv) -> dict:
+    """Zahlkonto dieser einen Rechnung (27.10.2026: „in der seite freigeben … als alternative das zweite konto,
+    das ich dann anhake, und die rechnung kommt mit der anderen kontonummer“). Standard = Konto aus den Stammdaten,
+    alt = Zweitkonto (zahlkonto_alt). gesperrt, sobald die Rechnung verschickt, exportiert oder bezahlt ist."""
+    try:
+        m = _load_mandant_settings()
+    except Exception:
+        m = {}
+    alt = m.get("zahlkonto_alt_info") or {}
+    std_iban = _iban_kurz(m.get("iban_standard") or "")
+    ist = _iban_kurz(inv.payment.iban if inv.payment else "")
+    versendet = any(getattr(e, "event_type", "") == "EMAIL_VERSENDET" for e in (inv.audit_trail or []))
+    richtung = str(getattr(inv, "_direction", "") or getattr(inv, "direction", "") or "").upper()
+    abo = bool((getattr(inv, "_nutzerabo", None) or {}).get("abo_id"))     # Dauerrechnung Online-Zugang: eigenes Konto
+    gesperrt = bool(versendet or abo or inv.status in ("EXPORTIERT", "BEZAHLT", "STORNIERT") or getattr(inv, "_paid_at", None)
+                    or richtung.startswith("EIN") or richtung.startswith("IN"))
+    std_bic = m.get("bic_standard", "") or ""
+    std_bank = ("" if m.get("zahlkonto_alt_aktiv") else (m.get("bank_name") or "")) or ("Postbank" if std_bic.upper().startswith("PBNK") else "Standardkonto")
+    return {
+        "standard": {"iban": std_iban, "bic": std_bic, "bank": std_bank},
+        "alt": {"iban": _iban_kurz(alt.get("iban")), "bic": alt.get("bic", ""), "bank": alt.get("bank", "")},
+        "auf_alt": bool(alt.get("iban") and ist == _iban_kurz(alt.get("iban"))),
+        "gesperrt": gesperrt,
+        "grund": ("bereits verschickt" if versendet else "Dauerrechnung mit eigenem Konto" if abo else ("Status " + str(inv.status)) if gesperrt else ""),
+    }
+
+
+@app.route("/api/invoices/<inv_id>/zahlkonto", methods=["POST"])
+def api_invoice_zahlkonto(inv_id):
+    """Stellt das Zahlkonto EINER Rechnung um (alt=True → Zweitkonto, sonst Standardkonto).
+    PDF, GiroCode und XRechnung lesen danach inv.payment. Nur vor dem Versand."""
+    inv = invoices.get(inv_id)
+    if not inv:
+        return _json({"error": "Rechnung nicht gefunden"}, 404)
+    info = _rechnung_zahlkonto_info(inv)
+    if info["gesperrt"]:
+        return _json({"error": "Zahlkonto nicht mehr änderbar (" + (info["grund"] or "gesperrt") + ")."}, 409)
+    data = request.get_json(silent=True) or {}
+    ziel = info["alt"] if data.get("alt") else info["standard"]
+    if not ziel.get("iban"):
+        return _json({"error": "Für dieses Konto ist keine IBAN hinterlegt (Einstellungen → Stammdaten)."}, 400)
+    alt_iban = inv.payment.iban
+    neu = " ".join(ziel["iban"][i:i + 4] for i in range(0, len(ziel["iban"]), 4))
+    inv.payment.iban = neu
+    inv.payment.bic = ziel.get("bic", "") or ""
+    try:
+        inv.payment.bank_name = ziel.get("bank", "") if data.get("alt") else ""
+    except Exception:
+        pass
+    inv.add_audit("ZAHLKONTO_GEAENDERT", user=data.get("user", "web-user"),
+                  comment=("Zweitkonto " + (ziel.get("bank") or "")) if data.get("alt") else "Standardkonto",
+                  old_value=alt_iban or "", new_value=neu)
+    auto_save()
+    print(f"[zahlkonto] {inv.invoice_number}: {alt_iban} → {neu}")
+    return _json({"success": True, "payment": {"iban": inv.payment.iban, "bic": inv.payment.bic},
+                  "zahlkonto": _rechnung_zahlkonto_info(inv)})
+
+
 @app.route("/api/invoices/<inv_id>/approve", methods=["POST"])
 def api_approve(inv_id):
     inv = invoices.get(inv_id)
@@ -8554,9 +9339,16 @@ def api_generate():
             except (TypeError, ValueError):
                 pass
 
+        # „Validieren" prueft nur (09.10.2026): bis dahin legte JEDER Klick — auch auf Validieren — eine
+        # echte Rechnung an und verbrauchte eine Nummer; so entstanden RE-2026-00093/94/95 dreimal gleich.
+        _nur_pruefen = bool(data.get("nur_pruefen"))
         # Rechnungsnummer: automatisch vergeben wenn leer
         number = data.get("number", "").strip()
-        if not number:
+        if _nur_pruefen:
+            if not number:
+                number = (_next_gutschrift_number(advance=False) if _ist_gutschrift
+                          else _next_invoice_number(advance=False))
+        elif not number:
             number = (_next_gutschrift_number(advance=True) if _ist_gutschrift
                       else _next_invoice_number(advance=True))
         else:
@@ -8583,6 +9375,10 @@ def api_generate():
             _buyer_display = _buyer_contact
         else:
             _buyer_display = ""
+
+        # Automatisch vergebene Nummer bekommt den Namen (Energieausweise aus .team kommen ohne Nummer)
+        if not data.get("number", "").strip():
+            number = _nummer_mit_name(number, _buyer_firma or _buyer_contact, _buyer_contact)
 
         # Faelligkeitsdatum aus Zahlungsziel berechnen
         _inv_date = date.fromisoformat(data["date"]) if data.get("date") else date.today()
@@ -8648,6 +9444,9 @@ def api_generate():
                 line_id=str(i),
                 quantity=Decimal(str(line_data.get("quantity", 1))),
                 item_name=line_data.get("name", ""),
+                # Artikelnummer aus dem Katalog (18.09.2026): erst damit ist erkennbar,
+                # WELCHE Leistung verkauft wurde — Grundlage für Auswertung und Projektakte.
+                item_id=str(line_data.get("item_id") or line_data.get("art_nr") or "")[:60],
                 unit_price=Decimal(str(line_data.get("price", 0))),
                 line_net_amount=Decimal(str(line_data.get("net", 0))),
                 tax_rate=Decimal(str(_steuersatz(line_data.get("tax_rate")))),
@@ -8660,6 +9459,30 @@ def api_generate():
 
         report = validate_invoice(inv)
         xml_bytes = generate_and_serialize(inv)
+        if _nur_pruefen:
+            return _json({"geprueft": True, "number": inv.invoice_number, "valid": report.is_valid,
+                          "errors": report.error_count, "xml_size": len(xml_bytes),
+                          "gross": float(inv.tax_inclusive_amount())})
+
+        # Inhaltsgleiche Rechnung liegt schon unversendet vor? Dann nicht noch einmal anlegen (09.10.2026).
+        # Gleich heisst: Ausgang, Status NEU, selber Kunde, selbes Datum, selbe Belegart, selbe Positionen und Betraege.
+        if not data.get("trotzdem_anlegen"):
+            def _sig(v):
+                try:
+                    return (str(getattr(v, "invoice_type_code", "380")), str(v.invoice_date), (v.buyer.name or "").strip().lower(),
+                            tuple((str(l.item_name).strip(), str(l.quantity), str(l.unit_price), str(l.line_net_amount)) for l in v.lines),
+                            str(v.tax_inclusive_amount()))
+                except Exception:
+                    return None
+            _neu_sig = _sig(inv)
+            _gleich = next((v for v in invoices.values()
+                            if getattr(v, "_direction", "") == "AUSGANG" and getattr(v, "status", "") == "NEU"
+                            and _neu_sig is not None and _sig(v) == _neu_sig), None)
+            if _gleich is not None:
+                return _json({"error": f"Dieselbe Rechnung liegt bereits als {_gleich.invoice_number} zur Freigabe vor "
+                                       f"(gleicher Kunde, gleiches Datum, gleiche Positionen). Es wurde keine weitere angelegt.",
+                              "dublette_von": _gleich.invoice_number, "id": _gleich._id}, 409)
+
         inv._direction = "AUSGANG"
         invoices[inv._id] = inv
         inbox.duplicates.register(inv, inv._id)
@@ -8702,44 +9525,16 @@ def api_generate():
 
 # ── API: Stornierung / Korrekturrechnung ──────────────────────────────
 
-@app.route("/api/invoices/<inv_id>/storno", methods=["POST"])
-def api_storno(inv_id):
-    """
-    Erzeugt eine Stornorechnung (Gutschrift Typ 381) die auf die
-    Originalrechnung verweist. Negiert alle Beträge und archiviert
-    beides mit gegenseitigem Bezug.
-
-    Voraussetzungen:
-    - Nur Ausgangsrechnungen (Typ 380) können storniert werden
-    - Status muss FREIGEGEBEN oder EXPORTIERT sein
-    - Darf nicht bereits storniert sein
-    """
-    inv = invoices.get(inv_id)
-    if not inv:
-        return _json({"error": "Rechnung nicht gefunden"}, 404)
-
-    if inv.status == "STORNIERT":
-        return _json({"error": "Rechnung ist bereits storniert."}, 400)
-
-    if inv.invoice_type_code == "381":
-        return _json({"error": "Eine Gutschrift kann nicht storniert werden."}, 400)
-
-    if (inv._direction or "AUSGANG") == "EINGANG":
-        return _json({"error": "Eingangsrechnungen können nicht storniert werden. Wenden Sie sich an den Rechnungssteller."}, 400)
-
-    if inv.status not in ("FREIGEGEBEN", "EXPORTIERT"):
-        return _json({"error": f"Stornierung nur bei freigegebenen oder exportierten Rechnungen möglich (aktuell: {inv.status})."}, 400)
-
-    data = request.get_json(silent=True) or {}
-    user = data.get("user", "web-user")
-    reason = data.get("reason", "Stornierung")
-
+def _storno_anlegen(inv, user, reason, storno_number=None):
+    """Kern der Stornierung: Stornorechnung (381) anlegen, Original auf STORNIERT, archivieren, speichern.
+    Aus api_storno herausgeloest (11.10.2026), damit auch die Dauerrechnung des Abos automatisch storniert werden kann.
+    Die Vorbedingungen prueft der Aufrufer. Rueckgabe (storno, xml_bytes, report)."""
     import copy, uuid as _uuid
 
     # Stornonummer erzeugen
     storno_nr = f"ST-{inv.invoice_number}"
-    if data.get("storno_number"):
-        storno_nr = data["storno_number"]
+    if storno_number:
+        storno_nr = storno_number
 
     # Gutschrift als Kopie mit negierten Beträgen
     storno = Invoice(
@@ -8814,6 +9609,41 @@ def api_storno(inv_id):
     # Sofort persistieren — der Storno und der STORNIERT-Status des Originals
     # lebten bis zur naechsten fremden Speicherung nur im RAM (Befund 03.09.2026).
     auto_save()
+    return storno, xml_bytes, report
+
+
+@app.route("/api/invoices/<inv_id>/storno", methods=["POST"])
+def api_storno(inv_id):
+    """
+    Erzeugt eine Stornorechnung (Gutschrift Typ 381) die auf die
+    Originalrechnung verweist. Negiert alle Beträge und archiviert
+    beides mit gegenseitigem Bezug.
+
+    Voraussetzungen:
+    - Nur Ausgangsrechnungen (Typ 380) können storniert werden
+    - Status muss FREIGEGEBEN oder EXPORTIERT sein
+    - Darf nicht bereits storniert sein
+    """
+    inv = invoices.get(inv_id)
+    if not inv:
+        return _json({"error": "Rechnung nicht gefunden"}, 404)
+
+    if inv.status == "STORNIERT":
+        return _json({"error": "Rechnung ist bereits storniert."}, 400)
+
+    if inv.invoice_type_code == "381":
+        return _json({"error": "Eine Gutschrift kann nicht storniert werden."}, 400)
+
+    if (inv._direction or "AUSGANG") == "EINGANG":
+        return _json({"error": "Eingangsrechnungen können nicht storniert werden. Wenden Sie sich an den Rechnungssteller."}, 400)
+
+    if inv.status not in ("FREIGEGEBEN", "EXPORTIERT"):
+        return _json({"error": f"Stornierung nur bei freigegebenen oder exportierten Rechnungen möglich (aktuell: {inv.status})."}, 400)
+
+    data = request.get_json(silent=True) or {}
+    user = data.get("user", "web-user")
+    reason = data.get("reason", "Stornierung")
+    storno, xml_bytes, report = _storno_anlegen(inv, user, reason, data.get("storno_number"))
 
     return _json({
         "success": True,
@@ -9824,8 +10654,7 @@ def api_external_create_from_epbd():
 
     # Mandant-Daten (Verkäufer / Bankverbindung)
     try:
-        with open(_DATA / "data" / "mandant_settings.json") as f:
-            mandant = json.load(f)
+        mandant = _load_mandant_settings()
     except Exception:
         mandant = {}
 
@@ -10163,8 +10992,7 @@ def api_external_create_invoice():
         b_id     = ""
 
     try:
-        with open(_DATA / "data" / "mandant_settings.json") as f:
-            mandant = json.load(f)
+        mandant = _load_mandant_settings()
     except Exception:
         mandant = {}
 
@@ -10410,7 +11238,7 @@ def api_external_eingangsrechnung():
     # Nur Brutto übergeben → Netto herausrechnen (Helper behandelt den Wert als Netto)
     if not d.get("lines") and not d.get("net_amount") and d.get("gross_amount"):
         try:
-            rate = float(d.get("tax_rate") if d.get("tax_rate") is not None else 19)
+            rate = float(_steuersatz_eingang(d.get("tax_rate")))
             d["net_amount"] = round(float(d["gross_amount"]) / (1 + rate / 100), 2)
         except Exception:
             pass

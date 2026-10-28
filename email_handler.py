@@ -14,7 +14,7 @@ from email import policy
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
-from email.utils import formatdate, make_msgid
+from email.utils import formatdate, make_msgid, formataddr
 from email import encoders
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -481,7 +481,10 @@ class EmailSender:
 
             # E-Mail aufbauen
             msg = MIMEMultipart()
-            msg["From"] = f"{self.config.smtp_from_name} <{self.config.smtp_from_address}>"
+            # formataddr kodiert NUR den Namen (wegen Umlauten im Namen). Das frühere f"{Name} <{Adresse}>" ließ Python
+            # die ganze Zeile samt <Adresse> in EIN kodiertes Wort packen → keine gültige Absenderadresse; web.de/Gmail/AOL
+            # wiesen die Rechnungen ab (7 Bounces Juni–Okt. 2026, 19.10.2026).
+            msg["From"] = formataddr((self.config.smtp_from_name or "", self.config.smtp_from_address))
             msg["To"] = recipient
             msg["Subject"] = subject
             msg["Date"] = formatdate(localtime=True)
@@ -617,6 +620,19 @@ class EmailSender:
             "" if is_storno
             else f"  Zahlungsziel:     {inv.payment.payment_terms or 'siehe Rechnung'}\n"
         )
+        # Schlussrechnung mit Abschlaegen: der Kunde zahlt den Rest, nicht den
+        # Bruttobetrag — die Mail nannte bisher nur den vollen Betrag.
+        try:
+            _vorab = float(getattr(inv, "prepaid_amount", 0) or 0)
+        except Exception:
+            _vorab = 0.0
+        if _vorab > 0 and not is_storno:
+            zahlungsziel = (
+                f"  abzgl. Abschläge: {_vorab:.2f} {inv.currency_code}\n"
+                f"  Zahlbetrag:       {float(inv.amount_due()):.2f} {inv.currency_code}\n"
+                + zahlungsziel)
+            opening += (" Die bereits gestellten Abschlagsrechnungen sind darin mit "
+                        "Netto- und Umsatzsteuerbetrag abgesetzt.")
 
         return (
             f"{self._anrede(inv)}\n\n"
