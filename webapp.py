@@ -1000,12 +1000,80 @@ def _generate_buyer_id(name: str, existing=None) -> str:
     return str(n)
 
 
+_FUELL_WOERTER = {"familie", "eheleute", "herr", "frau", "und", "dipl", "prof", "gmbh", "mbh", "architekturbüro",
+                  "architektur", "büro", "buero", "immobilien", "verwaltung", "gesellschaft", "firma"}
+
+
+def _name_tokens(t: str) -> set:
+    return {w for w in re.split(r"[^a-zäöüß-]+", (t or "").lower()) if len(w) >= 4 and w not in _FUELL_WOERTER}
+
+
+def _tok_aehnlich(x: str, y: str) -> bool:
+    if x == y:
+        return True
+    if abs(len(x) - len(y)) > 2:
+        return False
+    vorher = list(range(len(y) + 1))
+    for i, cx in enumerate(x, 1):
+        jetzt = [i]
+        for j, cy in enumerate(y, 1):
+            jetzt.append(min(vorher[j] + 1, jetzt[j - 1] + 1, vorher[j - 1] + (cx != cy)))
+        vorher = jetzt
+    return vorher[-1] <= 2
+
+
+def _strasse_norm(s: str) -> str:
+    s = (s or "").lower().replace("straße", "str").replace("strasse", "str")
+    return re.sub(r"[^a-zäöüß0-9]", "", s)
+
+
+def _moegliche_doppel(buyers: list, neu_name: str, street: str, house_number: str, post_code: str) -> list:
+    """Kunden, die dem neuen ähneln: gleiche Anschrift (Straße + Hausnr. + PLZ) oder
+    ähnlicher Name bei gleicher PLZ. Grundlage für die Rückfrage vor dem Neuanlegen."""
+    neu_tok = _name_tokens(neu_name)
+    st, hn, plz = _strasse_norm(street), re.sub(r"\s+", "", (house_number or "").lower()), str(post_code or "").strip()
+    treffer = []
+    for b in buyers:
+        b_name = " ".join([b.get("name") or "", b.get("contact_name") or ""] +
+                          [(c or {}).get("name") or "" for c in (b.get("contacts") or [])])
+        b_plz = str(b.get("post_code") or "").strip()
+        gleiche_adr = bool(st and hn and plz) and _strasse_norm(b.get("street")) == st and \
+            re.sub(r"\s+", "", (b.get("house_number") or "").lower()) == hn and b_plz == plz
+        name_aehnlich = bool(plz) and b_plz == plz and \
+            any(_tok_aehnlich(x, y) for x in neu_tok for y in _name_tokens(b_name))
+        if gleiche_adr or name_aehnlich:
+            treffer.append({"id": b.get("id"), "name": (b.get("name") or b.get("contact_name") or "").strip(),
+                            "adresse": " ".join(x for x in [b.get("street") or "", b.get("house_number") or "", ",",
+                                                            b_plz, b.get("city") or ""] if x).replace(" ,", ","),
+                            "email": b.get("email") or "",
+                            "grund": "gleiche Anschrift" if gleiche_adr else "ähnlicher Name"})
+    return treffer[:8]
+
+
+_RUECKFRAGEN_DATEI = str(_BUYERS_FILE.parent / "kunden_rueckfragen.json")
+
+
+def _rueckfragen_laden() -> list:
+    try:
+        with open(_RUECKFRAGEN_DATEI, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+
+def _rueckfragen_speichern(lst: list):
+    tmp = _RUECKFRAGEN_DATEI + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(lst, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, _RUECKFRAGEN_DATEI)
+
+
 def _save_buyer_if_new(name: str, street: str = "", house_number: str = "",
                        post_code: str = "", city: str = "", email: str = "",
                        phone: str = "", reference: str = "",
                        vat_id: str = "", salutation: str = "",
                        contact_name: str = "", is_private: bool = False,
-                       contact_salutation: str = "") -> dict | None:
+                       contact_salutation: str = "", rueckfrage: bool = False) -> dict | None:
     """Speichert einen Kaeufer wenn er noch nicht existiert.
     name = Firma (kann leer sein bei Privatpersonen)
     contact_name = Ansprechpartner (Vor- und Nachname)
@@ -1016,7 +1084,9 @@ def _save_buyer_if_new(name: str, street: str = "", house_number: str = "",
         return None
 
     buyers = _load_buyers()
-    email_norm = (email or "").strip().lower()
+    # Leerzeichen gehören nie in eine Mailadresse („vorname. nachname @gmx.de" aus einer Signatur).
+    email = "".join((email or "").split())
+    email_norm = email.lower()
     # Namen duerfen einen Zeilenumbruch fuer die Anschrift tragen — beim
     # Dublettenvergleich wird Leerraum eingeebnet, sonst gilt derselbe Kunde
     # mit und ohne Umbruch als zwei verschiedene.
@@ -1072,6 +1142,47 @@ def _save_buyer_if_new(name: str, street: str = "", house_number: str = "",
                 print(f"[buyers] {display}: als vorhandener Kunde {b.get('id')} "
                       f"{b.get('name') or b.get('contact_name')} erkannt (gleiche E-Mail + Anschrift)", flush=True)
                 return b
+    # Gleiche E-Mail und ähnlicher Name ⇒ derselbe Kunde (06.11.2026). Schreibfehler aus Signaturen
+    # (ein vertauschter oder fehlender Buchstabe im Namen) und „Familie X" neben „Vorname X" legten sonst
+    # jedes Mal einen neuen Kunden an. Firmen bleiben außen vor: zwei Firmen oder Firma und
+    # Privatperson mit derselben E-Mail sind weiterhin zwei Kunden.
+    _firma_re = re.compile(r"(gmbh|\bag\b|\bkg\b|\bug\b|e\.\s?k\.|\bohg\b|\bgbr\b|\bmbh\b|b(ü|ue)ro|architekt|immobilien"
+                           r"|verwaltung|\bverein\b|\be\.\s?v\.|stiftung|genossenschaft|\bbank\b|versicherung|gesellschaft)", re.I)
+    _fuell = {"familie", "eheleute", "herr", "frau", "und", "dr", "dipl", "ing", "prof"}
+    def _namen(t: str) -> set:
+        return {w for w in re.split(r"[^a-zäöüß-]+", (t or "").lower()) if len(w) >= 4 and w not in _fuell}
+    def _aehnlich(x: str, y: str) -> bool:
+        if x == y:
+            return True
+        if abs(len(x) - len(y)) > 2:
+            return False
+        vorher = list(range(len(y) + 1))
+        for i, cx in enumerate(x, 1):
+            jetzt = [i]
+            for j, cy in enumerate(y, 1):
+                jetzt.append(min(vorher[j] + 1, jetzt[j - 1] + 1, vorher[j - 1] + (cx != cy)))
+            vorher = jetzt
+        return vorher[-1] <= 2
+    _neu_name = " ".join([name or "", contact_name or ""])
+    if email_norm and not _firma_re.search(_neu_name):
+        _neu_tok = _namen(_neu_name)
+        for b in buyers:
+            # auch die Mailadressen der Ansprechpartner zählen (Haushalt mit zwei Adressen)
+            b_mails = {"".join((x or "").split()).lower() for x in
+                       [b.get("email")] + [(c or {}).get("email") for c in (b.get("contacts") or [])]}
+            b_name = " ".join([b.get("name") or "", b.get("contact_name") or ""] +
+                              [(c or {}).get("name") or "" for c in (b.get("contacts") or [])])
+            if email_norm not in b_mails or _firma_re.search(b.get("name") or ""):
+                continue
+            if any(_aehnlich(x, y) for x in _neu_tok for y in _namen(b_name)):
+                print(f"[buyers] {display}: als vorhandener Kunde {b.get('id')} "
+                      f"{b.get('name') or b.get('contact_name')} erkannt (gleiche E-Mail + ähnlicher Name)", flush=True)
+                return _uebernehmen(b)
+    # Rückfrage vor Neuanlage (06.11.2026): ähnlicher Name ODER gleiche Anschrift ⇒ erst fragen.
+    if rueckfrage:
+        _kand = _moegliche_doppel(buyers, " ".join([name or "", contact_name or ""]), street, house_number, post_code)
+        if _kand:
+            return {"_nachfrage": True, "kandidaten": _kand}
     buyer = {
         "id": _generate_buyer_id(display, {b.get("id") for b in buyers}),
         "name": name.strip(),           # Firma (leer bei Privatpersonen)
@@ -1150,9 +1261,28 @@ def api_external_upsert_customer():
         salutation=(c.get("anrede") or "").strip(),
         contact_name=contact,
         is_private=bool(c.get("is_private")),
+        rueckfrage=True,
     )
     if not buyer:
         return _json({"error": "Weder Firma noch Name angegeben"}, 400)
+    if buyer.get("_nachfrage"):
+        # Automatischer Weg: niemand kann zurückfragen ⇒ nicht anlegen, sondern zur Entscheidung ablegen
+        # (Kundenliste → „Offene Rückfragen").
+        lst = _rueckfragen_laden()
+        rid = "RF-" + datetime.now().strftime("%Y%m%d%H%M%S%f")
+        lst.append({"id": rid, "am": datetime.now().isoformat(timespec="seconds"),
+                    "quelle": (c.get("quelle") or "extern").strip(),
+                    "daten": {"name": firma, "contact_name": contact,
+                              "street": (c.get("strasse") or "").strip(), "house_number": (c.get("hausnummer") or "").strip(),
+                              "post_code": str(c.get("plz") or "").strip(), "city": (c.get("ort") or "").strip(),
+                              "email": "".join((c.get("email") or "").split()),
+                              "phone": (c.get("tel") or c.get("telefon") or "").strip(),
+                              "salutation": (c.get("anrede") or "").strip(), "is_private": bool(c.get("is_private"))},
+                    "kandidaten": buyer["kandidaten"]})
+        _rueckfragen_speichern(lst)
+        print(f"[external/upsert-customer] RÜCKFRAGE {rid}: {firma or contact} ähnelt "
+              f"{', '.join(k['id'] for k in buyer['kandidaten'])}", flush=True)
+        return _json({"ok": True, "buyer_id": None, "existed": False, "rueckfrage": rid})
     existed = buyer.get("id") in before_ids
     _quelle = (c.get("quelle") or "").strip()
     if _quelle:
@@ -1195,8 +1325,49 @@ def api_buyers_add():
         contact_name=contact_name,
         contact_salutation=data.get("contact_salutation", ""),
         is_private=bool(data.get("is_private", False)),
+        rueckfrage=not data.get("trotzdem_neu"),
     )
+    if buyer and buyer.get("_nachfrage"):
+        return _json({"saved": False, "nachfrage": True, "kandidaten": buyer["kandidaten"]}, 409)
     return _json({"saved": True, "buyer": buyer})
+
+
+@app.route("/api/kunden-rueckfragen")
+def api_kunden_rueckfragen():
+    """Automatisch gemeldete Kunden, die einem vorhandenen ähneln — warten auf Entscheidung."""
+    return _json({"rueckfragen": [r for r in _rueckfragen_laden() if not r.get("erledigt")]})
+
+
+@app.route("/api/kunden-rueckfragen/<rid>", methods=["POST"])
+def api_kunden_rueckfrage_entscheiden(rid):
+    """aktion: 'neu' (trotzdem anlegen) · 'vorhanden' + buyer_id (leere Felder dort ergänzen) · 'verwerfen'."""
+    data = request.get_json(silent=True) or {}
+    aktion = data.get("aktion")
+    lst = _rueckfragen_laden()
+    r = next((x for x in lst if x.get("id") == rid and not x.get("erledigt")), None)
+    if not r:
+        return _json({"error": "Rückfrage nicht gefunden"}, 404)
+    d = r.get("daten") or {}
+    ergebnis = {}
+    if aktion == "neu":
+        b = _save_buyer_if_new(rueckfrage=False, **d)
+        ergebnis = {"buyer_id": (b or {}).get("id")}
+    elif aktion == "vorhanden":
+        bid = data.get("buyer_id")
+        bl = _load_buyers()
+        b = next((x for x in bl if x.get("id") == bid), None)
+        if not b:
+            return _json({"error": "Kunde nicht gefunden"}, 404)
+        for k in ("street", "house_number", "post_code", "city", "email", "phone", "salutation"):
+            if (d.get(k) or "").strip() and not (b.get(k) or "").strip():
+                b[k] = d[k].strip()
+        _save_buyers(bl)
+        ergebnis = {"buyer_id": bid}
+    elif aktion != "verwerfen":
+        return _json({"error": "aktion muss neu, vorhanden oder verwerfen sein"}, 400)
+    r["erledigt"] = {"aktion": aktion, "am": datetime.now().isoformat(timespec="seconds"), **ergebnis}
+    _rueckfragen_speichern(lst)
+    return _json({"ok": True, **ergebnis})
 
 
 @app.route("/api/buyers/<buyer_id>", methods=["PUT"])
@@ -6049,6 +6220,7 @@ def _apply_invoice_paid(invoice_id, txn):
     inv = invoices.get(invoice_id)
     if not inv:
         return False
+    war_bezahlt = getattr(inv, "status", "") in ("BEZAHLT", "STORNIERT", "ZURUECKGEWIESEN")
     setattr(inv, '_paid_at', txn.get("booking_date") or txn.get("value_date"))
     setattr(inv, '_paid_amount', txn.get("amount"))
     setattr(inv, '_paid_via_booking', txn.get("id"))
@@ -9247,6 +9419,7 @@ def api_invoice_mark_paid(inv_id):
             pass
     if data.get("comment"):
         setattr(inv, "_paid_note", str(data["comment"])[:300])
+    war_bezahlt = getattr(inv, "status", "") == "BEZAHLT"
     try:
         inv.status = "BEZAHLT"
     except Exception:
