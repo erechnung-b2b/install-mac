@@ -276,7 +276,9 @@ def generate_cii(inv: Invoice) -> etree._Element:
 
     if inv.payment.payment_terms or inv.payment.due_date or inv.payment.mandate_reference:
         pt = _el(st, "SpecifiedTradePaymentTerms")
-        _txt(pt, "Description", inv.payment.payment_terms)
+        _pd = _txt(pt, "Description", inv.payment.terms_mit_skonto())
+        if _pd is not None and inv.payment.skonto_zeile():
+            _pd.text = inv.payment.terms_mit_skonto()     # Skonto-Zeile braucht ihre Zeilenumbrüche (BR-DE-18)
         if inv.payment.due_date:
             _datum(pt, "DueDateDateTime", inv.payment.due_date)
         _txt(pt, "DirectDebitMandateID", inv.payment.mandate_reference)

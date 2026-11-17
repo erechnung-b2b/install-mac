@@ -13,6 +13,12 @@ DAUER_TEXT = {
 }
 
 
+# Weitere Abo-Produkte neben dem Standard (16.11.2026). Schluessel = Wert des Feldes "produkt" der Schnittstelle,
+# Wert = {"dienst", "artikel", "netto", "steuer", "brutto", "position", "gruss", "testende_satz", "daten_satz",
+# "foermlich"}. Leer in der Distribution; der Betreiber fuellt sie in seiner lokalen Erweiterung.
+DAUER_PROFILE = {}
+
+
 def dienst(praefix: str = "") -> str:
     """' <praefix> <dienst>' bzw. ' <dienst>' — leer, wenn kein Dienst gesetzt ist."""
     d = (DAUER_TEXT.get("dienst") or "").strip()

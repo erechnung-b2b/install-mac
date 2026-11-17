@@ -91,6 +91,24 @@ class PaymentInfo:
     mandate_reference: str = ""
     creditor_id: str = ""
     debited_account: str = ""
+    # Skonto (16.11.2026): Prozent auf den Zahlbetrag bei Zahlung binnen so vielen Tagen ab Rechnungsdatum; 0 = keins
+    skonto_percent: float = 0.0
+    skonto_days: int = 0
+
+    def skonto_zeile(self) -> str:
+        """Strukturierte Skonto-Angabe der XRechnung (BR-DE-18), leer ohne Skonto."""
+        try:
+            p, t = float(self.skonto_percent or 0), int(self.skonto_days or 0)
+        except (TypeError, ValueError):
+            return ""
+        return f"#SKONTO#TAGE={t}#PROZENT={p:.2f}#" if p > 0 and t > 0 else ""
+
+    def terms_mit_skonto(self) -> str:
+        """Zahlungsbedingung für die E-Rechnung (BT-20): Klartext, darunter die Skonto-Zeile mit Zeilenende."""
+        z = self.skonto_zeile()
+        if not z:
+            return self.payment_terms
+        return ((self.payment_terms or "").replace(" ohne Abzug", "").strip() + "\n" + z + "\n").lstrip("\n")
 
 
 @dataclass

@@ -317,6 +317,61 @@ def _number_overlap_score(invoice_no, purpose_text):
     return 15, f"Zahl im Verwendungszweck ({', '.join(sorted(rest))})"
 
 
+SKONTO_KULANZ_TAGE = 3   # Banklaufzeit: Zahlung am letzten Tag der Frist wird oft erst Tage später gebucht
+
+
+def skonto_pruefen(inv, betrag, buchungsdatum, basis=None):
+    """Hat der Kunde bei dieser Zahlung das auf der Rechnung gewährte Skonto abgezogen?
+
+    Gilt nur für Ausgangsrechnungen mit Skonto (Prozent und Tage). Liefert None,
+    wenn der Betrag nicht „Zahlbetrag minus Skonto" ist, sonst
+    {prozent, tage, abzug, zahlbetrag, frist_bis, fristgerecht}.
+    basis: der Betrag, auf den sich das Skonto bezieht (Vorgabe: Zahlbetrag der
+    Rechnung nach Anzahlungen — so steht es auch auf dem PDF).
+    """
+    from datetime import date as _date, timedelta as _td
+    if (getattr(inv, '_direction', '') or 'AUSGANG') != 'AUSGANG':
+        return None
+    pay = getattr(inv, 'payment', None)
+    try:
+        prozent = float(getattr(pay, 'skonto_percent', 0) or 0)
+        tage = int(getattr(pay, 'skonto_days', 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    if prozent <= 0 or tage <= 0:
+        return None
+    if basis is None:
+        try:
+            basis = float(inv.amount_due())
+        except Exception:
+            basis = _inv_gross(inv)
+    try:
+        basis = float(basis)
+        betrag = abs(float(betrag))
+    except (TypeError, ValueError):
+        return None
+    if basis <= 0:
+        return None
+    abzug = round(basis * prozent / 100, 2)
+    zahlbetrag = round(basis - abzug, 2)
+    if abzug <= 0 or abs(betrag - zahlbetrag) > 0.02:
+        return None
+
+    def _d(v):
+        if isinstance(v, str):
+            try:
+                return _date.fromisoformat(v[:10])
+            except Exception:
+                return None
+        return v
+    inv_d, buch_d = _d(getattr(inv, 'invoice_date', None)), _d(buchungsdatum)
+    frist_bis = (inv_d + _td(days=tage)) if inv_d else None
+    fristgerecht = bool(frist_bis and buch_d and buch_d <= frist_bis + _td(days=SKONTO_KULANZ_TAGE))
+    return {"prozent": prozent, "tage": tage, "abzug": abzug, "zahlbetrag": zahlbetrag,
+            "frist_bis": frist_bis.isoformat() if frist_bis else None,
+            "fristgerecht": fristgerecht}
+
+
 def auto_match(transaction, invoices_iter):
     """Versucht eine Buchung gegen vorhandene Rechnungen zu matchen.
 
@@ -450,7 +505,24 @@ def auto_match(transaction, invoices_iter):
 
         # 2) Betrag — exakt, fast oder grob in der Nähe
         diff = abs(gross - amount)
-        if diff <= 0.02:
+        # Skonto: Zahlbetrag minus Skonto innerhalb der Frist gilt als vollständige Zahlung.
+        sk = None
+        if is_credit and diff > 0.02:
+            try:
+                _basis = float(inv.amount_due()) - _gut
+            except Exception:
+                _basis = gross
+            sk = skonto_pruefen(inv, amount, booking_date, _basis if _basis > 0 else gross)
+        if sk and sk["fristgerecht"]:
+            diff = 0.0
+            score += 35
+            reasons.append(f"Betrag exakt nach Abzug von {sk['prozent']:g} % Skonto "
+                           f"({sk['abzug']:.2f}€, Frist bis {sk['frist_bis']})")
+        elif sk:
+            score += 8
+            reasons.append(f"Skonto abgezogen ({sk['abzug']:.2f}€), aber Frist "
+                           f"{sk['frist_bis']} überschritten")
+        elif diff <= 0.02:
             score += 35
             reasons.append(f"Betrag exakt ({amount:.2f}€)" if diff == 0 else f"Betrag ≈ ({diff*100:.0f} ct Rundung)")
         elif diff < 1.0:
@@ -599,6 +671,7 @@ def auto_match(transaction, invoices_iter):
                 "gross": round(gross, 2),
                 "schon_bezahlt": schon_bezahlt,
                 "vor_rechnungsdatum": vor_rechnungsdatum,
+                "skonto": sk,
             })
 
     if not candidates:
@@ -654,6 +727,62 @@ def _names_overlap(cp_name, inv_name):
             or a.issubset(b) or b.issubset(a) or len(a & b) >= 2)
 
 
+def skonto_verteilung(invs, betrag, buchungsdatum, nur_fristgerecht=False):
+    """Sammelzahlung mit Skonto: bei welchen der Rechnungen wurde Skonto abgezogen?
+
+    Sucht die Auswahl der Rechnungen mit Skonto-Vereinbarung, mit der die Summe
+    (Brutto, bei den gewählten minus Skonto) den Zahlbetrag ergibt. Bevorzugt die
+    Auswahl mit den meisten fristgerechten Abzügen. Liefert {rechnungs_id: Angaben
+    wie skonto_pruefen} — leer, wenn der Betrag auch mit Skonto nicht aufgeht
+    oder schon ohne Skonto stimmt.
+    """
+    import itertools
+    try:
+        betrag = round(abs(float(betrag)), 2)
+    except (TypeError, ValueError):
+        return {}
+    voll = {getattr(i, '_id', None): _inv_gross(i) for i in invs}
+    summe = round(sum(voll.values()), 2)
+    if abs(summe - betrag) < 0.01:
+        return {}
+    moeglich = {}
+    for i in invs:
+        pay = getattr(i, 'payment', None)
+        try:
+            p = float(getattr(pay, 'skonto_percent', 0) or 0)
+            t = int(getattr(pay, 'skonto_days', 0) or 0)
+        except (TypeError, ValueError):
+            continue
+        g = voll[getattr(i, '_id', None)]
+        if p <= 0 or t <= 0 or g <= 0:
+            continue
+        sk = skonto_pruefen(i, round(g - round(g * p / 100, 2), 2), buchungsdatum, basis=g)
+        if sk and (sk["fristgerecht"] or not nur_fristgerecht):
+            moeglich[getattr(i, '_id', None)] = sk
+    if not moeglich or len(moeglich) > 10:
+        return {}
+    beste = None
+    ids = list(moeglich)
+    for n in range(len(ids), 0, -1):
+        for wahl in itertools.combinations(ids, n):
+            s = round(summe - sum(moeglich[k]["abzug"] for k in wahl), 2)
+            if abs(s - betrag) <= 0.02:
+                rang = (sum(1 for k in wahl if moeglich[k]["fristgerecht"]), -len(wahl))
+                if beste is None or rang > beste[0]:
+                    beste = (rang, wahl)
+    return {k: moeglich[k] for k in beste[1]} if beste else {}
+
+
+def _split_skonto_angaben(hits, vert):
+    """Skonto-Teil eines Sammelzahlungs-Vorschlags (Nummer → Abzug)."""
+    nr = {getattr(i, '_id', None): getattr(i, 'invoice_number', '') for i in hits}
+    return {
+        "skonto": {nr[k]: v["abzug"] for k, v in vert.items()},
+        "skonto_summe": round(sum(v["abzug"] for v in vert.values()), 2),
+        "skonto_verspaetet": [nr[k] for k, v in vert.items() if not v["fristgerecht"]],
+    }
+
+
 def detect_split(transaction, invoices_iter):
     """Erkennt eine Sammelzahlung (eine Buchung deckt MEHRERE offene Rechnungen).
 
@@ -670,6 +799,7 @@ def detect_split(transaction, invoices_iter):
     ])).upper()
     cp_name = (transaction.get("counterparty_name") or '').strip().lower()
     amount = round(abs(float(transaction.get("amount") or 0)), 2)
+    buchungstag = transaction.get("booking_date") or transaction.get("value_date")
 
     open_invs = []
     for inv in invoices_iter:
@@ -697,6 +827,15 @@ def detect_split(transaction, invoices_iter):
         hits = [inv for inv in open_invs if any(r and r in purpose for r in _refs(inv))]
         if len(hits) >= 2:
             s = round(sum(_inv_gross(i) for i in hits), 2)
+            vert = skonto_verteilung(hits, amount, buchungstag)
+            if vert:
+                erg = {
+                    "invoice_ids": [getattr(i, '_id', None) for i in hits],
+                    "invoice_numbers": [getattr(i, 'invoice_number', '') for i in hits],
+                    "sum": amount, "difference": 0.0, "basis": "referenzen",
+                }
+                erg.update(_split_skonto_angaben(hits, vert))
+                return erg
             return {
                 "invoice_ids": [getattr(i, '_id', None) for i in hits],
                 "invoice_numbers": [getattr(i, 'invoice_number', '') for i in hits],
@@ -717,6 +856,18 @@ def detect_split(transaction, invoices_iter):
                         "invoice_numbers": [getattr(i, 'invoice_number', '') for i in combo],
                         "sum": amount, "difference": 0.0, "basis": "betrag+kunde",
                     }
+        # Dasselbe mit Skontoabzug — nur fristgerecht, sonst wird zu viel geraten
+        for n in range(2, min(len(same), 4) + 1):
+            for combo in itertools.combinations(same, n):
+                vert = skonto_verteilung(combo, amount, buchungstag, nur_fristgerecht=True)
+                if vert:
+                    erg = {
+                        "invoice_ids": [getattr(i, '_id', None) for i in combo],
+                        "invoice_numbers": [getattr(i, 'invoice_number', '') for i in combo],
+                        "sum": amount, "difference": 0.0, "basis": "betrag+kunde",
+                    }
+                    erg.update(_split_skonto_angaben(combo, vert))
+                    return erg
     return None
 
 

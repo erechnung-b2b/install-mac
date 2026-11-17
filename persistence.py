@@ -81,6 +81,7 @@ class InvoiceStore:
             "_paid_at": getattr(inv, '_paid_at', None),
             "_paid_amount": getattr(inv, '_paid_amount', None),
             "_paid_via_booking": getattr(inv, '_paid_via_booking', None),
+            "_skonto_zahlung": getattr(inv, '_skonto_zahlung', None),
             # Dauerrechnung Online-Zugang (11.10.2026): Bezug zum Abo der Haupt-App + die Monatszahlungen nach der ersten
             "_nutzerabo": getattr(inv, '_nutzerabo', None),
             "_dauer_zahlungen": getattr(inv, '_dauer_zahlungen', None),
@@ -123,6 +124,8 @@ class InvoiceStore:
                 "mandate_reference": inv.payment.mandate_reference,
                 "creditor_id": inv.payment.creditor_id,
                 "debited_account": inv.payment.debited_account,
+                "skonto_percent": getattr(inv.payment, "skonto_percent", 0) or 0,
+                "skonto_days": getattr(inv.payment, "skonto_days", 0) or 0,
             },
             "lines": [{
                 "line_id": l.line_id,
@@ -226,6 +229,8 @@ class InvoiceStore:
                 mandate_reference=p.get("mandate_reference", ""),
                 creditor_id=p.get("creditor_id", ""),
                 debited_account=p.get("debited_account", ""),
+                skonto_percent=float(p.get("skonto_percent") or 0),
+                skonto_days=int(p.get("skonto_days") or 0),
             ),
         )
 
@@ -291,6 +296,8 @@ class InvoiceStore:
             inv._dauer_zahlungen = list(d["_dauer_zahlungen"])
         if d.get("_paid_via_booking"):
             inv._paid_via_booking = d["_paid_via_booking"]
+        if d.get("_skonto_zahlung"):
+            inv._skonto_zahlung = dict(d["_skonto_zahlung"])
 
         return inv
 

@@ -120,7 +120,9 @@ def _build_payment(root, inv, credit=False):
             _txt(br, "ID", inv.payment.bic)
     if inv.payment.payment_terms:
         pt = etree.SubElement(root, _cac("PaymentTerms"))
-        _txt(pt, "Note", inv.payment.payment_terms)
+        _pn = _txt(pt, "Note", inv.payment.terms_mit_skonto())
+        if _pn is not None and inv.payment.skonto_zeile():
+            _pn.text = inv.payment.terms_mit_skonto()     # Skonto-Zeile braucht ihre Zeilenumbrüche (BR-DE-18)
 
 def _build_allowance_charge(parent, ac, cur):
     el = etree.SubElement(parent, _cac("AllowanceCharge"))

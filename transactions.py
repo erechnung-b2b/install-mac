@@ -430,6 +430,8 @@ class TransactionManager:
                      # keine Position ein "Vertrag separat"-Produkt ist — beim TGA-Paket
                      # ist das nie der Fall, dort gehoert er aber nicht dran.
                      "kein_vertrag",
+                     # Skonto (Angebot/Rechnung) und Verkäufer des Vorgangs (1 = Stammdaten, 2 = mit Zusatz), 16.11.2026
+                     "skonto_percent", "skonto_days", "verkaeufer",
                      # Vertragswahl + Gebäude für den ausgefüllten Dienstvertrag (16.10.2026) —
                      # standen bisher nicht in der Liste und wurden still verworfen
                      "vertrag_dateien", "vertrag_datei", "vertrag_gebaeude"):

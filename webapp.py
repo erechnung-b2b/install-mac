@@ -784,7 +784,16 @@ def api_geo_plz(plz):
 
 @app.route("/api/mandant/settings")
 def api_mandant_settings_get():
-    return _json(_load_mandant_settings())
+    ms = _load_mandant_settings()
+    # Zweiter Verkäufer (16.11.2026): fertiger Name für die Auswahl in „Rechnung erstellen“. Das Feld zeigt der
+    # Oberfläche zugleich, dass dieser Serverstand das PDF passend zum gewählten Verkäufer druckt.
+    import invoice_pdf as _ipdf
+    _v2 = _ipdf.verkaeufer2_name(ms)
+    if _v2:
+        ms["verkaeufer2_name"] = " ".join(_v2.split())
+    ms["verkaeufer2_feld"] = True      # dieser Serverstand speichert den Zusatz aus den Einstellungen
+    ms["skonto_feld"] = True           # … und kennt Skonto sowie die Verkäuferwahl am Angebot
+    return _json(ms)
 
 @app.route("/api/mandant/next-number")
 def api_mandant_next_number():
@@ -812,6 +821,13 @@ def api_mandant_settings_save():
         settings["bic_standard"] = data["bic"]
     if "zahlkonto_alt_aktiv" in data:
         settings["zahlkonto_alt_aktiv"] = bool(data["zahlkonto_alt_aktiv"])
+    # Zweiter Verkäufer: Zusatz unter dem Firmennamen; leer = kein zweiter Verkäufer
+    if "verkaeufer2_zusatz" in data:
+        _zus = " ".join(str(data.get("verkaeufer2_zusatz") or "").split())[:80]
+        if _zus:
+            settings["verkaeufer2"] = dict(settings.get("verkaeufer2") or {}, zusatz=_zus)
+        else:
+            settings.pop("verkaeufer2", None)
     _save_mandant_settings(settings)
     return _json({"saved": True})
 
@@ -3056,6 +3072,7 @@ def _abschlag_pdf_bauen(tid, txn, p) -> dict:
     intro = templates.get("payment_invoice_intro", "") or _abschlag_einleitung(txn, p)
     closing = templates.get("payment_invoice_closing", "")
     doc_gen._prepaid_invoices = None
+    doc_gen._seller_override = {"name": _txn_verkaeufer2(txn)} if _txn_verkaeufer2(txn) else None
     doc_entry = doc_gen.generate(
         doc_type="payment_invoice",
         recipient=recipient,
@@ -3191,7 +3208,7 @@ def _abschlag_registrieren(tid, txn, p):
               + ". Die Abschlagszahlung wird in der Schlussrechnung mit Netto- und "
                 "Umsatzsteuerbetrag abgesetzt.").strip(),
         seller=Seller(
-            name=ms.get("name", ""),
+            name=" ".join(_txn_verkaeufer2(txn).split()) or ms.get("name", ""),
             address=Address(street=ms.get("street", ""), house_number=ms.get("house_number", ""),
                             city=ms.get("city", ""), post_code=ms.get("post_code", "")),
             electronic_address=ms.get("email", ""), electronic_address_scheme="EM",
@@ -3613,12 +3630,13 @@ def api_txn_generate_pdf(tid, step_key):
     else:
         doc_gen._prepaid_invoices = None
 
+    doc_gen._seller_override = {"name": _txn_verkaeufer2(txn)} if _txn_verkaeufer2(txn) else None
     try:
         doc_entry = doc_gen.generate(
             doc_type=step_key if step_key != "dunning" else "dunning",
             recipient=recipient,
             positions=step.get("positions", []),
-            step=step,
+            step=_step_mit_skonto(txn, step_key, step),
             reference=ref,
             subject=txn.get("subject", ""),
             doc_date=step.get("date") or data.get("date", ""),
@@ -3709,6 +3727,12 @@ def api_txn_vertrag(tid):
     }
     for k, v in repl.items():
         page = page.replace(k, v)
+    # Zweiter Verkäufer am Angebot gewählt: Zusatz hinter dem Büronamen im Feld „Berater“
+    _vz = _txn_verkaeufer2(txn).split("\n", 1)[1].strip() if "\n" in _txn_verkaeufer2(txn) else ""
+    if _vz:
+        import re as _re       # erstes ausgefülltes Namensfeld der Vorlage = Berater
+        page = _re.sub(r'(<label>Name</label><span class="blank"><span class="val">[^<]+)(</span>)',
+                       lambda m: m.group(1) + " · " + esc(_vz) + m.group(2), page, count=1)
     return app.response_class(page, mimetype="text/html; charset=utf-8")
 
 
@@ -3866,6 +3890,35 @@ def _txn_anzahlungen(txn) -> Decimal:
     return summe.quantize(Decimal("0.01")), nachweis
 
 
+def _txn_verkaeufer2(txn) -> str:
+    """Name des zweiten Verkäufers (zweizeilig), wenn er am Angebot des Vorgangs gewählt ist — sonst leer."""
+    try:
+        cq = ((txn or {}).get("steps") or {}).get("customer_quote") or {}
+        if int(cq.get("verkaeufer") or 1) != 2:
+            return ""
+        import invoice_pdf as _ipdf
+        return _ipdf.verkaeufer2_name(_load_mandant_settings())
+    except Exception:
+        return ""
+
+
+def _txn_skonto(txn, step=None) -> tuple:
+    """(Prozent, Tage) für ein Dokument des Vorgangs: Angabe am Schritt selbst, sonst die des Angebots."""
+    import doc_generator as _dg
+    cq = ((txn or {}).get("steps") or {}).get("customer_quote") or {}
+    for s in (step or {}, cq):
+        if str(s.get("skonto_percent") if s.get("skonto_percent") is not None else "").strip() != "":
+            return _dg._skonto_von(s)
+    return 0.0, 0
+
+
+def _step_mit_skonto(txn, step_key, step) -> dict:
+    if step_key not in ("customer_quote", "order_confirmation", "invoice"):
+        return step
+    p, t = _txn_skonto(txn, step)
+    return dict(step, skonto_percent=p, skonto_days=t)
+
+
 def _txn_invoice_registrieren(tid, txn, data=None):
     """Registriert die Rechnung eines Vorgangs im Rechnungsregister + Archiv.
 
@@ -3919,7 +3972,7 @@ def _txn_invoice_registrieren(tid, txn, data=None):
         buyer_reference=buyer_data.get("reference", "") or txn.get("buyer_name", ""),
         note=data.get("note", f"Vorgang {txn['id']}: {txn.get('subject', '')}"),
         seller=Seller(
-            name=ms.get("name", ""),
+            name=" ".join(_txn_verkaeufer2(txn).split()) or ms.get("name", ""),
             address=Address(
                 street=ms.get("street", ""),
                 house_number=ms.get("house_number", ""),
@@ -3952,6 +4005,8 @@ def _txn_invoice_registrieren(tid, txn, data=None):
             iban=ms.get("iban", ""),
             payment_terms=payment_terms,
             due_date=due_date,
+            skonto_percent=_txn_skonto(txn, inv_step)[0],
+            skonto_days=_txn_skonto(txn, inv_step)[1],
         ),
     )
 
@@ -4097,11 +4152,21 @@ def api_dunning_rules_save():
     return _json({"saved": True})
 
 
+def _mahn_rechnungsstatus(ref: str) -> str:
+    """Zahlstatus der registrierten Rechnung zu einer Vorgangs-Rechnungsnummer.
+
+    Die Mahnliste las bis 17.11.2026 nur die Vorgangsstufen und führte deshalb
+    längst bezahlte Rechnungen weiter als überfällig.
+    """
+    inv = _txn_invoice_registriert(ref)
+    return str(getattr(inv, "status", "") or "") if inv is not None else ""
+
+
 @app.route("/api/dunning/check", methods=["POST"])
 def api_dunning_check():
     """Prüft alle Vorgänge auf überfällige Rechnungen."""
     txns = txn_mgr.list_all()
-    summary = dunning_mgr.get_overdue_summary(txns)
+    summary = dunning_mgr.get_overdue_summary(txns, _mahn_rechnungsstatus)
     return _json(summary)
 
 
@@ -4109,7 +4174,7 @@ def api_dunning_check():
 def api_dunning_overdue():
     """Gibt alle überfälligen Rechnungen zurück."""
     txns = txn_mgr.list_all()
-    invoices_data = dunning_mgr.collect_invoices_from_transactions(txns)
+    invoices_data = dunning_mgr.collect_invoices_from_transactions(txns, _mahn_rechnungsstatus)
     overdue = dunning_mgr.check_overdue(invoices_data)
     return _json(overdue)
 
@@ -4439,9 +4504,10 @@ def api_txn_approve_and_send(tid, step_key):
     closing = step.get("closing_text", "") or templates.get(f"{tpl_key}_closing", "")
     try:
         doc_type = step_key if step_key != "dunning" else "dunning"
+        doc_gen._seller_override = {"name": _txn_verkaeufer2(txn)} if _txn_verkaeufer2(txn) else None
         doc_entry = doc_gen.generate(
             doc_type=doc_type, recipient=recipient,
-            positions=step.get("positions", []), step=step,
+            positions=step.get("positions", []), step=_step_mit_skonto(txn, step_key, step),
             reference=ref, subject=txn.get("subject", ""),
             doc_date=step.get("date", ""), due_date=step.get("due_date", ""),
             delivery_date=step.get("date", ""),
@@ -5407,7 +5473,7 @@ def api_dashboard():
                     break
 
     # Mahnungen
-    dunning_summary = dunning_mgr.get_overdue_summary(txns_all)
+    dunning_summary = dunning_mgr.get_overdue_summary(txns_all, _mahn_rechnungsstatus)
 
     return _json({
         "total": total, "offene": offene, "freigegeben": freigegeben,
@@ -5715,6 +5781,8 @@ def api_invoice_detail(inv_id):
             "bank_name": getattr(inv.payment, "bank_name", "") or "",
             "due_date": inv.payment.due_date.isoformat() if inv.payment.due_date else None,
             "terms": inv.payment.payment_terms,
+            "skonto_percent": getattr(inv.payment, "skonto_percent", 0) or 0,
+            "skonto_days": getattr(inv.payment, "skonto_days", 0) or 0,
         },
         "zahlkonto": _rechnung_zahlkonto_info(inv),
         "lines": lines,
@@ -5744,6 +5812,7 @@ def api_invoice_detail(inv_id):
         "paid_at": getattr(inv, '_paid_at', None),
         "paid_amount": getattr(inv, '_paid_amount', None),
         "paid_via_booking": getattr(inv, '_paid_via_booking', None),
+        "skonto_zahlung": getattr(inv, '_skonto_zahlung', None),
     })
 
 
@@ -6215,7 +6284,50 @@ def _bank_dedupe_existing():
     return {"removed": removed, "remaining": len(result)}
 
 
-def _apply_invoice_paid(invoice_id, txn):
+def _skonto_abzug(inv) -> float:
+    """Anerkannter Skontoabzug einer bezahlten Rechnung (0, wenn keiner)."""
+    sz = getattr(inv, "_skonto_zahlung", None) or {}
+    try:
+        return float(sz.get("abzug") or 0) if sz.get("anerkannt") else 0.0
+    except Exception:
+        return 0.0
+
+
+def _skonto_zahlung_setzen(inv, betrag, datum, user="bank-abgleich", basis=None):
+    """Vermerkt an der Rechnung, ob bei dieser Zahlung Skonto abgezogen wurde.
+    Fristgerecht → anerkannt (kein Rest offen). Nach der Frist → nur vermerkt,
+    der Abzug bleibt offen, bis er von Hand anerkannt wird. Wiederholbar: eine
+    schon getroffene Entscheidung zur selben Zahlung bleibt stehen."""
+    try:
+        sk = _bank.skonto_pruefen(inv, betrag, datum, basis) if betrag is not None else None
+    except Exception as e:
+        print(f"[skonto] {getattr(inv, 'invoice_number', '?')}: {e}")
+        sk = None
+    alt = getattr(inv, "_skonto_zahlung", None)
+    if not sk:
+        if alt is not None:
+            try:
+                delattr(inv, "_skonto_zahlung")
+            except Exception:
+                pass
+        return None
+    if alt and abs(float(alt.get("abzug") or 0) - sk["abzug"]) < 0.005 and alt.get("gezahlt_am") == str(datum or "")[:10]:
+        return alt
+    neu = dict(sk, gezahlt_am=str(datum or "")[:10], anerkannt=bool(sk["fristgerecht"]))
+    inv._skonto_zahlung = neu
+    try:
+        if neu["anerkannt"]:
+            inv.add_audit("SKONTO_ABGEZOGEN", user=user,
+                          comment=f"{sk['prozent']:g} % Skonto = {sk['abzug']:.2f} EUR, Zahlung fristgerecht (Frist bis {sk['frist_bis']})")
+        else:
+            inv.add_audit("SKONTO_VERSPAETET", user=user,
+                          comment=f"{sk['abzug']:.2f} EUR Skonto abgezogen, Frist {sk['frist_bis']} überschritten — Abzug bleibt offen")
+    except Exception:
+        pass
+    return neu
+
+
+def _apply_invoice_paid(invoice_id, txn, skonto_basis=None):
     """Markiert Rechnung als bezahlt + speichert Bezugs-Buchung. Persistiert sofort."""
     inv = invoices.get(invoice_id)
     if not inv:
@@ -6224,6 +6336,7 @@ def _apply_invoice_paid(invoice_id, txn):
     setattr(inv, '_paid_at', txn.get("booking_date") or txn.get("value_date"))
     setattr(inv, '_paid_amount', txn.get("amount"))
     setattr(inv, '_paid_via_booking', txn.get("id"))
+    _skonto_zahlung_setzen(inv, txn.get("amount"), txn.get("booking_date") or txn.get("value_date"), basis=skonto_basis)
     try:
         inv.status = "BEZAHLT"
     except Exception:
@@ -6236,7 +6349,7 @@ def _undo_invoice_paid(invoice_id):
     inv = invoices.get(invoice_id)
     if not inv:
         return False
-    for attr in ('_paid_at', '_paid_amount', '_paid_via_booking'):
+    for attr in ('_paid_at', '_paid_amount', '_paid_via_booking', '_skonto_zahlung'):
         if hasattr(inv, attr):
             try:
                 delattr(inv, attr)
@@ -6605,25 +6718,39 @@ def api_bank_match_split(txn_id):
     total = round(abs(float(t.get("amount") or 0)), 2)
     last = invs[-1]
 
-    # 1) Alle außer der letzten voll begleichen
+    # Skonto: bei welchen Rechnungen der Kunde es abgezogen hat (leer = bei keiner)
+    try:
+        skonto = _bank.skonto_verteilung(invs, total, t.get("booking_date") or t.get("value_date"))
+    except Exception as e:
+        print(f"[skonto] Sammelzahlung {txn_id}: {e}")
+        skonto = {}
+
+    def _abzug(inv):
+        return float((skonto.get(getattr(inv, "_id", None)) or {}).get("abzug") or 0)
+
+    # 1) Alle außer der letzten voll begleichen (bei Skonto: Brutto minus Abzug)
     paid_before_last = 0.0
     allocations = []
     for inv in invs[:-1]:
-        g = _invoice_gross(inv)
+        brutto = _invoice_gross(inv)
+        g = round(brutto - _abzug(inv), 2)
         tt = dict(t); tt["amount"] = g
-        _apply_invoice_paid(getattr(inv, "_id", None), tt)
+        _apply_invoice_paid(getattr(inv, "_id", None), tt, skonto_basis=brutto)
         paid_before_last = round(paid_before_last + g, 2)
         allocations.append({"invoice_number": inv.invoice_number,
-                            "allocated": g, "status": "BEZAHLT"})
+                            "allocated": g, "status": "BEZAHLT", "skonto": _abzug(inv)})
 
     # 2) Rest auf die letzte Rechnung
     rest = round(total - paid_before_last, 2)
-    last_gross = _invoice_gross(last)
+    last_brutto = _invoice_gross(last)
+    last_gross = round(last_brutto - _abzug(last), 2)
     diff = round(rest - last_gross, 2)   # + = Überzahlung, − = Restbetrag offen
+    if skonto and abs(diff) <= 0.02:
+        diff = 0.0                       # Cent-Rundung der Skontobeträge
 
     if diff >= -0.005:
         tt = dict(t); tt["amount"] = rest
-        _apply_invoice_paid(getattr(last, "_id", None), tt)
+        _apply_invoice_paid(getattr(last, "_id", None), tt, skonto_basis=last_brutto)
         last_status = "BEZAHLT"
     else:
         # nur teilbezahlt → Rechnung bleibt offen, Restbetrag wird gekennzeichnet
@@ -6645,7 +6772,7 @@ def api_bank_match_split(txn_id):
         except Exception:
             pass
     allocations.append({"invoice_number": last.invoice_number, "allocated": rest,
-                        "status": last_status, "difference": diff})
+                        "status": last_status, "difference": diff, "skonto": _abzug(last)})
 
     # Buchung als Sammel-Match markieren
     t["match_status"] = "matched"
@@ -6656,7 +6783,10 @@ def api_bank_match_split(txn_id):
     _save_bank_txns(txns)
     auto_save()
     return _json({"ok": True, "total": total, "allocations": allocations,
-                  "difference": diff, "difference_on": last.invoice_number})
+                  "difference": diff, "difference_on": last.invoice_number,
+                  "skonto_summe": round(sum(_abzug(x) for x in invs), 2),
+                  "skonto_verspaetet": [x.invoice_number for x in invs
+                                        if _abzug(x) and not skonto[getattr(x, "_id", None)]["fristgerecht"]]})
 
 
 @app.route("/api/bank/transactions/<txn_id>/unmatch", methods=["POST"])
@@ -8641,7 +8771,7 @@ def _offener_betrag(inv, storno_targets=None):
         gezahlt = float(getattr(inv, "_paid_amount", 0) or 0)
     except Exception:
         gezahlt = 0.0
-    rest = round(brutto - gezahlt - _gutgeschrieben(inv, storno_targets), 2)
+    rest = round(brutto - gezahlt - _skonto_abzug(inv) - _gutgeschrieben(inv, storno_targets), 2)
     return rest if rest > 0 else 0.0
 
 
@@ -9419,6 +9549,8 @@ def api_invoice_mark_paid(inv_id):
             pass
     if data.get("comment"):
         setattr(inv, "_paid_note", str(data["comment"])[:300])
+    _skonto_zahlung_setzen(inv, getattr(inv, "_paid_amount", None), getattr(inv, "_paid_at", None),
+                           user=data.get("_user", "web-user"))
     war_bezahlt = getattr(inv, "status", "") == "BEZAHLT"
     try:
         inv.status = "BEZAHLT"
@@ -9426,6 +9558,27 @@ def api_invoice_mark_paid(inv_id):
         pass
     auto_save()
     return _json({"ok": True, "status": inv.status, "paid_at": getattr(inv, "_paid_at", None)})
+
+
+@app.route("/api/invoices/<inv_id>/skonto", methods=["POST"])
+def api_invoice_skonto(inv_id):
+    """Skontoabzug einer Zahlung von Hand anerkennen oder zurücknehmen (Zahlung nach der Frist).
+    Body: {anerkennen: true|false}"""
+    inv = invoices.get(inv_id)
+    if not inv:
+        return _json({"error": "Nicht gefunden"}, 404)
+    sz = getattr(inv, "_skonto_zahlung", None)
+    if not sz:
+        return _json({"error": "Zu dieser Rechnung ist kein Skontoabzug vermerkt"}, 400)
+    data = request.get_json(silent=True) or {}
+    ja = bool(data.get("anerkennen"))
+    if bool(sz.get("anerkannt")) != ja:
+        sz["anerkannt"] = ja
+        inv._skonto_zahlung = sz
+        inv.add_audit("SKONTO_ANERKANNT" if ja else "SKONTO_ZURUECKGENOMMEN", user=data.get("_user", "web-user"),
+                      comment=f"{float(sz.get('abzug') or 0):.2f} EUR Skonto, Frist war {sz.get('frist_bis')}")
+        auto_save()
+    return _json({"ok": True, "skonto_zahlung": sz, "open_amount": _offener_betrag(inv, _collect_storno_targets(list(invoices.values())))})
 
 
 @app.route("/api/invoices/<inv_id>/reject", methods=["POST"])
@@ -9609,6 +9762,8 @@ def api_generate():
                 bic=data.get("bic", data.get("seller_bic", "")),
                 payment_terms=_terms,
                 due_date=_due_date,
+                skonto_percent=(0.0 if _ist_gutschrift else __import__("doc_generator")._skonto_von(data)[0]),
+                skonto_days=(0 if _ist_gutschrift else __import__("doc_generator")._skonto_von(data)[1]),
             ),
         )
 

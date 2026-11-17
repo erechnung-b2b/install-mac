@@ -405,6 +405,7 @@ th.c,td.c{text-align:center}
   <div class="topbar"><div><h2>Rechnung erstellen</h2><div class="sub">XRechnung (UBL 2.1) erzeugen</div></div></div>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
     <div class="card"><div class="card-header"><h3>Verkäufer</h3><span style="font-size:11px;color:var(--text2)">(aus Stammdaten)</span></div><div class="card-body">
+      <div class="form-row" id="c-seller-wahl-zeile" style="display:none"><label>Verkäufer wählen</label><select id="c-seller-wahl" onchange="sellerWahl()"></select></div>
       <div class="form-row"><label>Firma</label><input id="c-seller-name" placeholder="Wird aus Stammdaten geladen"></div>
       <div class="form-row-2"><div class="form-row"><label>Straße</label><input id="c-seller-street"></div>
         <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:8px"><input id="c-seller-plz" style="width:80px" maxlength="5" inputmode="numeric" oninput="plzLookup(this,'c-seller-city')"><input id="c-seller-city"></div></div></div>
@@ -493,6 +494,8 @@ th.c,td.c{text-align:center}
             <option value="Zahlbar innerhalb von 30 Tagen ohne Abzug">30 Tage netto</option>
           </select>
         </div>
+      <div class="form-row" id="c-skonto-zeile" style="display:none"><label>Skonto</label>
+        <div style="display:flex;gap:6px;align-items:center;font-size:13px"><input id="c-skonto-percent" type="number" min="0" max="99" step="0.5" placeholder="0" style="width:70px"> % bei Zahlung binnen <input id="c-skonto-days" type="number" min="0" max="365" step="1" placeholder="0" style="width:70px"> Tagen</div></div>
     </div>
     <div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Positionen</div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
@@ -1702,6 +1705,8 @@ th.c,td.c{text-align:center}
           <select id="s-mandant-currency"><option value="EUR" selected>EUR</option><option value="CHF">CHF</option><option value="USD">USD</option></select>
         </div>
       </div>
+      <div class="form-row" id="s-verkaeufer2-zeile" style="display:none;margin-top:10px"><label>Zweiter Verkäufer – Zusatz unter dem Firmennamen</label><input id="s-verkaeufer2-zusatz" value="" maxlength="80" placeholder="leer = kein zweiter Verkäufer">
+        <div style="font-size:12px;color:var(--text2);margin-top:4px">Mit Zusatz lässt sich unter „Rechnung erstellen“ ein zweiter Verkäufer wählen: gleiche Stammdaten, der Zusatz steht als zweite Zeile unter dem Firmennamen.</div></div>
       <label id="s-zahlkonto-box" style="display:flex;gap:10px;align-items:flex-start;margin-top:10px;padding:10px 12px;border:1px solid var(--border,#ddd);border-radius:8px;cursor:pointer">
         <input type="checkbox" id="s-zahlkonto-alt" onchange="toggleZahlkonto(this.checked)" style="margin-top:3px">
         <span><b>Kundenzahlungen auf <span id="s-zahlkonto-alt-bank">Zweitkonto</span>: <span id="s-zahlkonto-alt-iban" style="font-family:var(--mono,monospace)">—</span></b><br>
@@ -2451,6 +2456,16 @@ async function zahlkontoRechnungSetzen(cb) {
     alert('Zahlkonto nicht geändert: ' + e.message);
   }
 }
+async function skontoAnerkennen(id, ja) {
+  if (!confirm(ja ? 'Skontoabzug trotz überschrittener Frist anerkennen? Die Rechnung gilt dann als vollständig bezahlt.' : 'Anerkennung des Skontoabzugs zurücknehmen? Der Abzug steht dann wieder offen.')) return;
+  try {
+    const r = await fetch(API + '/api/invoices/' + id + '/skonto', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({anerkennen: ja})});
+    const d = await r.json();
+    if (!r.ok) { alert(d.error || 'Fehler'); return; }
+    openDetail(id);
+  } catch (e) { alert('Fehler: ' + e); }
+}
+
 async function openDetail(id) {
   currentInvoiceId = id;
   const res = await fetch(API+`/api/invoices/${id}`);
@@ -2483,6 +2498,22 @@ async function openDetail(id) {
       <div><strong>💶 Bezahlt</strong>${dt ? ' am ' + dt : ''}${amt ? ' · ' + amt : ''}${inv.paid_via_booking ? ' · via Bank-Import' : ''}</div>
       ${inv.paid_via_booking ? '<button onclick="navigate(\'bank\')" style="font-size:11px;padding:3px 10px;color:#065F46;background:#A7F3D0;border:0;border-radius:var(--radius);cursor:pointer">Buchung anzeigen →</button>' : ''}
     </div>`;
+    const sz = inv.skonto_zahlung;
+    if (sz && sz.abzug) {
+      const cur = inv.currency || 'EUR', abz = Number(sz.abzug).toFixed(2) + ' ' + cur, pz = String(sz.prozent).replace('.', ',');
+      const frist = (sz.frist_bis || '').split('-').reverse().join('.');
+      if (sz.anerkannt) {
+        stornoHtml += `<div style="padding:10px 16px;background:#D1FAE5;border:1px solid #86EFAC;border-radius:var(--radius);margin-bottom:12px;font-size:13px;color:#065F46;display:flex;justify-content:space-between;align-items:center;gap:12px">
+          <div><strong>Skonto ${pz} %:</strong> ${abz} abgezogen${sz.fristgerecht ? ' · Zahlung fristgerecht (Frist ' + frist + ')' : ' · nach der Frist (' + frist + ') von Hand anerkannt'} · kein Rest offen</div>
+          ${sz.fristgerecht ? '' : '<button onclick="skontoAnerkennen(\'' + inv.id + '\', false)" style="font-size:11px;padding:3px 10px;color:#065F46;background:#A7F3D0;border:0;border-radius:var(--radius);cursor:pointer">Zurücknehmen</button>'}
+        </div>`;
+      } else {
+        stornoHtml += `<div style="padding:10px 16px;background:var(--warning-bg);border:1px solid #FAC775;border-radius:var(--radius);margin-bottom:12px;font-size:13px;color:var(--warning);display:flex;justify-content:space-between;align-items:center;gap:12px">
+          <div><strong>Skonto ${pz} % abgezogen (${abz}), aber die Frist ${frist} war überschritten.</strong> Der Abzug steht noch offen.</div>
+          <button onclick="skontoAnerkennen('${inv.id}', true)" style="font-size:11px;padding:3px 10px;color:var(--warning);background:#fff;border:1px solid #FAC775;border-radius:var(--radius);cursor:pointer;white-space:nowrap">Skonto trotzdem anerkennen</button>
+        </div>`;
+      }
+    }
   }
   if (inv.status === 'STORNIERT') {
     const stornoEvt = inv.audit_trail?.find(e => e.type === 'STORNIERT');
@@ -3527,6 +3558,8 @@ async function _generateInvoiceInner(download=false) {
     iban: document.getElementById('c-seller-iban').value,
     bic: document.getElementById('c-seller-bic').value,
     payment_terms: document.getElementById('c-terms').value,
+    skonto_percent: (document.getElementById('c-skonto-percent')||{}).value || '',
+    skonto_days: (document.getElementById('c-skonto-days')||{}).value || '',
     note: (document.getElementById('c-note')||{}).value || '',
     lines: lines,
     type: _docType(),
@@ -4249,6 +4282,7 @@ async function loadMandantSettings() {
     document.getElementById('s-zahlkonto-alt').checked = !!m.zahlkonto_alt_aktiv;
     zahlkontoMarkieren(!!m.zahlkonto_alt_aktiv);
     if (m.currency) document.getElementById('s-mandant-currency').value = m.currency;
+    if (m.verkaeufer2_feld) { document.getElementById('s-verkaeufer2-zeile').style.display = ''; document.getElementById('s-verkaeufer2-zusatz').value = (m.verkaeufer2 && m.verkaeufer2.zusatz) || ''; window._verkaeufer2Feld = true; }
   } catch(e) {}
 }
 async function resetAllData() {
@@ -4294,15 +4328,22 @@ async function saveMandantSettings() {
     bic: document.getElementById('s-mandant-bic').value,
     currency: document.getElementById('s-mandant-currency').value,
   };
+  if (window._verkaeufer2Feld) body.verkaeufer2_zusatz = document.getElementById('s-verkaeufer2-zusatz').value;
   const res = await fetch(API+'/api/mandant/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
   const el = document.getElementById('mandant-save-result');
   if (res.saved) { el.innerHTML='<span style="color:var(--success)">&#10003; Gespeichert</span>'; toast('Stammdaten gespeichert'); }
   else { el.innerHTML='<span style="color:var(--danger)">Fehler</span>'; }
 }
+function sellerWahl() { const w = document.getElementById('c-seller-wahl'); if (w && w.value) document.getElementById('c-seller-name').value = w.value; }
 async function fillSellerFromMandant() {
   try {
     const m = await fetch(API+'/api/mandant/settings').then(r=>r.json());
+    window._ms2 = {name: m.name || '', v2: m.verkaeufer2_name || '', skonto: !!m.skonto_feld};
+    { const sz = document.getElementById('c-skonto-zeile'); if (sz) sz.style.display = m.skonto_feld ? '' : 'none'; }
     if (m.name) document.getElementById('c-seller-name').value = m.name;
+    // Zweiter Verkäufer: gleiche Stammdaten, nur der Name trägt den Zusatz. Jede neue Rechnung beginnt mit Verkäufer 1.
+    { const z = document.getElementById('c-seller-wahl-zeile'), w = document.getElementById('c-seller-wahl');
+      if (z && w) { if (m.verkaeufer2_name && m.name) { w.innerHTML = ''; [m.name, m.verkaeufer2_name].forEach((n, i) => { const o = document.createElement('option'); o.value = n; o.textContent = (i + 1) + ' – ' + n; w.appendChild(o); }); w.value = m.name; z.style.display = ''; } else { z.style.display = 'none'; } } }
     if (m.street) document.getElementById('c-seller-street').value = m.street;
     if (m.post_code) document.getElementById('c-seller-plz').value = m.post_code;
     if (m.city) document.getElementById('c-seller-city').value = m.city;
@@ -5239,6 +5280,7 @@ async function openTxnDetail(id) {
       try { _docTemplates = await fetch(API+'/api/mandant/templates').then(r=>r.json()); } catch(e) { _docTemplates = {}; }
       if (!_docTemplates || _docTemplates.error) _docTemplates = {};
     }
+    if (!window._ms2) { try { const m2 = await fetch(API+'/api/mandant/settings').then(r=>r.json()); window._ms2 = {name: m2.name || '', v2: m2.verkaeufer2_name || '', skonto: !!m2.skonto_feld}; } catch(e) {} }
     const resp = await fetch(API+'/api/transactions/'+id);
     if (!resp.ok) { toast('Vorgang nicht gefunden ('+resp.status+')', 'error'); return; }
     _currentTxn = await resp.json();
@@ -5789,6 +5831,26 @@ function renderStepPositions(key) {
         '<select id="step-payment-terms" style="width:100%;font-size:14px;padding:6px 8px" '+(readonly?'disabled':'')+' onchange="markDirty()">' +
         payOpts.map(o => '<option value="'+o.v+'"'+(paymentTerms===o.v?' selected':'')+'>'+o.l+' \u2013 '+o.v+'</option>').join('') +
         '</select></div>';
+    }
+
+    // Skonto am Angebot und an der Rechnung; Verkäufer des Vorgangs am Angebot (16.11.2026)
+    if ((key === 'customer_quote' || key === 'invoice') && window._ms2 && window._ms2.skonto) {
+      const cqS = (_currentTxn.steps||{}).customer_quote || {};
+      const hat = v => v !== undefined && v !== null && v !== '';
+      const skP = hat(step.skonto_percent) ? step.skonto_percent : (key === 'invoice' && hat(cqS.skonto_percent) ? cqS.skonto_percent : '');
+      const skT = hat(step.skonto_percent) ? (step.skonto_days || '') : (key === 'invoice' && hat(cqS.skonto_percent) ? (cqS.skonto_days || '') : '');
+      const dis = readonly ? 'disabled' : '';
+      closingHtml += '<div style="margin-top:8px;font-size:13px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">Skonto</label>' +
+        '<input id="step-skonto-percent" type="number" min="0" max="99" step="0.5" value="'+(skP || '')+'" placeholder="0" style="width:70px" '+dis+' oninput="markDirty()"> % bei Zahlung binnen ' +
+        '<input id="step-skonto-days" type="number" min="0" max="365" step="1" value="'+(skT || '')+'" placeholder="0" style="width:70px" '+dis+' oninput="markDirty()"> Tagen' +
+        (key === 'invoice' && !hat(step.skonto_percent) && hat(cqS.skonto_percent) && Number(cqS.skonto_percent) > 0 ? ' <span style="color:var(--text2);font-size:12px">(aus dem Angebot)</span>' : '') + '</div>';
+      if (key === 'customer_quote' && window._ms2.v2) {
+        const v = Number(step.verkaeufer || 1);
+        closingHtml += '<div style="margin-top:8px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">Verkäufer dieses Vorgangs (Angebot, Vertrag, Rechnung)</label>' +
+          '<select id="step-verkaeufer" style="width:100%;font-size:14px;padding:6px 8px" '+dis+' onchange="markDirty()">' +
+          '<option value="1"'+(v !== 2 ? ' selected' : '')+'>1 \u2013 '+esc(window._ms2.name)+'</option>' +
+          '<option value="2"'+(v === 2 ? ' selected' : '')+'>2 \u2013 '+esc(window._ms2.v2)+'</option></select></div>';
+      }
     }
 
     // Summen + Speichern
@@ -6379,6 +6441,9 @@ async function saveTxnStepPositions() {
   if (introEl) saveData.intro_text = introEl.value;
   if (closingEl) saveData.closing_text = closingEl.value;
   if (payTermsEl) saveData.payment_terms = payTermsEl.value;
+  { const sp = document.getElementById('step-skonto-percent'), st = document.getElementById('step-skonto-days'), sv = document.getElementById('step-verkaeufer');
+    if (sp && !sp.disabled) { saveData.skonto_percent = sp.value === '' ? 0 : Number(sp.value); saveData.skonto_days = (st && st.value !== '') ? Number(st.value) : 0; }
+    if (sv && !sv.disabled) saveData.verkaeufer = Number(sv.value) === 2 ? 2 : 1; }
   const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+_currentStepKey, {
     method:'PUT', headers:{'Content-Type':'application/json'},
     body:JSON.stringify(saveData)
@@ -7825,7 +7890,8 @@ async function loadBankTxns() {
     if (t.split_suggestion && t.match_status === 'open') {
       const sn = t.split_suggestion.invoice_numbers || [];
       const sd = t.split_suggestion.difference || 0;
-      const dHint = (Math.abs(sd) >= 0.01) ? ' · Differenz ' + sd.toFixed(2) + ' €' : ' · exakt';
+      const ssk = Number(t.split_suggestion.skonto_summe || 0);
+      const dHint = ((Math.abs(sd) >= 0.01) ? ' · Differenz ' + sd.toFixed(2) + ' €' : ' · exakt') + (ssk > 0 ? ' · Skonto ' + ssk.toFixed(2) + ' €' + ((t.split_suggestion.skonto_verspaetet || []).length ? ' (Frist überschritten)' : '') : '');
       matchCol = '<button class="primary small" style="font-size:11px;padding:2px 8px;margin-bottom:3px;background:#7C3AED;display:block;width:100%;text-align:left" title="Sammelzahlung aufteilen auf: ' + esc(sn.join(' + ')) + dHint + '" onclick="bankApplySplitSuggestion(\'' + t.id + '\')">↔ Sammelzahlung: ' + sn.length + ' Rechnungen' + dHint + '</button>' + matchCol;
     }
 
@@ -7939,11 +8005,22 @@ async function bankPruefBestaetigen() {
   loadBankTxns();
 }
 
+function skontoSplitText(s) {
+  const sk = (s && s.skonto) || {}, ks = Object.keys(sk);
+  if (!ks.length) return '';
+  const spaet = s.skonto_verspaetet || [];
+  return '\n\nSkonto abgezogen: ' + ks.map(k => k + ' −' + Number(sk[k]).toFixed(2) + ' €' + (spaet.includes(k) ? ' (Frist überschritten, Abzug bleibt offen)' : '')).join(', ');
+}
+function skontoSplitToast(r) {
+  if (!r || !(r.skonto_summe > 0)) return '';
+  return ' · Skonto ' + Number(r.skonto_summe).toFixed(2) + ' €' + ((r.skonto_verspaetet || []).length ? ' (Frist überschritten bei ' + r.skonto_verspaetet.join(', ') + ')' : '');
+}
+
 async function bankApplySplitSuggestion(txnId) {
   const res = await fetch(API + '/api/bank/transactions').then(r => r.json());
   const t = (res.transactions || []).find(x => x.id === txnId);
   if (!t || !t.split_suggestion) return toast('Kein Aufteilungs-Vorschlag mehr vorhanden', 'error');
-  const nums = (t.split_suggestion.invoice_numbers || []).join(' + ');
+  const nums = (t.split_suggestion.invoice_numbers || []).join(' + ') + skontoSplitText(t.split_suggestion);
   if (!confirm('Sammelzahlung auf diese Rechnungen aufteilen?\n\n' + nums +
       '\n\nRest/Differenz geht auf die letzte Rechnung.')) return;
   const r = await fetch(API + '/api/bank/transactions/' + txnId + '/match-split',
@@ -7951,7 +8028,7 @@ async function bankApplySplitSuggestion(txnId) {
       body: JSON.stringify({ invoice_ids: t.split_suggestion.invoice_ids }) }).then(r => r.json());
   if (!r.ok) return toast('Aufteilen fehlgeschlagen: ' + (r.error || ''), 'error');
   const dInfo = Math.abs(r.difference) >= 0.01 ? ' · Differenz ' + r.difference.toFixed(2) + ' € auf ' + r.difference_on : '';
-  toast('Auf ' + r.allocations.length + ' Rechnungen aufgeteilt' + dInfo);
+  toast('Auf ' + r.allocations.length + ' Rechnungen aufgeteilt' + dInfo + skontoSplitToast(r));
   loadBankTxns();
 }
 
@@ -8126,7 +8203,7 @@ async function bankConfirmSplit() {
   if (!r.ok) return toast('Aufteilen fehlgeschlagen: ' + (r.error || ''), 'error');
   const dInfo = Math.abs(r.difference) >= 0.01 ? ' · Differenz ' + r.difference.toFixed(2) + ' € auf ' + r.difference_on : '';
   hideBankMatchModal();
-  toast('Zahlung auf ' + r.allocations.length + ' Rechnungen aufgeteilt' + dInfo);
+  toast('Zahlung auf ' + r.allocations.length + ' Rechnungen aufgeteilt' + dInfo + skontoSplitToast(r));
   loadBankTxns();
 }
 

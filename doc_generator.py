@@ -7,7 +7,7 @@ Gemeinsames Layout mit Firmen-Briefkopf, Positionen, Summen.
 """
 from __future__ import annotations
 import os, json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from io import BytesIO
@@ -235,7 +235,9 @@ def _build_header(story, styles, seller: dict, logo_path: Optional[str]):
     vat = seller.get("vat_id", "")
     contact = seller.get("contact_name", "")
 
-    info_lines = [f'<font size="11"><b>{name}</b></font>']
+    # Zweiter Verkäufer (16.11.2026): der Namenszusatz steht als eigene Zeile unter dem Namen
+    _nz = [z.strip() for z in str(name).split("\n") if z.strip()]
+    info_lines = [f'<font size="11"><b>{_nz[0] if _nz else ""}</b></font>'] + [f'<font size="11"><b>{z}</b></font>' for z in _nz[1:]]
     if contact:
         info_lines.append(contact)
     if street:
@@ -252,7 +254,10 @@ def _build_header(story, styles, seller: dict, logo_path: Optional[str]):
     if detail_parts:
         info_lines.append(" · ".join(detail_parts))
 
-    info_para = Paragraph("<br/>".join(info_lines), styles["header_sub"])
+    _hs = styles["header_sub"]
+    if len(_nz) > 1:      # zwei Namenszeilen in 11 pt brauchen mehr Zeilenabstand, sonst laufen sie ineinander
+        _hs = ParagraphStyle("header_sub_zusatz", parent=_hs, leading=12.5)
+    info_para = Paragraph("<br/>".join(info_lines), _hs)
 
     header_table = Table(
         [[logo_cell, info_para]],
@@ -634,6 +639,32 @@ def _build_prepaid_summary(story, styles, prepaid_invoices: list, gross_total: f
     return total
 
 
+def _skonto_von(step) -> tuple:
+    """(Prozent, Tage) aus dem Schritt; (0, 0) ohne gültiges Skonto."""
+    try:
+        p = float(str((step or {}).get("skonto_percent") or 0).replace(",", "."))
+        t = int(float(str((step or {}).get("skonto_days") or 0).replace(",", ".")))
+    except (TypeError, ValueError):
+        return 0.0, 0
+    return (p, t) if 0 < p < 100 and t > 0 else (0.0, 0)
+
+
+def _skonto_text(doc_type: str, prozent: float, tage: int, offen: float, doc_date: str = "") -> str:
+    p = f"{prozent:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+    if doc_type != "invoice":
+        return (f"<b>Skonto:</b> Bei Zahlung innerhalb von {tage} Tagen nach Rechnungsdatum gewähren wir "
+                f"{p} % Skonto auf den Rechnungsbetrag.")
+    betrag = round(offen * prozent / 100, 2)
+    bis = ""
+    try:
+        bis = (date.fromisoformat(str(doc_date)[:10]) + timedelta(days=tage)).strftime("%d.%m.%Y")
+    except Exception:
+        pass
+    frist = f"bis zum {bis}" if bis else f"innerhalb von {tage} Tagen nach Rechnungsdatum"
+    return (f"<b>Skonto:</b> Bei Zahlung {frist} gewähren wir {p} % Skonto ({_fmt(betrag)} EUR). "
+            f"Zu zahlen sind dann {_fmt(offen - betrag)} EUR.")
+
+
 def _build_payment_info(story, styles, seller: dict, gross: float = 0,
                         due_date: str = "", reference: str = "",
                         show_qr: bool = False, doc_date: str = ""):
@@ -667,7 +698,8 @@ def _build_payment_info(story, styles, seller: dict, gross: float = 0,
     qr_img = None
     if show_qr:
         qr_img = _build_giro_qr_image(
-            beneficiary_name=seller.get("name", ""),
+            # Empfängerabgleich der Banken: hier muss der Kontoinhaber stehen, nicht der Name mit Zusatz
+            beneficiary_name=seller.get("kontoinhaber") or " ".join(str(seller.get("name", "")).split()),
             iban=iban, amount=gross, bic=bic,
             reference=reference, size_mm=32
         )
@@ -710,7 +742,7 @@ def _footer_func(canvas, doc, seller: dict):
     canvas.setFont("Helvetica", 6.5)
     canvas.setFillColor(MID_GRAY)
 
-    name = seller.get("name", "")
+    name = " ".join(str(seller.get("name", "")).split())     # Fußzeile ist einzeilig
     street = _street_line(seller)
     plz_city = f'{seller.get("post_code", "")} {seller.get("city", "")}'.strip()
     email = seller.get("email", "")
@@ -723,8 +755,15 @@ def _footer_func(canvas, doc, seller: dict):
 
     y = 12 * mm
     canvas.line(MARGIN_L, y + 3*mm, PAGE_W - MARGIN_R, y + 3*mm)
-    canvas.drawString(MARGIN_L, y, " · ".join(left_parts))
-    canvas.drawRightString(PAGE_W - MARGIN_R, y, " · ".join(right_parts))
+    _fl, _fr = " · ".join(left_parts), " · ".join(right_parts)
+    # Langer Name (zweiter Verkäufer mit Zusatz): Schrift so weit verkleinern, dass links und rechts nicht ineinanderlaufen
+    _platz = PAGE_W - MARGIN_L - MARGIN_R - 12
+    _bedarf = canvas.stringWidth(_fl, "Helvetica", 6.5) + canvas.stringWidth(_fr, "Helvetica", 6.5)
+    if _bedarf > _platz:
+        canvas.setFont("Helvetica", max(5.0, 6.5 * _platz / _bedarf))
+    canvas.drawString(MARGIN_L, y, _fl)
+    canvas.drawRightString(PAGE_W - MARGIN_R, y, _fr)
+    canvas.setFont("Helvetica", 6.5)
 
     # Seitenzahl
     canvas.drawCentredString(PAGE_W / 2, y - 8, f"Seite {doc.page}")
@@ -1088,6 +1127,16 @@ def generate_document(
         prepaid_total = _build_prepaid_summary(story, styles, prepaid_invoices,
                                                  totals.get("gross", 0),
                                                  tax_total=totals.get("tax"))
+
+    # ── Skonto (16.11.2026): eigener Absatz unter den Summen; der Schlusstext darf dem nicht widersprechen ──
+    _sk_p, _sk_t = _skonto_von(step)
+    if _sk_p and doc_type in ("customer_quote", "order_confirmation", "invoice"):
+        _offen = max(0.0, float(totals.get("gross", 0) or 0) - float(prepaid_total or 0))
+        story.append(Spacer(1, 4*mm))
+        story.append(Paragraph(_skonto_text(doc_type, _sk_p, _sk_t, _offen, doc_date), styles["body"]))
+        if closing_text:
+            closing_text = "\n".join(z for z in str(closing_text).split("\n")
+                                     if "Abzug von Skonto" not in z).replace(" ohne jeden Abzug", "")
 
     # ── Schlusstext ──
     if not closing_text:
@@ -1504,6 +1553,12 @@ class DocumentGenerator:
 
         seller = self._load_seller()
         logo_path = self._logo()
+        # Zweiter Verkäufer für EIN Dokument (16.11.2026): invoice_pdf setzt _seller_override, wenn die Rechnung
+        # auf den zweiten Verkäufer lautet — gleiche Stammdaten, nur der Name trägt den Zusatz.
+        _so = getattr(self, "_seller_override", None) or {}
+        self._seller_override = None          # gilt nur für dieses eine Dokument
+        if _so.get("name"):
+            seller = dict(seller, kontoinhaber=seller.get("name", ""), name=_so["name"])
         # Abweichendes Zahlungskonto + Verwendungszweck fuer EIN Dokument (Dauerrechnung Online-Zugang, 11.10.2026):
         # Die Abo-Zahlungen laufen auf ein eigenes Konto und werden am Nutzercode erkannt — stuende hier das
         # Standardkonto mit der Rechnungsnummer, kaeme die Zahlung an und wuerde nicht zugeordnet.

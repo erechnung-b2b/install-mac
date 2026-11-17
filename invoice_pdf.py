@@ -36,6 +36,22 @@ def _einheit(code):
     return _EINHEITEN.get(c, str(code or "").strip())
 
 
+def _norm_name(s) -> str:
+    return " ".join(str(s or "").split()).casefold()
+
+
+def verkaeufer2_name(mandant_settings) -> str:
+    """Name des zweiten Verkäufers: Stammdaten-Name (oder eigener Name) + Zusatz in einer zweiten Zeile.
+    Leer, wenn kein zweiter Verkäufer angelegt ist (mandant_settings.json → "verkaeufer2")."""
+    ms = mandant_settings or {}
+    v2 = ms.get("verkaeufer2") or {}
+    zus = str(v2.get("zusatz") or "").strip()
+    name = str(v2.get("name") or ms.get("name") or "").strip()
+    if not (zus and name):
+        return ""
+    return name + "\n" + zus
+
+
 def build(inv, doc_gen, buyers, mandant_settings):
     """Erzeugt das PDF zur Rechnung (oder Storno) und liefert (filename, bytes).
 
@@ -150,21 +166,36 @@ def build(inv, doc_gen, buyers, mandant_settings):
         _s_name = " ".join((getattr(inv.seller, "name", "") or "").split())
         _von = inv.period_start.strftime("%d.%m.%Y") if inv.period_start else ""
         _bis = inv.period_end.strftime("%d.%m.%Y") if inv.period_end else ""
+        _eigen = str(_na.get("dienst") or "").strip()      # eigenes Abo-Produkt (dauer_texte.DAUER_PROFILE): eigener Name, ohne die Standard-Bedingungen
+        _dienst_von = f" von {_eigen}" if _eigen else _dt.dienst('von')
+        _agb_satz = str(_na.get("agb_satz") or "") if _eigen else (_dt.DAUER_TEXT.get("agb_satz") or "")
         intro_tpl = ("Sehr geehrte Damen und Herren,\n\n"
-                     f"für den Online-Zugang{_dt.dienst('von')} stellen wir Ihnen das vereinbarte Nutzungsentgelt in Rechnung"
+                     f"für den Online-Zugang{_dienst_von} stellen wir Ihnen das vereinbarte Nutzungsentgelt in Rechnung"
                      + (f" (Leistungszeitraum {_von} bis {_bis}, danach monatlich)." if _von and _bis else ".")
-                     + (("\n" + _dt.DAUER_TEXT["agb_satz"]) if _dt.DAUER_TEXT.get("agb_satz") else ""))
+                     + (("\n" + _agb_satz) if _agb_satz else ""))
         closing_tpl = (_note + "\n\n" if _note else "") + (
-            "Das Entgelt ist jeweils zum 28. für den folgenden Nutzungsmonat im Voraus fällig (§ N5 Abs. 2). "
+            "Das Entgelt ist jeweils zum 28. für den folgenden Nutzungsmonat im Voraus fällig" + ("" if _eigen else " (§ N5 Abs. 2)") + ". "
             f"Bitte überweisen Sie auf das unten genannte Konto und geben Sie als Verwendungszweck nur Ihren Nutzercode "
             f"{_na.get('verwendungszweck', '')} an — nicht die Rechnungsnummer. Ein Dauerauftrag ist dafür am bequemsten.\n\n"
             f"Mit freundlichen Grüßen\n{_s_name}")
         _lieferdatum = ""
+    # Zweiter Verkäufer (16.11.2026): lautet die Rechnung auf ihn, trägt auch das PDF seinen Namen
+    _v2n = verkaeufer2_name(mandant_settings)
+    _ist_v2 = bool(_v2n) and _norm_name(getattr(inv.seller, "name", "")) == _norm_name(_v2n)
+    if _ist_v2:
+        _zus = _v2n.split("\n", 1)[1].strip() if "\n" in _v2n else ""
+        _zeilen = (closing_tpl or "").rstrip().split("\n")
+        if _zus and _zeilen and _norm_name(_zeilen[-1]) == _norm_name((mandant_settings or {}).get("name", "")):
+            closing_tpl = (closing_tpl or "").rstrip() + "\n" + _zus      # Grußformel: Zusatz unter dem Namen
+        closing_tpl = (closing_tpl or "").replace(" ".join(_v2n.split()), _v2n)   # einzeilig gesetzter Name → zwei Zeilen
+    doc_gen._seller_override = {"name": _v2n} if _ist_v2 else None
     pdf_entry = doc_gen.generate(
         doc_type=doc_type_for_pdf,
         recipient=buyer_data,
         positions=positions,
-        step={"date": inv.invoice_date},
+        step={"date": inv.invoice_date,
+              "skonto_percent": getattr(inv.payment, "skonto_percent", 0) if inv.payment else 0,
+              "skonto_days": getattr(inv.payment, "skonto_days", 0) if inv.payment else 0},
         reference=inv.invoice_number,
         subject="",
         doc_date=inv.invoice_date,
@@ -176,6 +207,7 @@ def build(inv, doc_gen, buyers, mandant_settings):
     )
     doc_gen._prepaid_invoices = _vorher      # Zustand nicht am Generator zuruecklassen
     doc_gen._zahlung_override = None
+    doc_gen._seller_override = None
     pdf_path = doc_gen.get_filepath(pdf_entry["filename"])
     if not pdf_path or not pdf_path.exists():
         raise RuntimeError("PDF-Datei nach Generierung nicht gefunden")

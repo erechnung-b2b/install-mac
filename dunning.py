@@ -144,10 +144,15 @@ class DunningManager:
         results.sort(key=lambda r: (-r["days_overdue"], -r.get("next_dunning_level") if r.get("next_dunning_level") else 0))
         return results
 
-    def collect_invoices_from_transactions(self, transactions: list[dict]) -> list[dict]:
+    def collect_invoices_from_transactions(self, transactions: list[dict],
+                                           status_fn=None) -> list[dict]:
         """
         Extrahiert Rechnungsdaten aus Vorgängen für den Mahncheck.
         Nur Vorgänge berücksichtigen, bei denen Stufe 7 (invoice) freigegeben ist.
+
+        status_fn(rechnungsnummer) liefert den Status der registrierten Rechnung
+        (BEZAHLT / STORNIERT / …) oder "" — maßgeblich ist der Zahlstatus der
+        Rechnung, nicht die Mahnstufe des Vorgangs. Ohne status_fn wie bisher.
         """
         invoices = []
         for txn in transactions:
@@ -171,6 +176,13 @@ class DunningManager:
             status = ""
             if dunning_step.get("status") == "ERLEDIGT" and dunning_step.get("approved"):
                 status = "BEZAHLT"
+            if not status and status_fn is not None:
+                try:
+                    echt = str(status_fn(inv_step.get("reference", "")) or "")
+                except Exception:
+                    echt = ""
+                if echt in ("BEZAHLT", "STORNIERT", "GUTGESCHRIEBEN"):
+                    status = echt
 
             invoices.append({
                 "transaction_id": txn["id"],
@@ -185,9 +197,9 @@ class DunningManager:
 
         return invoices
 
-    def get_overdue_summary(self, transactions: list[dict]) -> dict:
+    def get_overdue_summary(self, transactions: list[dict], status_fn=None) -> dict:
         """Kompakt-Zusammenfassung für Dashboard."""
-        invoices = self.collect_invoices_from_transactions(transactions)
+        invoices = self.collect_invoices_from_transactions(transactions, status_fn)
         overdue = self.check_overdue(invoices)
 
         needs_action = [o for o in overdue if o["needs_action"]]
