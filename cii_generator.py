@@ -113,6 +113,7 @@ def _steuernummern(parent, vat_id, tax_reg=""):
 def _verkaeufer(parent, inv):
     s = inv.seller
     p = _el(parent, "SellerTradeParty")
+    _txt(p, "ID", s.kennung() if hasattr(s, "kennung") else "")     # BT-29 Verkäuferkennung (BR-CO-26)
     _el(p, "Name", s.name)
     if s.company_id:
         lo = _el(p, "SpecifiedLegalOrganization")
@@ -259,6 +260,7 @@ def generate_cii(inv: Invoice) -> etree._Element:
         _txt(t, "ExemptionReason", ts.exemption_reason)
         _el(t, "BasisAmount", _betrag(ts.taxable_amount))
         _el(t, "CategoryCode", ts.category_code)
+        _txt(t, "ExemptionReasonCode", getattr(ts, "exemption_reason_code", ""))     # BT-121
         if ts.category_code != "O":
             _el(t, "RateApplicablePercent", _zahl(ts.rate))
 

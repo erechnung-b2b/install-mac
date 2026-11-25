@@ -84,8 +84,18 @@ def _parse_seller(root) -> Seller:
         elif scheme_id == "FC":
             tax_reg = cid
 
+    # BT-29: erste PartyIdentification, die keine SEPA-Gläubigerkennung (BT-90) ist
+    seller_id = ""
+    for pid in party.findall("cac:PartyIdentification/cbc:ID", NS):
+        if (pid.get("schemeID") or "").upper() != "SEPA" and (pid.text or "").strip():
+            seller_id = pid.text.strip()
+            break
+
     return Seller(
-        name=_find(party, "cac:PartyName/cbc:Name"),
+        # BT-27 ist RegistrationName; PartyName ist der (freiwillige) Handelsname BT-28 — nur Rückfall
+        name=(_find(party, "cac:PartyLegalEntity/cbc:RegistrationName")
+              or _find(party, "cac:PartyName/cbc:Name")),
+        seller_id=seller_id,
         address=_parse_address(party),
         electronic_address=ea,
         electronic_address_scheme=ea_scheme,
@@ -106,14 +116,27 @@ def _parse_buyer(root) -> Buyer:
     ea = endpoint.text.strip() if endpoint is not None and endpoint.text else ""
     ea_scheme = endpoint.get("schemeID", "EM") if endpoint is not None else "EM"
 
+    # BT-48: die PartyTaxScheme mit Schema VAT; ohne Schemaangabe die erste (wie bisher)
+    vat_id, erste = "", ""
+    for pts in party.findall("cac:PartyTaxScheme", NS):
+        cid = _find(pts, "cbc:CompanyID")
+        erste = erste or cid
+        if _find(pts, "cac:TaxScheme/cbc:ID") == "VAT":
+            vat_id = cid
+            break
+    kontakt = _parse_contact(party)      # BT-56 bis BT-58
+
     return Buyer(
-        name=_find(party, "cac:PartyName/cbc:Name"),
+        # BT-44 ist RegistrationName; PartyName ist der Handelsname BT-45 — nur Rückfall
+        name=(_find(party, "cac:PartyLegalEntity/cbc:RegistrationName")
+              or _find(party, "cac:PartyName/cbc:Name")),
         address=_parse_address(party),
         electronic_address=ea,
         electronic_address_scheme=ea_scheme,
         buyer_reference="",  # BT-10 steht im Header
-        vat_id=_find(party, "cac:PartyTaxScheme/cbc:CompanyID"),
+        vat_id=vat_id or erste,
         company_id=_find(party, "cac:PartyLegalEntity/cbc:CompanyID"),
+        contact=kontakt if (kontakt.name or kontakt.telephone or kontakt.email) else None,
     )
 
 
@@ -185,6 +208,50 @@ def _parse_line(line_el) -> InvoiceLine:
         line.allowances_charges.append(_parse_allowance_charge(ac_el))
 
     return line
+
+
+# ── Summen und Steuerangaben aus der Datei (25.11.2026) ───────────────
+# Das Modell führt keine Summen, es BERECHNET sie aus den Positionen. Die Werte der Datei werden deshalb
+# getrennt abgelegt (inv._datei_summen) und in der Prüfung mit der Nachrechnung verglichen — sie
+# überschreiben nichts.
+_UBL_SUMMEN = (
+    ("BT-106", "cac:LegalMonetaryTotal/cbc:LineExtensionAmount"),
+    ("BT-107", "cac:LegalMonetaryTotal/cbc:AllowanceTotalAmount"),
+    ("BT-108", "cac:LegalMonetaryTotal/cbc:ChargeTotalAmount"),
+    ("BT-109", "cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount"),
+    ("BT-110", "cac:TaxTotal/cbc:TaxAmount"),
+    ("BT-112", "cac:LegalMonetaryTotal/cbc:TaxInclusiveAmount"),
+    ("BT-113", "cac:LegalMonetaryTotal/cbc:PrepaidAmount"),
+    ("BT-114", "cac:LegalMonetaryTotal/cbc:PayableRoundingAmount"),
+    ("BT-115", "cac:LegalMonetaryTotal/cbc:PayableAmount"),
+)
+
+
+def _summen_aus_datei(root) -> dict:
+    aus = {}
+    for bt, pfad in _UBL_SUMMEN:
+        node = root.find(pfad, NS)
+        if node is not None and (node.text or "").strip():
+            try:
+                aus[bt] = Decimal(node.text.strip())
+            except Exception:
+                pass
+    return aus
+
+
+def _steuerangaben(root, inv) -> None:
+    """Befreiungsgrund BT-120/BT-121 aus der Steueraufschlüsselung lesen und den Steuerfall ableiten."""
+    from models import steuerfall_ableiten
+    for tc in root.findall("cac:TaxTotal/cac:TaxSubtotal/cac:TaxCategory", NS):
+        grund = _find(tc, "cbc:TaxExemptionReason")
+        code = _find(tc, "cbc:TaxExemptionReasonCode")
+        if grund and not inv.steuerbefreiung_grund:
+            inv.steuerbefreiung_grund = grund
+        if code and not inv.steuerbefreiung_code:
+            inv.steuerbefreiung_code = code
+    kategorien = [l.tax_category for l in inv.lines] or [
+        _find(tc, "cbc:ID") for tc in root.findall("cac:TaxTotal/cac:TaxSubtotal/cac:TaxCategory", NS)]
+    inv.steuerfall = steuerfall_ableiten(kategorien, inv.steuerbefreiung_grund) if kategorien else "regel"
 
 
 # ── Format-Erkennung (FR-200) ─────────────────────────────────────────
@@ -270,6 +337,16 @@ def parse_xrechnung(xml_bytes: bytes, source_file: str = "") -> Invoice:
     inv.order_reference = _find(root, "cac:OrderReference/cbc:ID")
     inv.contract_reference = _find(root, "cac:ContractDocumentReference/cbc:ID")
     inv.project_reference = _find(root, "cac:ProjectReference/cbc:ID")
+    if not inv.project_reference:
+        # BT-11 in der Gutschrift: AdditionalDocumentReference mit Dokumenttyp 50
+        for adr in root.findall("cac:AdditionalDocumentReference", NS):
+            if _find(adr, "cbc:DocumentTypeCode") == "50":
+                inv.project_reference = _find(adr, "cbc:ID")
+                break
+    # BT-72 Leistungsdatum
+    inv.tax_point_date = _find_date(root, "cac:Delivery/cbc:ActualDeliveryDate")
+    # BT-113 Vorauszahlung
+    inv.prepaid_amount = _find_decimal(root, "cac:LegalMonetaryTotal/cbc:PrepaidAmount")
     inv.preceding_invoice = _find(root, "cac:BillingReference/cac:InvoiceDocumentReference/cbc:ID")
     inv.preceding_invoice_date = _find_date(root, "cac:BillingReference/cac:InvoiceDocumentReference/cbc:IssueDate")  # BT-26
 
@@ -281,6 +358,10 @@ def parse_xrechnung(xml_bytes: bytes, source_file: str = "") -> Invoice:
     for line_el in (root.findall("cac:InvoiceLine", NS)
                     or root.findall("cac:CreditNoteLine", NS)):
         inv.lines.append(_parse_line(line_el))
+
+    # Summen der Datei (BT-106 … BT-115) getrennt ablegen, Befreiungsgrund und Steuerfall
+    inv._datei_summen = _summen_aus_datei(root)
+    _steuerangaben(root, inv)
 
     # Meta
     inv._source_file = source_file

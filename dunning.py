@@ -33,6 +33,41 @@ def _ts() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+# Rechnungen in diesen Zuständen werden nie gemahnt (25.11.2026: ZURUECKGEWIESEN ergänzt)
+ERLEDIGT_STATUS = ("BEZAHLT", "STORNIERT", "GUTGESCHRIEBEN", "ZURUECKGEWIESEN")
+
+
+def _stufe(eintrag) -> int:
+    try:
+        return int(eintrag.get("level", 0) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _fruehestens(history, levels, last_level, folge):
+    """Frühester Tag für die Folgestufe: Datum der letzten Mahnung + Abstand der beiden Schwellen.
+    None, wenn noch nie gemahnt wurde oder das Datum der letzten Mahnung fehlt."""
+    if not last_level:
+        return None
+    daten = []
+    for h in history:
+        if _stufe(h) == last_level and h.get("date"):
+            try:
+                daten.append(date.fromisoformat(str(h["date"])[:10]))
+            except (ValueError, TypeError):
+                pass
+    if not daten:
+        return None
+    vorher = next((lv for lv in levels if lv["level"] == last_level), None)
+    try:
+        abstand = int(folge["days_after_due"]) - int(vorher["days_after_due"]) if vorher else 0
+    except (KeyError, TypeError, ValueError):
+        abstand = 0
+    if abstand <= 0:
+        return None
+    return max(daten) + timedelta(days=abstand)
+
+
 # ── DunningManager ───────────────────────────────────────────────────
 
 class DunningManager:
@@ -82,9 +117,9 @@ class DunningManager:
         results = []
 
         for inv in invoices:
-            # Bereits bezahlt oder storniert → überspringen
+            # Erledigt (bezahlt, voll gutgeschrieben, storniert, zurückgewiesen) → überspringen
             status = inv.get("status", "")
-            if status in ("BEZAHLT", "STORNIERT", "GUTGESCHRIEBEN"):
+            if status in ERLEDIGT_STATUS:
                 continue
 
             due_str = inv.get("due_date", "")
@@ -101,36 +136,35 @@ class DunningManager:
                 continue
 
             # Welche Mahnstufe wurde zuletzt erzeugt?
-            history = inv.get("dunning_history", [])
-            last_level = max((h.get("level", 0) for h in history), default=0)
+            history = [h for h in (inv.get("dunning_history") or []) if isinstance(h, dict)]
+            last_level = max((_stufe(h) for h in history), default=0)
 
-            # Nächste fällige Stufe bestimmen
+            # Nächste Stufe bestimmen — immer nur die UNMITTELBAR FOLGENDE nach der zuletzt erzeugten (25.11.2026).
+            # Bis dahin lief die Schleife ohne Abbruch bis zur höchsten erreichten Stufe: 45 Tage überfällig und noch
+            # nie gemahnt ergab sofort Stufe 3 „Letzte Aufforderung“ mit Gebühr, ohne Erinnerung und 1. Mahnung.
             next_level = None
             next_fee = 0
             next_subject = ""
-            for lv in levels:
-                if lv["level"] > last_level and days_overdue >= lv["days_after_due"]:
-                    next_level = lv["level"]
-                    next_fee = lv.get("fee", 0)
-                    next_subject = lv.get("subject", f"Mahnung Stufe {lv['level']}")
-
-            if next_level is None and last_level == 0:
-                # Noch keine Mahnung, aber überfällig → Stufe 1 vorschlagen
-                # wenn die Tage die erste Schwelle noch nicht erreichen,
-                # trotzdem als "bald fällig" markieren
-                for lv in levels:
-                    if lv["level"] == 1:
-                        if days_overdue >= lv["days_after_due"]:
-                            next_level = 1
-                            next_fee = lv.get("fee", 0)
-                            next_subject = lv.get("subject", "Zahlungserinnerung")
-                        break
+            wartet_bis = ""
+            folge = next((lv for lv in levels if lv["level"] > last_level), None)
+            if folge is not None and days_overdue >= folge["days_after_due"]:
+                # Abstand zur letzten Mahnung: so viele Tage, wie die Schwellen der beiden Stufen auseinanderliegen
+                # (Standard 14) — sonst stünde am Tag nach der Erinnerung schon die 1. Mahnung an.
+                frueh = _fruehestens(history, levels, last_level, folge)
+                if frueh is not None and today < frueh:
+                    wartet_bis = frueh.isoformat()
+                else:
+                    next_level = folge["level"]
+                    next_fee = folge.get("fee", 0)
+                    next_subject = folge.get("subject", f"Mahnung Stufe {folge['level']}")
 
             results.append({
                 "transaction_id": inv.get("transaction_id", ""),
+                "invoice_id": inv.get("invoice_id", ""),          # gesetzt bei Rechnungen ohne Vorgang
                 "invoice_reference": inv.get("invoice_reference", ""),
                 "buyer_name": inv.get("buyer_name", ""),
-                "amount": inv.get("amount", 0),
+                "amount": inv.get("amount", 0),                   # offener Betrag (nach Zahlungen und Gutschriften)
+                "wartet_bis": wartet_bis,                         # nächste Stufe frühestens an diesem Tag
                 "due_date": due_str,
                 "days_overdue": days_overdue,
                 "last_dunning_level": last_level,
@@ -145,7 +179,7 @@ class DunningManager:
         return results
 
     def collect_invoices_from_transactions(self, transactions: list[dict],
-                                           status_fn=None) -> list[dict]:
+                                           status_fn=None, offen_fn=None) -> list[dict]:
         """
         Extrahiert Rechnungsdaten aus Vorgängen für den Mahncheck.
         Nur Vorgänge berücksichtigen, bei denen Stufe 7 (invoice) freigegeben ist.
@@ -153,6 +187,10 @@ class DunningManager:
         status_fn(rechnungsnummer) liefert den Status der registrierten Rechnung
         (BEZAHLT / STORNIERT / …) oder "" — maßgeblich ist der Zahlstatus der
         Rechnung, nicht die Mahnstufe des Vorgangs. Ohne status_fn wie bisher.
+
+        offen_fn(rechnungsnummer) liefert den OFFENEN Betrag der registrierten Rechnung (nach Teilzahlungen,
+        Gutschriften, Skonto) oder None, wenn die Rechnung nicht im Register steht — dann gilt wie bisher der
+        Betrag der Vorgangsstufe (25.11.2026).
         """
         invoices = []
         for txn in transactions:
@@ -181,15 +219,24 @@ class DunningManager:
                     echt = str(status_fn(inv_step.get("reference", "")) or "")
                 except Exception:
                     echt = ""
-                if echt in ("BEZAHLT", "STORNIERT", "GUTGESCHRIEBEN"):
+                if echt in ERLEDIGT_STATUS:
                     status = echt
+
+            betrag = inv_step.get("amount", 0)
+            if offen_fn is not None:
+                try:
+                    offen = offen_fn(inv_step.get("reference", ""))
+                except Exception:
+                    offen = None
+                if offen is not None:
+                    betrag = offen
 
             invoices.append({
                 "transaction_id": txn["id"],
                 "invoice_reference": inv_step.get("reference", ""),
                 "invoice_date": inv_step.get("date", ""),
                 "due_date": due,
-                "amount": inv_step.get("amount", 0),
+                "amount": betrag,
                 "buyer_name": txn.get("buyer_name", ""),
                 "status": status,
                 "dunning_history": dunning_history,
@@ -197,9 +244,14 @@ class DunningManager:
 
         return invoices
 
-    def get_overdue_summary(self, transactions: list[dict], status_fn=None) -> dict:
-        """Kompakt-Zusammenfassung für Dashboard."""
-        invoices = self.collect_invoices_from_transactions(transactions, status_fn)
+    def get_overdue_summary(self, transactions: list[dict], status_fn=None,
+                            offen_fn=None, weitere=None) -> dict:
+        """Kompakt-Zusammenfassung für Dashboard.
+
+        weitere: zusätzliche Rechnungen im selben Aufbau wie collect_invoices_from_transactions — versendete
+        Ausgangsrechnungen OHNE Vorgang („Rechnung erstellen“, CSV-Import), mit invoice_id statt transaction_id."""
+        invoices = self.collect_invoices_from_transactions(transactions, status_fn, offen_fn)
+        invoices += list(weitere or [])
         overdue = self.check_overdue(invoices)
 
         needs_action = [o for o in overdue if o["needs_action"]]

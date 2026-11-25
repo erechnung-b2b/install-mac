@@ -312,6 +312,9 @@ def _build_header(story, styles, seller: dict, logo_path: Optional[str]):
         detail_parts.append(email)
     if vat:
         detail_parts.append(f"USt-ID: {vat}")
+    elif _steuernummer(seller):
+        # Wer nur eine Steuernummer hat (keine USt-ID), braucht sie als Pflichtangabe auf dem Beleg (§ 14 Abs. 4 Nr. 2 UStG) — 25.11.2026
+        detail_parts.append(f"St.-Nr.: {_steuernummer(seller)}")
     if detail_parts:
         info_lines.append(" · ".join(detail_parts))
 
@@ -519,6 +522,75 @@ def _build_positions_table(story, styles, positions: list, show_prices: bool = T
 
 # ── Summenblock ──────────────────────────────────────────────────────
 
+from decimal import ROUND_HALF_UP as _HALF_UP
+_CENT = Decimal("0.01")
+
+
+def _dez(wert) -> Decimal:
+    """Zahl als Decimal (float/str/Decimal/None) — ohne Binärfehler der Gleitkommazahl."""
+    try:
+        return Decimal(str(0 if wert in (None, "") else wert).replace(",", "."))
+    except Exception:
+        return Decimal("0")
+
+
+def _satz_text(satz) -> str:
+    """Steuersatz für die Summenzeile: 19 → „19“, 19.00 → „19“, 10.7 → „10,7“."""
+    t = f"{_dez(satz):f}"
+    if "." in t:
+        t = t.rstrip("0").rstrip(".")
+    return t.replace(".", ",")
+
+
+def _steuer_gruppen(positions: list, subtotal) -> list:
+    """Umsatzsteuer je Steuersatz — dieselbe Rechnung wie Invoice.compute_tax_subtotals (models.py):
+    Netto je Satz summieren, auf Cent kaufmännisch runden, Steuer je Satz kaufmännisch runden.
+    Bis 25.11.2026 galt der Satz der ERSTEN Position für den ganzen Beleg, und round() rundete
+    7,125 auf 7,12 (die XRechnung auf 7,13) — PDF und XRechnung wichen voneinander ab.
+    Ein Dokumentrabatt/-zuschlag (subtotal ≠ Positionssumme) wird anteilig auf die Sätze verteilt,
+    der letzte Satz trägt den Rundungsrest. Liefert [(Satz, Bemessungsgrundlage, Steuer)] als Decimal."""
+    netto = {}
+    for p in positions or []:
+        r = p.get("tax_rate")
+        satz = _dez(19 if r in (None, "") else r)
+        netto[satz] = netto.get(satz, Decimal("0")) + _dez(p.get("net_amount", 0))
+    summe = sum(netto.values(), Decimal("0"))
+    sub = _dez(subtotal).quantize(_CENT, rounding=_HALF_UP)
+    ohne_rabatt = (summe.quantize(_CENT, rounding=_HALF_UP) == sub)
+    gruppen, rest, saetze = [], sub, sorted(netto)
+    for i, satz in enumerate(saetze):
+        if ohne_rabatt:
+            basis = netto[satz].quantize(_CENT, rounding=_HALF_UP)
+        elif i == len(saetze) - 1:
+            basis = rest
+        else:
+            basis = (netto[satz] * sub / summe).quantize(_CENT, rounding=_HALF_UP) if summe else Decimal("0.00")
+        rest -= basis
+        steuer = (basis * satz / Decimal("100")).quantize(_CENT, rounding=_HALF_UP)
+        gruppen.append((satz, basis, steuer))
+    return gruppen
+
+
+def _steuerhinweis_vorgabe(step, positions, data_dir):
+    """Belege aus dem Vorgang (Angebot, Auftragsbestätigung, Rechnung) kennen keinen Steuerfall. Ist in den
+    Stammdaten „Kleinunternehmer nach § 19 UStG“ angehakt und tragen alle Positionen 0 %, bekommt der Beleg den
+    Hinweis nach § 19 UStG statt einer Zeile „USt 0 %: 0,00 €“. Ein Beleg mit eigenem steuer_hinweis bleibt, wie er ist."""
+    try:
+        if not isinstance(step, dict) or "steuer_hinweis" in step or not positions:
+            return step
+        if any(Decimal(str(p.get("tax_rate") if p.get("tax_rate") not in (None, "") else 19)) != 0 for p in positions):
+            return step
+        import json as _j
+        from pathlib import Path as _P
+        ms = _j.loads((_P(data_dir) / "mandant_settings.json").read_text("utf-8"))
+        if not ms.get("kleinunternehmer"):
+            return step
+        from models import TEXT_KLEINUNTERNEHMER
+        return dict(step, steuerfall="kleinunternehmer", steuer_hinweis=TEXT_KLEINUNTERNEHMER)
+    except Exception:
+        return step
+
+
 def _build_totals(story, styles, positions: list, step: dict, gross_label: str = "Gesamtbetrag:"):
     """Netto, Dokumentrabatt/-zuschlag, USt, Brutto."""
     net = sum(p.get("net_amount", 0) for p in positions)
@@ -526,12 +598,13 @@ def _build_totals(story, styles, positions: list, step: dict, gross_label: str =
     doc_surcharge = step.get("doc_surcharge_amount", 0)
     subtotal = net - doc_disc + doc_surcharge
 
-    # USt berechnen (vereinfacht: ein Satz)
+    # USt je Steuersatz, gerundet wie in der XRechnung (siehe _steuer_gruppen)
     tax_rate = 19
     if positions:
         tax_rate = positions[0].get("tax_rate", 19)
-    tax = round(subtotal * tax_rate / 100, 2)
-    gross = round(subtotal + tax, 2)
+    gruppen = _steuer_gruppen(positions, subtotal)
+    tax = float(sum((g[2] for g in gruppen), Decimal("0.00")))
+    gross = float(_dez(subtotal).quantize(_CENT, rounding=_HALF_UP) + sum((g[2] for g in gruppen), Decimal("0.00")))
 
     usable_w = PAGE_W - MARGIN_L - MARGIN_R
 
@@ -557,10 +630,17 @@ def _build_totals(story, styles, positions: list, step: dict, gross_label: str =
             Paragraph("Zwischensumme:", styles["total_label"]),
             Paragraph(f"{_fmt(subtotal)} €", styles["total_value"]),
         ])
-    rows.append([
-        Paragraph(f"USt {tax_rate}%:", styles["total_label"]),
-        Paragraph(f"{_fmt(tax)} €", styles["total_value"]),
-    ])
+    # Steuerfall (25.11.2026): Kleinunternehmer, § 13b und steuerfrei zeigen keine Zeile „USt 0 %: 0,00 €“,
+    # sondern unter den Summen den Satz, warum keine Umsatzsteuer berechnet wird. Beim Nullsatz bleibt die Zeile.
+    _steuer_hinweis = str(step.get("steuer_hinweis") or "").strip() if isinstance(step, dict) else ""
+    _steuerfall_pdf = str(step.get("steuerfall") or "") if isinstance(step, dict) else ""
+    for _satz, _basis, _steuer in gruppen:
+        if _steuer_hinweis and _satz == 0 and _steuerfall_pdf != "nullsatz":
+            continue
+        rows.append([
+            Paragraph(f"USt {_satz_text(_satz)} %:", styles["total_label"]),
+            Paragraph(f"{_fmt(_steuer)} €", styles["total_value"]),
+        ])
     rows.append([
         Paragraph(gross_label, styles["total_label"]),
         Paragraph(f"{_fmt(gross)} €", styles["grand_total"]),
@@ -575,6 +655,10 @@ def _build_totals(story, styles, positions: list, step: dict, gross_label: str =
         ("LINEABOVE", (0, -1), (-1, -1), 1, DEEP_BLUE),
     ]))
     story.append(totals_table)
+    if _steuer_hinweis:
+        from xml.sax.saxutils import escape as _esc
+        story.append(Spacer(1, 3*mm))
+        story.append(Paragraph(_esc(_steuer_hinweis), styles["body"]))
 
     return {"net": net, "tax": tax, "gross": gross, "tax_rate": tax_rate}
 
@@ -820,6 +904,11 @@ def _build_payment_info(story, styles, seller: dict, gross: float = 0,
         story.append(text_block)
 
 
+def _steuernummer(seller: dict) -> str:
+    """Steuernummer aus den Stammdaten (Feld „Steuernummer“), ohne Leerraum am Rand."""
+    return str((seller or {}).get("tax_registration_id") or "").strip()
+
+
 # ── Fußzeile ─────────────────────────────────────────────────────────
 
 def _footer_func(canvas, doc, seller: dict):
@@ -836,7 +925,7 @@ def _footer_func(canvas, doc, seller: dict):
     iban = seller.get("iban", "")
 
     left_parts = [p for p in [name, street, plz_city] if p]
-    right_parts = [p for p in [email, f"USt-ID: {vat}" if vat else "",
+    right_parts = [p for p in [email, f"USt-ID: {vat}" if vat else (f"St.-Nr.: {_steuernummer(seller)}" if _steuernummer(seller) else ""),
                                 f"IBAN: {iban}" if iban else ""] if p]
 
     y = 12 * mm
@@ -1196,6 +1285,11 @@ def _generate_document_roh(
         meta_parts.append(f"<b>Betreff:</b> {subject}")
     if meta_parts:
         story.append(Paragraph("  ·  ".join(meta_parts), styles["doc_meta"]))
+    # Bezüge des Kunden (BT-13 Bestellung, BT-12 Vertrag, BT-11 Projekt, Leitweg-ID) als zweite Kopfzeile
+    _bezuege = [(str(k), str(v)) for k, v in ((step.get("bezuege") if isinstance(step, dict) else None) or []) if v]
+    if _bezuege:
+        from xml.sax.saxutils import escape as _esc
+        story.append(Paragraph("  ·  ".join(f"<b>{_esc(k)}:</b> {_esc(v)}" for k, v in _bezuege), styles["doc_meta"]))
     story.append(Spacer(1, 6*mm))
 
     # ── Einleitungstext ──
@@ -1716,6 +1810,7 @@ class DocumentGenerator:
             except Exception:
                 offer_settings = None
 
+        step = _steuerhinweis_vorgabe(step, positions, self.data_dir)
         pdf_bytes = generate_document(
             design=design_laden(self.data_dir),
             doc_type=doc_type,

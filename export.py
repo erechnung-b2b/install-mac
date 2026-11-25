@@ -22,6 +22,11 @@ class ExportResult:
     error: str = ""
     filename: str = ""
     row_count: int = 0
+    content: str = ""       # Inhalt der Datei — für den Download im Browser (target trägt nach dem Ablegen den Pfad)
+
+
+# Exportierbar: freigegeben, schon exportiert (erneuter Abruf) und bezahlt (25.11.2026 — bezahlte Rechnungen fehlten im Stapel)
+EXPORT_STATUS = (InvoiceStatus.FREIGEGEBEN.value, InvoiceStatus.EXPORTIERT.value, "BEZAHLT")
 
 
 class DATEVExporter:
@@ -42,13 +47,13 @@ class DATEVExporter:
     ]
 
     def export_invoice(self, inv: Invoice) -> ExportResult:
-        """Exportiert eine freigegebene Rechnung als DATEV-CSV."""
+        """Exportiert eine freigegebene, exportierte oder bezahlte Rechnung als DATEV-CSV."""
         result = ExportResult(
             invoice_number=inv.invoice_number,
             format="DATEV",
         )
 
-        if inv.status not in (InvoiceStatus.FREIGEGEBEN.value, InvoiceStatus.EXPORTIERT.value):
+        if inv.status not in EXPORT_STATUS:
             result.error = f"Rechnung nicht freigegeben (Status: {inv.status})"
             return result
 
@@ -79,7 +84,7 @@ class DATEVExporter:
                     inv.invoice_number,  # Belegfeld 1
                     inv.order_reference or "",  # Belegfeld 2
                     "",  # Skonto
-                    f"{inv.seller.name[:30]}",  # Buchungstext
+                    self._buchungstext(inv),  # Buchungstext: Geschäftspartner (Kunde bzw. Lieferant)
                     "",  # Postensperre
                     "",  # Diverse Adressnummer
                     "",  # Geschäftspartnerbank
@@ -113,8 +118,22 @@ class DATEVExporter:
 
     @staticmethod
     def _get_kreditor_konto(inv: Invoice) -> str:
-        """Lieferanten-Konto (vereinfacht)."""
+        """Gegenkonto: das an der Rechnung gespeicherte Sachkonto (Karte „Kontierung“), sonst das Vorgabekonto."""
+        konto = str((getattr(inv, "_kontierung", None) or {}).get("account") or "").strip()
+        if konto.isdigit() and len(konto) <= 9:      # DATEV-Konten sind rein numerisch
+            return konto
         return "70000"  # Standard-Kreditor; in Produktion: Stammdaten-Mapping
+
+    @staticmethod
+    def _buchungstext(inv: Invoice) -> str:
+        """Buchungstext = Geschäftspartner: bei Ausgangsrechnungen der Kunde, bei Eingangsrechnungen der Lieferant.
+        Bis 25.11.2026 stand hier immer der Verkäufer — bei Ausgangsrechnungen also in jeder Zeile die eigene Firma."""
+        eingang = str(getattr(inv, "_direction", "") or "AUSGANG").upper() == "EINGANG"
+        partner = inv.seller if eingang else inv.buyer
+        name = " ".join(str(getattr(partner, "name", "") or "").split())
+        if not name:        # ohne Partnernamen wie bisher der Verkäufer
+            name = " ".join(str(inv.seller.name or "").split())
+        return name[:30]
 
     def export_bulk(self, invoices: list) -> ExportResult:
         """
@@ -137,8 +156,7 @@ class DATEVExporter:
 
             total_rows = 0
             for inv in invoices:
-                if inv.status not in (InvoiceStatus.FREIGEGEBEN.value,
-                                      InvoiceStatus.EXPORTIERT.value):
+                if inv.status not in EXPORT_STATUS:
                     skipped.append(f"{inv.invoice_number} (Status: {inv.status})")
                     continue
 
@@ -158,7 +176,7 @@ class DATEVExporter:
                         inv.invoice_number,
                         inv.order_reference or "",
                         "",
-                        f"{inv.seller.name[:30]}",
+                        self._buchungstext(inv),
                         "", "", "", "", "", "",
                         "Rechnungsnummer", inv.invoice_number,
                         "Leistungsdatum", str(inv.period_start or inv.invoice_date),
@@ -277,6 +295,7 @@ class ExportManager:
         if result.success and result.target:
             filepath = self.output_dir / result.filename
             filepath.write_text(result.target, encoding="utf-8")
+            result.content = result.target
             result.target = str(filepath)
 
             inv.add_audit("EXPORT_ERSTELLT", comment=f"Format: {format}, Datei: {result.filename}")

@@ -70,6 +70,10 @@ def _build_seller(root, inv):
     ep = etree.SubElement(party, _cbc("EndpointID"))
     ep.text = inv.seller.electronic_address
     ep.set("schemeID", inv.seller.electronic_address_scheme)
+    # BT-29 Verkäuferkennung (BR-CO-26): nur wenn hinterlegt bzw. wenn USt-ID und Registernummer fehlen
+    _kennung = inv.seller.kennung() if hasattr(inv.seller, "kennung") else ""
+    if _kennung:
+        _pid = etree.SubElement(party, _cac("PartyIdentification")); _txt(_pid, "ID", _kennung)
     pn = etree.SubElement(party, _cac("PartyName"))
     _txt(pn, "Name", inv.seller.name)
     _build_address(party, inv.seller.address)
@@ -146,7 +150,8 @@ def _build_tax_total(root, inv):
         _amt(sub, "TaxAmount", st.tax_amount, inv.currency_code)
         tc = etree.SubElement(sub, _cac("TaxCategory"))
         _txt(tc, "ID", st.category_code); _txt(tc, "Percent", str(st.rate))
-        if st.exemption_reason: _txt(tc, "TaxExemptionReason", st.exemption_reason)
+        if getattr(st, "exemption_reason_code", ""): _txt(tc, "TaxExemptionReasonCode", st.exemption_reason_code)   # BT-121
+        if st.exemption_reason: _txt(tc, "TaxExemptionReason", st.exemption_reason)                                  # BT-120
         ts = etree.SubElement(tc, _cac("TaxScheme")); _txt(ts, "ID", "VAT")
 
 def _build_monetary_total(root, inv):
@@ -224,7 +229,14 @@ def generate_xrechnung(inv: Invoice) -> etree._Element:
     if inv.contract_reference:
         cr = etree.SubElement(root, _cac("ContractDocumentReference")); _txt(cr, "ID", inv.contract_reference)
     if inv.project_reference:
-        pr = etree.SubElement(root, _cac("ProjectReference")); _txt(pr, "ID", inv.project_reference)
+        if credit:
+            # UBL-CreditNote kennt kein cac:ProjectReference (Schemafehler). BT-11 steht dort als
+            # AdditionalDocumentReference mit dem Dokumenttyp 50 (Projektbezug) — so sieht es die
+            # Syntaxbindung der EN 16931 vor.
+            pr = etree.SubElement(root, _cac("AdditionalDocumentReference"))
+            _txt(pr, "ID", inv.project_reference); _txt(pr, "DocumentTypeCode", "50")
+        else:
+            pr = etree.SubElement(root, _cac("ProjectReference")); _txt(pr, "ID", inv.project_reference)
     _build_seller(root, inv)
     _build_buyer(root, inv)
     # BT-72: Actual Delivery Date

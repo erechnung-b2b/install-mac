@@ -987,6 +987,40 @@ def _nummer_mit_name(nummer: str, firma: str, kontakt: str = "") -> str:
     return nummer
 
 
+_NUMMERNTEIL_RE = re.compile(r"^RE-\d{4}-\d{5}(?=-|$)")
+_ERZEUGEN_SPERRE = _thr.RLock()      # „Rechnung erstellen“ läuft einzeln: Nummer prüfen und vergeben ohne Wettlauf (25.11.2026)
+
+
+def _nummernteil(nummer) -> str:
+    """Laufende Nummer ohne Namenszusatz: „RE-2026-00012-Müller“ → „RE-2026-00012“. Leer, wenn die Nummer nicht
+    zum laufenden 5-stelligen Kreis gehört (eigene Nummern aus dem CSV-Import, 4-stelliger Altbestand, GS-, ST-)."""
+    m = _NUMMERNTEIL_RE.match(str(nummer or "").strip())
+    return m.group(0) if m else ""
+
+
+def _nummernteil_belegt(basis: str):
+    """Trägt schon ein Beleg diese laufende Nummer — nackt oder mit Namenszusatz? Liefert dessen Nummer, sonst „“.
+    Bis 25.11.2026 wurde nur die ganze Zeichenkette verglichen: „RE-2026-00012-Müller“ und „RE-2026-00012-Schmidt“
+    galten als verschieden, und die Vorschau erkannte Nummern mit Namenszusatz nie als vergeben."""
+    if not basis:
+        return ""
+    for v in list(invoices.values()):
+        nr = str(getattr(v, "invoice_number", "") or "")
+        if nr == basis or nr.startswith(basis + "-"):
+            return nr
+    return ""
+
+
+def _rechnungszaehler_nachziehen(nummer) -> None:
+    """Zähler des RE-Kreises fortschreiben, NACHDEM alle Prüfungen bestanden sind und die Rechnung wirklich angelegt
+    wird (abgewiesene Versuche verbrauchen keine Nummer). Aufruf unmittelbar VOR dem Eintragen in den Bestand.
+    Gezählt wird nur, wenn die Rechnung die nächste freie Nummer trägt; eine von Hand gewählte Nummer außer der
+    Reihe lässt den Zähler stehen (sie wird später übersprungen, weil sie belegt ist)."""
+    basis = _nummernteil(nummer)
+    if basis and _next_invoice_number(advance=False) == basis:
+        _next_invoice_number(advance=True)
+
+
 def _next_invoice_number(advance: bool = False) -> str:
     """Erzeugt die naechste Rechnungsnummer RE-YYYY-XXXXX.
     advance=False: Nur Vorschau (Zaehler bleibt stehen)
@@ -1004,8 +1038,8 @@ def _next_invoice_number(advance: bool = False) -> str:
     next_counter = counter + 1
     number = f"RE-{year}-{next_counter:05d}"
 
-    # Sicherstellen dass die Nummer noch nicht vergeben ist
-    while any(inv.invoice_number == number for inv in invoices.values()):
+    # Sicherstellen dass die Nummer noch nicht vergeben ist — auch nicht mit Namenszusatz (RE-2026-00012-Müller)
+    while _nummernteil_belegt(number):
         next_counter += 1
         number = f"RE-{year}-{next_counter:05d}"
 
@@ -1098,6 +1132,7 @@ def api_mandant_settings_get():
     if _v2:
         ms["verkaeufer2_name"] = " ".join(_v2.split())
     ms["verkaeufer2_feld"] = True      # dieser Serverstand speichert den Zusatz aus den Einstellungen
+    ms["steuerfall_feld"] = True       # dieser Serverstand kennt Steuerfall, Verkäuferkennung und Bezugsfelder
     ms["skonto_feld"] = True           # … und kennt Skonto sowie die Verkäuferwahl am Angebot
     return _json(ms)
 
@@ -1127,6 +1162,13 @@ def api_mandant_settings_save():
         settings["bic_standard"] = data["bic"]
     if "zahlkonto_alt_aktiv" in data:
         settings["zahlkonto_alt_aktiv"] = bool(data["zahlkonto_alt_aktiv"])
+    # Kleinunternehmer nach § 19 UStG (25.11.2026): setzt den Steuerfall neuer Rechnungen vor.
+    if "kleinunternehmer" in data:
+        settings["kleinunternehmer"] = bool(data["kleinunternehmer"])
+    # Verkäuferkennung BT-29 und Registernummer BT-30 (BR-CO-26)
+    for _k in ("seller_id", "company_id"):
+        if _k in data:
+            settings[_k] = " ".join(str(data.get(_k) or "").split())[:60]
     # Zweiter Verkäufer: Zusatz unter dem Firmennamen; leer = kein zweiter Verkäufer
     if "verkaeufer2_zusatz" in data:
         _zus = " ".join(str(data.get("verkaeufer2_zusatz") or "").split())[:80]
@@ -3550,6 +3592,7 @@ def _abschlag_registrieren(tid, txn, p):
         tax_rate=Decimal(str(_steuersatz(p.get("tax_rate")))),
     ))
 
+    _steuerfall_vorgabe_vorgang(inv)
     report = validate_invoice(inv)
     xml_bytes = generate_and_serialize(inv)
     inv._direction = "AUSGANG"
@@ -3932,6 +3975,16 @@ def api_txn_generate_pdf(tid, step_key):
     inv_ref = data.get("original_invoice_ref", "")
     inv_amount = float(data.get("original_invoice_amount", 0))
     dunning_fee = float(data.get("dunning_fee", 0))
+    if step_key == "dunning":
+        # 25.11.2026: ohne Angabe gilt die Rechnung des Vorgangs mit ihrem OFFENEN Betrag (nach Zahlungen und Gutschriften)
+        try:
+            dunning_level = int(dunning_level or 1)
+        except (TypeError, ValueError):
+            dunning_level = 1
+        _mv = _mahn_vorgang_vorgabe(txn)
+        inv_ref = inv_ref or _mv["reference"]
+        if not inv_amount:
+            inv_amount = _mv["amount"]
 
     # Dokumentvorlagen laden
     templates = _load_mandant_settings().get("doc_templates", {})
@@ -3970,10 +4023,20 @@ def api_txn_generate_pdf(tid, step_key):
         doc_gen._prepaid_invoices = None  # nach Render aufräumen
 
         # Step mit Dokument-ID verknüpfen
-        txn_mgr.update_step(tid, step_key, {
+        _step_neu = {
             "document_id": doc_entry["id"],
             "reference": ref,
-        })
+        }
+        if step_key == "dunning":
+            # Erzeugte Mahnstufe am Vorgang merken (25.11.2026) — daraus bestimmt die Mahnliste die NÄCHSTE Stufe,
+            # und „Freigeben + Senden“ verschickt genau dieses Schreiben (_mahn_versand_daten).
+            _heute = date.today().isoformat()
+            _hist = [h for h in (step.get("levels") or []) if isinstance(h, dict)
+                     and not (h.get("level") == dunning_level and h.get("date") == _heute and h.get("invoice_ref") == inv_ref)]
+            _hist.append({"level": dunning_level, "date": _heute, "reference": ref, "invoice_ref": inv_ref,
+                          "amount": round(inv_amount, 2), "fee": round(dunning_fee, 2)})
+            _step_neu["levels"] = _hist
+        txn_mgr.update_step(tid, step_key, _step_neu)
 
         return _json({
             "generated": True,
@@ -4362,6 +4425,7 @@ def _txn_invoice_registrieren(tid, txn, data=None):
     if any(v.invoice_number == inv.invoice_number for v in invoices.values()):
         raise ValueError(f"Rechnungsnummer {inv.invoice_number} existiert bereits.")
 
+    _steuerfall_vorgabe_vorgang(inv)
     # Validieren + XML erzeugen
     report = validate_invoice(inv)
     xml_bytes = generate_and_serialize(inv)
@@ -4478,11 +4542,175 @@ def _mahn_rechnungsstatus(ref: str) -> str:
     return str(getattr(inv, "status", "") or "") if inv is not None else ""
 
 
+def _mahn_quellen(txns):
+    """Was die Mahnliste über den Rechnungsbestand wissen muss (25.11.2026) — ein Durchlauf, drei Ergebnisse:
+
+    status_fn(nr)  Zustand der registrierten Rechnung; „BEZAHLT“/„GUTGESCHRIEBEN“ auch dann, wenn sie nach
+                   _is_invoice_paid erledigt ist (Zahlung zugeordnet, voll gutgeschrieben) und der Status noch
+                   FREIGEGEBEN lautet. Bis dahin blieb eine voll gutgeschriebene Rechnung mit vollem Betrag stehen.
+    offen_fn(nr)   offener Betrag nach Teilzahlungen, Gutschriften und Skonto (_offener_betrag); None = nicht im Register.
+    direkt         versendete, überfällige Ausgangsrechnungen OHNE Vorgang („Rechnung erstellen“, CSV-Import,
+                   Schnittstellen) — sie standen nie in der Mahnliste. Die Mahnstufen stehen an der Rechnung (_mahnungen).
+    """
+    alle = list(invoices.values())
+    storno = _collect_storno_targets(alle)
+    nach_nr = {}
+    for i in alle:
+        nach_nr.setdefault(getattr(i, "invoice_number", ""), i)
+
+    def status_fn(ref):
+        inv = nach_nr.get(ref) if ref else None
+        if inv is None:
+            return ""
+        st = str(getattr(inv, "status", "") or "")
+        if st in ("BEZAHLT", "STORNIERT", "ZURUECKGEWIESEN"):
+            return st
+        if _is_invoice_paid(inv, storno):
+            return "BEZAHLT" if getattr(inv, "_paid_at", None) else "GUTGESCHRIEBEN"
+        return st
+
+    def offen_fn(ref):
+        inv = nach_nr.get(ref) if ref else None
+        return None if inv is None else _offener_betrag(inv, storno)
+
+    # Rechnungen, die über einen Vorgang gemahnt werden (Rechnungsstufe freigegeben) — nicht doppelt aufführen
+    im_vorgang = set()
+    for t in (txns or []):
+        s = (t.get("steps") or {}).get("invoice") or {}
+        if s.get("approved") and s.get("reference"):
+            im_vorgang.add(s["reference"])
+    heute = date.today()
+    direkt = []
+    for inv in alle:
+        nr = getattr(inv, "invoice_number", "") or ""
+        if not nr or nr in im_vorgang:
+            continue
+        if getattr(inv, "_altbestand", False) or getattr(inv, "_nutzerabo", None):
+            continue        # Altbestand und Abo-Dauerrechnungen (eigene Zahlungsüberwachung) werden hier nicht gemahnt
+        if not _is_invoice_overdue(inv, heute, storno):
+            continue        # nur Ausgang, versendet, nicht erledigt, Fälligkeit überschritten
+        due = _invoice_due_date(inv)
+        direkt.append({
+            "transaction_id": "",
+            "invoice_id": inv._id,
+            "invoice_reference": nr,
+            "invoice_date": inv.invoice_date.isoformat() if inv.invoice_date else "",
+            "due_date": due.isoformat() if due else "",
+            "amount": _offener_betrag(inv, storno),
+            "buyer_name": getattr(inv.buyer, "name", "") or "",
+            "status": "",
+            "dunning_history": [dict(m) for m in (getattr(inv, "_mahnungen", None) or []) if isinstance(m, dict)],
+        })
+    return status_fn, offen_fn, direkt
+
+
+def _mahn_uebersicht(txns):
+    """Mahnliste für Seite und Dashboard: Vorgänge + Rechnungen ohne Vorgang, Beträge = offener Betrag."""
+    status_fn, offen_fn, direkt = _mahn_quellen(txns)
+    return dunning_mgr.get_overdue_summary(txns, status_fn, offen_fn, direkt)
+
+
+def _mahn_stufe_regel(level: int) -> dict:
+    """Regel (Gebühr, Bezeichnung) einer Mahnstufe aus den Mahnregeln."""
+    for lv in (dunning_mgr.get_rules().get("levels") or []):
+        try:
+            if int(lv.get("level", 0)) == int(level):
+                return lv
+        except (TypeError, ValueError):
+            continue
+    return {}
+
+
+def _mahn_hoechste_stufe() -> int:
+    try:
+        return max(int(lv.get("level", 0)) for lv in (dunning_mgr.get_rules().get("levels") or [])) or 3
+    except Exception:
+        return 3
+
+
+def _mahn_letzte_stufe(historie) -> int:
+    stufen = []
+    for h in (historie or []):
+        try:
+            stufen.append(int((h or {}).get("level", 0) or 0))
+        except (TypeError, ValueError, AttributeError):
+            pass
+    return max(stufen, default=0)
+
+
+def _mahn_vorgang_vorgabe(txn) -> dict:
+    """Vorgabe für die Mahn-Maske eines Vorgangs: Rechnungsnummer, OFFENER Betrag der registrierten Rechnung,
+    nächste Stufe nach der zuletzt erzeugten und deren Gebühr. Ist die Rechnung nicht im Register, gilt wie bisher
+    der Betrag der Rechnungsstufe."""
+    steps = (txn or {}).get("steps") or {}
+    inv_step = steps.get("invoice") or {}
+    ref = inv_step.get("reference", "") or ""
+    inv = _txn_invoice_registriert(ref)
+    erledigt = False
+    if inv is not None:
+        _st = _collect_storno_targets(list(invoices.values()))
+        betrag = _offener_betrag(inv, _st)
+        erledigt = _is_invoice_paid(inv, _st)
+    else:
+        try:
+            betrag = round(float(inv_step.get("amount") or 0), 2)
+        except (TypeError, ValueError):
+            betrag = 0.0
+    letzte = _mahn_letzte_stufe((steps.get("dunning") or {}).get("levels"))
+    stufe = min(letzte + 1, _mahn_hoechste_stufe())
+    regel = _mahn_stufe_regel(stufe)
+    try:
+        gebuehr = float(regel.get("fee", 0) or 0)
+    except (TypeError, ValueError):
+        gebuehr = 0.0
+    return {"reference": ref, "amount": betrag, "last_level": letzte, "level": stufe, "fee": gebuehr,
+            "subject": regel.get("subject", ""), "registriert": inv is not None, "erledigt": erledigt}
+
+
+def _mahn_versand_daten(txn, step) -> dict:
+    """Mahnangaben für „Freigeben + Senden“ der Mahnstufe: die Werte des zuletzt in der Maske erzeugten
+    Mahnschreibens, sonst die Vorgabe. Bis 25.11.2026 erzeugte der Versand das PDF ohne diese Angaben neu —
+    ohne Rechnungsnummer und mit „Offener Betrag: 0,00 €“."""
+    letzte = [h for h in ((step or {}).get("levels") or []) if isinstance(h, dict)]
+    if letzte:
+        h = letzte[-1]
+        try:
+            return {"dunning_level": int(h.get("level") or 1), "original_invoice_ref": str(h.get("invoice_ref") or ""),
+                    "original_invoice_amount": float(h.get("amount") or 0), "dunning_fee": float(h.get("fee") or 0)}
+        except (TypeError, ValueError):
+            pass
+    v = _mahn_vorgang_vorgabe(txn)
+    return {"dunning_level": v["level"], "original_invoice_ref": v["reference"],
+            "original_invoice_amount": v["amount"], "dunning_fee": v["fee"]}
+
+
+def _mahn_empfaenger(inv) -> dict:
+    """Empfängerangaben für ein Mahnschreiben zu einer Rechnung ohne Vorgang — Anschrift aus der Rechnung,
+    Anrede und Ansprechpartner aus dem Kundenstamm (gleiche Zuordnung wie beim Rechnungs-PDF, invoice_pdf.build)."""
+    salut, kontakt, kontakt_salut, privat = "", "", "", False
+    try:
+        ref = (getattr(inv, "buyer_reference", "") or getattr(inv.buyer, "buyer_reference", "") or "").strip()
+        name = (inv.buyer.name or "").strip()
+        for b in (_load_buyers() or []):
+            if (ref and b.get("reference") == ref) or (name and b.get("name") == name):
+                salut = b.get("salutation", "") or ""
+                kontakt = b.get("contact_name", "") or ""
+                kontakt_salut = b.get("contact_salutation", "") or ""
+                privat = bool(b.get("is_private"))
+                break
+    except Exception:
+        pass
+    adr = inv.buyer.address
+    return {"name": inv.buyer.name, "salutation": salut, "contact_salutation": kontakt_salut, "contact_name": kontakt,
+            "is_private": privat, "street": adr.street if adr else "", "house_number": adr.house_number if adr else "",
+            "city": adr.city if adr else "", "post_code": adr.post_code if adr else ""}
+
+
 @app.route("/api/dunning/check", methods=["POST"])
 def api_dunning_check():
-    """Prüft alle Vorgänge auf überfällige Rechnungen."""
+    """Prüft Vorgänge und Rechnungen ohne Vorgang auf überfällige Rechnungen."""
     txns = txn_mgr.list_all()
-    summary = dunning_mgr.get_overdue_summary(txns, _mahn_rechnungsstatus)
+    summary = _mahn_uebersicht(txns)
     return _json(summary)
 
 
@@ -4490,9 +4718,95 @@ def api_dunning_check():
 def api_dunning_overdue():
     """Gibt alle überfälligen Rechnungen zurück."""
     txns = txn_mgr.list_all()
-    invoices_data = dunning_mgr.collect_invoices_from_transactions(txns, _mahn_rechnungsstatus)
-    overdue = dunning_mgr.check_overdue(invoices_data)
-    return _json(overdue)
+    return _json(_mahn_uebersicht(txns)["items"])
+
+
+@app.route("/api/dunning/vorgabe/<tid>")
+def api_dunning_vorgabe(tid):
+    """Vorgabe für die Mahn-Maske des Vorgangs (Rechnungsnummer, offener Betrag, nächste Stufe, Gebühr)."""
+    txn = txn_mgr.get(tid)
+    if not txn:
+        return _json({"error": "Vorgang nicht gefunden"}, 404)
+    return _json(_mahn_vorgang_vorgabe(txn))
+
+
+@app.route("/api/dunning/invoice/<inv_id>/generate", methods=["POST"])
+def api_dunning_invoice_generate(inv_id):
+    """Mahnschreiben (PDF) zu einer versendeten Ausgangsrechnung OHNE Vorgang erzeugen (25.11.2026).
+    Body optional: {level, fee}. Ohne Angabe: nächste Stufe nach der zuletzt erzeugten, Gebühr aus den Mahnregeln.
+    Mahnbetrag ist immer der offene Betrag. Die Stufe wird an der Rechnung vermerkt (_mahnungen) und im Verlauf
+    protokolliert. Versendet wird hier nichts — das PDF wird geöffnet und kann wie gewohnt verschickt werden."""
+    inv = invoices.get(inv_id)
+    if not inv:
+        return _json({"error": "Rechnung nicht gefunden"}, 404)
+    if (getattr(inv, "_direction", "") or "AUSGANG") != "AUSGANG" or getattr(inv, "invoice_type_code", "380") == "381":
+        return _json({"error": "Ein Mahnschreiben gibt es nur zu eigenen Ausgangsrechnungen."}, 400)
+    _st = _collect_storno_targets(list(invoices.values()))
+    if _is_invoice_paid(inv, _st):
+        return _json({"error": f"Die Rechnung {inv.invoice_number} ist erledigt (bezahlt, gutgeschrieben, storniert oder "
+                               f"zurückgewiesen). Es wird kein Mahnschreiben erzeugt."}, 400)
+    if not _is_invoice_sent(inv):
+        return _json({"error": f"Die Rechnung {inv.invoice_number} wurde noch nicht versendet."}, 400)
+    offen = _offener_betrag(inv, _st)
+    if offen <= 0:
+        return _json({"error": f"Zur Rechnung {inv.invoice_number} ist kein Betrag mehr offen."}, 400)
+    data = request.get_json(silent=True) or {}
+    historie = [dict(m) for m in (getattr(inv, "_mahnungen", None) or []) if isinstance(m, dict)]
+    letzte = _mahn_letzte_stufe(historie)
+    try:
+        stufe = int(data.get("level") or 0)
+    except (TypeError, ValueError):
+        stufe = 0
+    # nie eine Stufe überspringen: höchstens die Stufe nach der zuletzt erzeugten
+    stufe = max(1, min(stufe or (letzte + 1), letzte + 1, _mahn_hoechste_stufe()))
+    regel = _mahn_stufe_regel(stufe)
+    try:
+        gebuehr = float(data["fee"]) if data.get("fee") not in (None, "") else float(regel.get("fee", 0) or 0)
+    except (TypeError, ValueError):
+        gebuehr = 0.0
+    gebuehr = round(max(0.0, gebuehr), 2)
+    ms = _load_mandant_settings()
+    templates = ms.get("doc_templates", {})
+    ref = txn_mgr.numbers.next(DOC_PREFIXES.get("dunning", "MAH"))
+    import invoice_pdf as _ipdf
+    _v2n = _ipdf.verkaeufer2_name(ms)
+    try:
+        doc_gen._prepaid_invoices = None
+        # Zahlungsblock/GiroCode: Konto der Rechnung, Verwendungszweck = Rechnungsnummer (so findet der Bank-Abgleich die Zahlung)
+        doc_gen._zahlung_override = {"iban": (inv.payment.iban if inv.payment else "") or "",
+                                     "bic": (inv.payment.bic if inv.payment else "") or "",
+                                     "verwendungszweck": inv.invoice_number}
+        doc_gen._seller_override = ({"name": _v2n} if _v2n and _ipdf._norm_name(inv.seller.name) == _ipdf._norm_name(_v2n)
+                                    else None)
+        doc_entry = doc_gen.generate(
+            doc_type="dunning", recipient=_mahn_empfaenger(inv), positions=[],
+            step={"date": date.today().isoformat()},
+            reference=ref, subject=f"Rechnung {inv.invoice_number}",
+            doc_date=date.today().isoformat(), due_date="", delivery_date="",
+            dunning_level=stufe, original_invoice_ref=inv.invoice_number,
+            original_invoice_amount=offen, dunning_fee=gebuehr,
+            intro_text=templates.get(f"dunning_{stufe}_intro", ""),
+            closing_text=templates.get(f"dunning_{stufe}_closing", ""),
+        )
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return _json({"error": f"PDF-Erzeugung fehlgeschlagen: {e}"}, 500)
+    finally:
+        doc_gen._zahlung_override = None
+        doc_gen._seller_override = None
+    wer = _wer(data, _akt_benutzer() or "web-user")
+    historie.append({"level": stufe, "date": date.today().isoformat(), "reference": ref, "betrag": offen,
+                     "gebuehr": gebuehr, "dokument": doc_entry.get("filename", ""), "von": wer})
+    inv._mahnungen = historie
+    bezeichnung = regel.get("subject") or f"Mahnung Stufe {stufe}"
+    inv.add_audit("MAHNUNG_ERZEUGT", user=wer, new_value=str(stufe),
+                  comment=f"{bezeichnung} {ref}: offener Betrag {_eur(offen)} EUR"
+                          + (f", Mahngebühr {_eur(gebuehr)} EUR" if gebuehr else ""))
+    auto_save()
+    return _json({"generated": True, "document": doc_entry, "download_url": f"/api/documents/{doc_entry['filename']}",
+                  "level": stufe, "subject": bezeichnung, "amount": offen, "fee": gebuehr, "reference": ref,
+                  "invoice_number": inv.invoice_number})
 
 
 # ── API: Produktkatalog ───────────────────────────────────────────────
@@ -4816,6 +5130,9 @@ def api_txn_approve_and_send(tid, step_key):
     # Dokumentvorlagen laden
     templates = _load_mandant_settings().get("doc_templates", {})
     tpl_key = step_key
+    _mahn = _mahn_versand_daten(txn, step) if step_key == "dunning" else {}
+    if _mahn:
+        tpl_key = f"dunning_{_mahn['dunning_level']}"
     intro = step.get("intro_text", "") or templates.get(f"{tpl_key}_intro", "")
     closing = step.get("closing_text", "") or templates.get(f"{tpl_key}_closing", "")
     try:
@@ -4829,6 +5146,7 @@ def api_txn_approve_and_send(tid, step_key):
             delivery_date=step.get("date", ""),
             transaction_id=tid, step_key=step_key,
             intro_text=intro, closing_text=closing,
+            **_mahn,
         )
     except Exception as e:
         return _json({"approved": True, "sent": False, "error": f"PDF-Fehler: {e}"})
@@ -5682,6 +6000,9 @@ def _is_invoice_paid(inv, storno_targets=None) -> bool:
         return True
     if getattr(inv, "_paid_at", None):
         return True
+    # Teilzahlungen (25.11.2026): zusammen mit einer späteren Gutschrift gedeckt → erledigt
+    if getattr(inv, "_teilzahlungen", None) and _offener_betrag(inv, storno_targets) <= _ZAHLUNG_TOLERANZ:
+        return True
     gut = _gutgeschrieben(inv, storno_targets)
     if gut > 0:
         try:
@@ -5789,7 +6110,7 @@ def api_dashboard():
                     break
 
     # Mahnungen
-    dunning_summary = dunning_mgr.get_overdue_summary(txns_all, _mahn_rechnungsstatus)
+    dunning_summary = _mahn_uebersicht(txns_all)      # 25.11.2026: offene Beträge, erledigte raus, auch Rechnungen ohne Vorgang
 
     return _json({
         "total": total, "offene": offene, "freigegeben": freigegeben,
@@ -6130,6 +6451,11 @@ def api_invoice_detail(inv_id):
         "paid_amount": getattr(inv, '_paid_amount', None),
         "paid_via_booking": getattr(inv, '_paid_via_booking', None),
         "skonto_zahlung": getattr(inv, '_skonto_zahlung', None),
+        # 25.11.2026: gespeicherte Kontierung, Mahnschreiben ohne Vorgang, Bezahlt-Markierung von Hand (rücknehmbar?)
+        "kontierung": getattr(inv, '_kontierung', None),
+        "mahnungen": getattr(inv, '_mahnungen', None),
+        "bezahlt_manuell": (dict(getattr(inv, '_bezahlt_manuell', None) or {}, ruecknehmbar=True)
+                            if _bezahlt_manuell_ruecknehmbar(inv) else None),
     })
 
 
@@ -6644,16 +6970,148 @@ def _skonto_zahlung_setzen(inv, betrag, datum, user="bank-abgleich", basis=None)
     return neu
 
 
+_ZAHLUNG_TOLERANZ = 0.02    # Cent-Rundung — derselbe Wert wie „Betrag exakt“ im Bank-Abgleich (bank_import.auto_match)
+
+
+def _zahlung_neue_regel(inv) -> bool:
+    """Gilt für diese Rechnung „bezahlt erst, wenn der Zahlbetrag gedeckt ist“ (25.11.2026)?
+
+    Nur Ausgangsrechnungen (keine Gutschriften). Eingangsrechnungen bleiben wie bisher — dort stimmt die Zahlung
+    oft nicht auf den Cent (Kartenzahlung, Fremdwährung). Bestandsschutz: Was schon als bezahlt gespeichert ist
+    (Status BEZAHLT oder _paid_at gesetzt), wird nicht neu bewertet; die Regel gilt für neue Zuordnungen und für
+    Rechnungen, die bereits nach ihr geführt werden (_teilzahlungen)."""
+    if (getattr(inv, "_direction", "") or "AUSGANG") != "AUSGANG":
+        return False
+    if getattr(inv, "invoice_type_code", "380") == "381":
+        return False
+    if getattr(inv, "status", "") in ("STORNIERT", "ZURUECKGEWIESEN"):
+        return False
+    if getattr(inv, "_teilzahlungen", None):
+        return True
+    if getattr(inv, "status", "") == "BEZAHLT":
+        return False
+    return not getattr(inv, "_paid_at", None)
+
+
+def _teilzahlung_buchen(inv, txn, skonto_basis=None) -> dict:
+    """Ordnet die Zahlung der Rechnung zu und prüft, ob sie damit gedeckt ist: alle zugeordneten Zahlungen zusammen,
+    plus Gutschriften, plus fristgerecht gezogenes oder von Hand anerkanntes Skonto — gerechnet mit _offener_betrag.
+
+    Gedeckt → {"rest": None, "summe", "basis", "datum"}; der Aufrufer bucht wie bisher BEZAHLT.
+    Nicht gedeckt → Teilzahlung ist vermerkt und gespeichert, {"rest": offener Betrag, …}: KEIN _paid_at, Status
+    bleibt, die Rechnung steht weiter unter Offen/Überfällig mit ihrem Restbetrag. Wiederholbar je Bankbuchung."""
+    bid = txn.get("id")
+    datum = str(txn.get("booking_date") or txn.get("value_date") or "")[:10]
+    try:
+        betrag = round(abs(float(txn.get("amount") or 0)), 2)
+    except (TypeError, ValueError):
+        betrag = 0.0
+    alt = [dict(z) for z in (getattr(inv, "_teilzahlungen", None) or []) if isinstance(z, dict)]
+    if not alt and not getattr(inv, "_paid_at", None) and getattr(inv, "_paid_via_booking", None) != bid:
+        try:        # früher vermerkter Teilbetrag ohne Liste (Altbestand) zählt mit
+            _frueher = round(abs(float(getattr(inv, "_paid_amount", 0) or 0)), 2)
+        except (TypeError, ValueError):
+            _frueher = 0.0
+        if _frueher > 0:
+            alt = [{"buchung": getattr(inv, "_paid_via_booking", None) or "frueher", "betrag": _frueher, "datum": ""}]
+    bekannt = bool(bid) and any(z.get("buchung") == bid for z in alt)
+    liste = [z for z in alt if not (bid and z.get("buchung") == bid)] + [{"buchung": bid, "betrag": betrag, "datum": datum}]
+    summe = round(sum(float(z.get("betrag") or 0) for z in liste), 2)
+    letztes = max((str(z.get("datum") or "") for z in liste), default="") or datum
+    storno_map = _collect_storno_targets(list(invoices.values()))
+    if skonto_basis is None:
+        _gut = _gutgeschrieben(inv, storno_map)
+        if _gut > 0:
+            try:        # wie im Abgleich: Skonto bezieht sich auf den Zahlbetrag nach Teilgutschrift
+                skonto_basis = float(inv.amount_due()) - _gut
+            except Exception:
+                skonto_basis = None
+    inv._paid_amount = summe
+    _skonto_zahlung_setzen(inv, summe, letztes, basis=skonto_basis)
+    rest = _offener_betrag(inv, storno_map)
+    aus = {"rest": None, "summe": summe, "basis": skonto_basis, "datum": letztes}
+    if rest <= _ZAHLUNG_TOLERANZ:
+        if len(liste) > 1:
+            inv._teilzahlungen = liste
+        if hasattr(inv, "_payment_difference") and float(getattr(inv, "_payment_difference", 0) or 0) < 0:
+            try:
+                delattr(inv, "_payment_difference")
+            except Exception:
+                pass
+        return aus
+    if getattr(inv, "status", "") == "BEZAHLT":
+        return aus          # schon als bezahlt geführt — bleibt so (Bestandsschutz)
+    inv._teilzahlungen = liste
+    inv._paid_via_booking = bid
+    inv._payment_difference = -rest
+    inv._paid_note = f"Teilzahlung: {_eur(summe)} EUR erhalten, Restbetrag {_eur(rest)} EUR offen"
+    if not bekannt:
+        try:
+            inv.add_audit("TEILZAHLUNG", user="bank-abgleich",
+                          comment=f"{_eur(betrag)} EUR am {_de_datum(datum)} zugeordnet, zusammen {_eur(summe)} EUR — "
+                                  f"Restbetrag {_eur(rest)} EUR offen",
+                          new_value=str(bid or ""))
+        except Exception:
+            pass
+    auto_save()
+    aus["rest"] = rest
+    return aus
+
+
+def _teilzahlung_rest(inv) -> float:
+    """Offener Rest einer teilbezahlten Rechnung (0, wenn sie nicht teilbezahlt ist)."""
+    if not getattr(inv, "_teilzahlungen", None) or getattr(inv, "_paid_at", None) \
+            or getattr(inv, "status", "") in ("BEZAHLT", "STORNIERT", "ZURUECKGEWIESEN"):
+        return 0.0
+    return _offener_betrag(inv, _collect_storno_targets(list(invoices.values())))
+
+
+def _teilzahlung_abschliessen(inv) -> bool:
+    """Teilbezahlte Rechnung ist inzwischen gedeckt (z. B. verspäteter Skontoabzug von Hand anerkannt) → BEZAHLT."""
+    if not getattr(inv, "_teilzahlungen", None) or getattr(inv, "_paid_at", None) \
+            or getattr(inv, "status", "") in ("BEZAHLT", "STORNIERT", "ZURUECKGEWIESEN"):
+        return False
+    if _offener_betrag(inv, _collect_storno_targets(list(invoices.values()))) > _ZAHLUNG_TOLERANZ:
+        return False
+    inv._paid_at = (max((str(z.get("datum") or "") for z in inv._teilzahlungen), default="")
+                    or date.today().isoformat())
+    _alt = inv.status
+    inv.status = "BEZAHLT"
+    if hasattr(inv, "_payment_difference"):
+        try:
+            delattr(inv, "_payment_difference")
+        except Exception:
+            pass
+    try:
+        inv.add_audit("BEZAHLT", user="bank-abgleich", old_value=_alt,
+                      comment="Rechnungsbetrag durch Zahlungen, Gutschriften und anerkanntes Skonto gedeckt")
+    except Exception:
+        pass
+    auto_save()
+    return True
+
+
 def _apply_invoice_paid(invoice_id, txn, skonto_basis=None):
-    """Markiert Rechnung als bezahlt + speichert Bezugs-Buchung. Persistiert sofort."""
+    """Markiert Rechnung als bezahlt + speichert Bezugs-Buchung. Persistiert sofort.
+
+    Seit 25.11.2026: Eine Ausgangsrechnung wird nur BEZAHLT, wenn die zugeordneten Zahlungen sie decken
+    (_teilzahlung_buchen). Reicht der Betrag nicht, bleibt sie offen — die Zahlung ist als Teilzahlung vermerkt."""
     inv = invoices.get(invoice_id)
     if not inv:
         return False
     war_bezahlt = getattr(inv, "status", "") in ("BEZAHLT", "STORNIERT", "ZURUECKGEWIESEN")
-    setattr(inv, '_paid_at', txn.get("booking_date") or txn.get("value_date"))
-    setattr(inv, '_paid_amount', txn.get("amount"))
+    _zahlbetrag, _zahldatum = txn.get("amount"), (txn.get("booking_date") or txn.get("value_date"))
+    if _zahlung_neue_regel(inv):
+        _tz = _teilzahlung_buchen(inv, txn, skonto_basis)
+        if _tz["rest"] is not None:
+            return True             # Teilzahlung vermerkt, Rechnung bleibt offen
+        if getattr(inv, "_teilzahlungen", None):
+            _zahlbetrag, _zahldatum = _tz["summe"], (_tz["datum"] or _zahldatum)
+        skonto_basis = _tz["basis"]
+    setattr(inv, '_paid_at', _zahldatum)
+    setattr(inv, '_paid_amount', _zahlbetrag)
     setattr(inv, '_paid_via_booking', txn.get("id"))
-    _skonto_zahlung_setzen(inv, txn.get("amount"), txn.get("booking_date") or txn.get("value_date"), basis=skonto_basis)
+    _skonto_zahlung_setzen(inv, _zahlbetrag, _zahldatum, basis=skonto_basis)
     try:
         inv.status = "BEZAHLT"
     except Exception:
@@ -6662,11 +7120,31 @@ def _apply_invoice_paid(invoice_id, txn, skonto_basis=None):
     return True
 
 
-def _undo_invoice_paid(invoice_id):
+def _undo_invoice_paid(invoice_id, booking_id=None):
     inv = invoices.get(invoice_id)
     if not inv:
         return False
-    for attr in ('_paid_at', '_paid_amount', '_paid_via_booking', '_skonto_zahlung'):
+    # Teilzahlungen (25.11.2026): wird EINE von mehreren zugeordneten Buchungen gelöst, bleiben die übrigen stehen
+    _tz = [z for z in (getattr(inv, "_teilzahlungen", None) or []) if isinstance(z, dict)]
+    if booking_id and len(_tz) > 1 and any(z.get("buchung") == booking_id for z in _tz):
+        _tz = [z for z in _tz if z.get("buchung") != booking_id]
+        inv._teilzahlungen = _tz
+        inv._paid_amount = round(sum(float(z.get("betrag") or 0) for z in _tz), 2)
+        inv._paid_via_booking = _tz[-1].get("buchung")
+        for attr in ('_paid_at', '_skonto_zahlung', '_payment_difference', '_paid_note'):
+            if hasattr(inv, attr):
+                try:
+                    delattr(inv, attr)
+                except Exception:
+                    pass
+        try:
+            if getattr(inv, 'status', None) == 'BEZAHLT':
+                inv.status = 'FREIGEGEBEN'
+        except Exception:
+            pass
+        auto_save()
+        return True
+    for attr in ('_paid_at', '_paid_amount', '_paid_via_booking', '_skonto_zahlung', '_teilzahlungen'):
         if hasattr(inv, attr):
             try:
                 delattr(inv, attr)
@@ -6990,14 +7468,17 @@ def api_bank_match(txn_id, invoice_id):
         return _json({"error": "Rechnung nicht gefunden"}, 404)
     # Falls schon ein anderes Match existiert: erst rückgängig machen
     if t.get("matched_invoice_id") and t["matched_invoice_id"] != invoice_id:
-        _undo_invoice_paid(t["matched_invoice_id"])
+        _undo_invoice_paid(t["matched_invoice_id"], t.get("id"))
     t["match_status"] = "matched"
     t["matched_invoice_id"] = invoice_id
     t["matched_at"] = datetime.now().isoformat(timespec="seconds")
     t["match_confidence"] = "manual"
     _apply_invoice_paid(invoice_id, t)
     _save_bank_txns(txns)
-    return _json({"ok": True, "transaction": t})
+    # Teilzahlung (25.11.2026): deckt der Betrag die Rechnung nicht, bleibt sie offen — die Oberfläche sagt es
+    _rest = _teilzahlung_rest(inv)
+    return _json({"ok": True, "transaction": t, "teilzahlung": _rest > 0, "open_amount": _rest,
+                  "invoice_number": inv.invoice_number, "invoice_status": inv.status})
 
 
 def _invoice_gross(inv) -> float:
@@ -7057,7 +7538,7 @@ def api_bank_match_split(txn_id):
         _apply_invoice_paid(getattr(inv, "_id", None), tt, skonto_basis=brutto)
         paid_before_last = round(paid_before_last + g, 2)
         allocations.append({"invoice_number": inv.invoice_number,
-                            "allocated": g, "status": "BEZAHLT", "skonto": _abzug(inv)})
+                            "allocated": g, "status": getattr(inv, "status", "") or "BEZAHLT", "skonto": _abzug(inv)})
 
     # 2) Rest auf die letzte Rechnung
     rest = round(total - paid_before_last, 2)
@@ -7072,10 +7553,16 @@ def api_bank_match_split(txn_id):
         _apply_invoice_paid(getattr(last, "_id", None), tt, skonto_basis=last_brutto)
         last_status = "BEZAHLT"
     else:
-        # nur teilbezahlt → Rechnung bleibt offen, Restbetrag wird gekennzeichnet
-        setattr(last, "_paid_at", t.get("booking_date") or t.get("value_date"))
-        setattr(last, "_paid_amount", rest)
-        setattr(last, "_paid_via_booking", t.get("id"))
+        # nur teilbezahlt → Rechnung bleibt offen, Restbetrag wird gekennzeichnet.
+        # Bis 25.11.2026 bekam sie hier _paid_at und galt damit trotzdem als bezahlt (_is_invoice_paid).
+        if _zahlung_neue_regel(last):
+            if rest > 0.005:
+                tt = dict(t); tt["amount"] = rest
+                _teilzahlung_buchen(last, tt, last_brutto)
+        else:
+            setattr(last, "_paid_at", t.get("booking_date") or t.get("value_date"))
+            setattr(last, "_paid_amount", rest)
+            setattr(last, "_paid_via_booking", t.get("id"))
         last_status = getattr(last, "status", "FREIGEGEBEN")
 
     # 3) Differenz auf der letzten Rechnung kennzeichnen
@@ -7120,7 +7607,7 @@ def api_bank_unmatch(txn_id):
     if t.get("matched_invoice_id") and t["matched_invoice_id"] not in undo_ids:
         undo_ids.append(t["matched_invoice_id"])
     for iid in undo_ids:
-        _undo_invoice_paid(iid)
+        _undo_invoice_paid(iid, t.get("id"))
         inv = invoices.get(iid)
         if inv is not None and hasattr(inv, "_payment_difference"):
             try:
@@ -7151,7 +7638,7 @@ def api_bank_ignore(txn_id):
     if not t:
         return _json({"error": "Buchung nicht gefunden"}, 404)
     if t.get("matched_invoice_id"):
-        _undo_invoice_paid(t["matched_invoice_id"])
+        _undo_invoice_paid(t["matched_invoice_id"], t.get("id"))
         t["matched_invoice_id"] = None
     t["match_status"] = "ignored"
     _save_bank_txns(txns)
@@ -7173,7 +7660,7 @@ def api_bank_privat(txn_id):
     if not t:
         return _json({"error": "Buchung nicht gefunden"}, 404)
     if t.get("matched_invoice_id"):
-        _undo_invoice_paid(t["matched_invoice_id"])
+        _undo_invoice_paid(t["matched_invoice_id"], t.get("id"))
         t["matched_invoice_id"] = None
     t["match_status"] = "privat"
     t["privat_am"] = datetime.now().isoformat(timespec="seconds")
@@ -9048,10 +9535,11 @@ def _create_eingang_invoice(pdf_bytes, d, transaction_id=None):
         raise _EingangError(f"Rechnungsnummer '{inv.invoice_number}' existiert bereits.",
                             409, _det)
 
-    # XRechnung erzeugen + validieren
+    # XRechnung erzeugen + validieren (Richtung VOR der Prüfung setzen: bei Eingangsrechnungen ist eine
+    # 0-%-Position ohne Befreiungsgrund nur ein Hinweis, siehe validator BR-S-05 — 25.11.2026)
     xml_bytes = generate_and_serialize(inv)
-    report = validate_invoice(inv)
     inv._direction = "EINGANG"
+    report = validate_invoice(inv)
     if transaction_id:
         try:
             inv._transaction_id = transaction_id
@@ -9658,6 +10146,12 @@ _CSV_FELDER = {
     "skonto_prozent": ("skonto_prozent", "skonto"),
     "skonto_tage": ("skonto_tage",),
     "notiz": ("notiz", "bemerkung", "note"),
+    # 25.11.2026: Steuerfall und Bezüge des Kunden
+    "steuerfall": ("steuerfall", "steuerart"),
+    "steuerbefreiung_grund": ("steuerbefreiung_grund", "befreiungsgrund", "steuergrund"),
+    "bestellnummer": ("bestellnummer", "bestell_nr", "bestellnr", "order_reference"),
+    "vertragsnummer": ("vertragsnummer", "vertrag", "vertragsnr", "contract_reference"),
+    "projektnummer": ("projektnummer", "projekt", "projektnr", "project_reference"),
 }
 _CSV_PFLICHT = ("rechnungsnummer", "rechnungsdatum", "kunde_name", "kunde_plz", "kunde_ort", "kunde_email", "bezeichnung", "menge", "einzelpreis")
 _CSV_EINHEIT = {"": "C62", "stk": "C62", "stk.": "C62", "st": "C62", "stück": "C62", "stueck": "C62", "c62": "C62",
@@ -9769,6 +10263,15 @@ def _csv_rechnungen_lesen(roh: bytes):
                 bed = f"Zahlbar innerhalb von {(fdat - rdat).days} Tagen ohne Abzug." if fdat > rdat else "Zahlbar sofort ohne Abzug."
             else:
                 bed = "Zahlbar innerhalb von 14 Tagen ohne Abzug."
+        # Steuerfall (optionale Spalte): leer = Vorgabe der Stammdaten (Kleinunternehmer) bzw. Regelbesteuerung
+        sf = ""
+        if wert(z0, "steuerfall"):
+            try:
+                sf = __import__("models").steuerfall_normalisieren(wert(z0, "steuerfall"))
+            except ValueError as _sf_fehler:
+                probleme.append(str(_sf_fehler))
+        _ohne_ust = (sf not in ("", "regel")) or (not sf and bool(ms.get("kleinunternehmer")))
+        _satz_vorgabe = Decimal("0") if _ohne_ust else Decimal("19")
         art = wert(z0, "belegart") or "380"
         art = {"rechnung": "380", "gutschrift": "381"}.get(art.lower(), art)
         if art not in ("380", "381"):
@@ -9790,7 +10293,7 @@ def _csv_rechnungen_lesen(roh: bytes):
             if einheit not in _CSV_EINHEIT:
                 probleme.append(f"Zeile {nr}: Einheit „{wert(z, 'einheit')}“ unbekannt")
             lines.append({"name": wert(z, "bezeichnung"), "description": wert(z, "beschreibung"), "quantity": str(menge), "price": str(preis),
-                          "net": str((menge * preis).quantize(Decimal("0.01"))), "tax_rate": str(satz if satz is not None else Decimal("19")),
+                          "net": str((menge * preis).quantize(Decimal("0.01"))), "tax_rate": str(satz if satz is not None else _satz_vorgabe),
                           "unit": _CSV_EINHEIT.get(einheit, "C62"), "item_id": wert(z, "artikelnummer")})
         body = {
             "number": rn, "date": rdat.isoformat() if rdat else "", "delivery_date": ldat.isoformat() if ldat else "",
@@ -9805,6 +10308,9 @@ def _csv_rechnungen_lesen(roh: bytes):
             "buyer_reference": wert(z0, "kunde_referenz") or wert(z0, "kunde_name"), "buyer_vat": wert(z0, "kunde_ustid"),
             "buyer_contact_name": wert(z0, "ansprechpartner"), "payment_terms": bed, "note": wert(z0, "notiz"),
             "skonto_percent": wert(z0, "skonto_prozent").replace(",", "."), "skonto_days": wert(z0, "skonto_tage"),
+            "order_reference": wert(z0, "bestellnummer"), "contract_reference": wert(z0, "vertragsnummer"),
+            "project_reference": wert(z0, "projektnummer"),
+            "steuerfall": sf, "steuerbefreiung_grund": wert(z0, "steuerbefreiung_grund"),
             "lines": lines, "user": _akt_benutzer() or "csv-import",
         }
         if not lines and not probleme:
@@ -9816,7 +10322,9 @@ def _csv_rechnungen_lesen(roh: bytes):
 
 def _csv_rechnung_ausfuehren(body: dict, nur_pruefen: bool):
     """Eine Rechnung über denselben Weg wie die Maske prüfen oder anlegen."""
-    with app.test_request_context("/api/generate", method="POST", json=dict(body, nur_pruefen=nur_pruefen)):
+    # nummer_fest: die Nummer aus der Datei gilt, wie sie ist — der Server vergibt hier keine andere (25.11.2026)
+    # fehler_sperren: bei Fehlern der eingebauten Prüfung wird nichts angelegt (wie in der Maske)
+    with app.test_request_context("/api/generate", method="POST", json=dict(body, nur_pruefen=nur_pruefen, nummer_fest=True, fehler_sperren=True)):
         antwort = api_generate()
     if isinstance(antwort, tuple):
         antwort = antwort[0]
@@ -10035,7 +10543,8 @@ def api_datev_bulk_preview():
             "buyer_name": meta.get("buyer_name", ""),
             "seller_name": meta.get("seller_name", ""),
             "gross_amount": meta.get("gross_amount", ""),
-            "status": meta.get("status", ""),
+            # Zustand von HEUTE, nicht der beim Archivieren (dort steht meist noch „NEU“) — 25.11.2026
+            "status": (invoices[rec["invoice_id"]].status if rec["invoice_id"] in invoices else meta.get("status", "")),
             "in_store": rec["invoice_id"] in invoices,
             "in_archive": True,  # rec stammt aus dem Archiv-Index
         })
@@ -10046,7 +10555,7 @@ def api_datev_bulk_preview():
         "count": len(matches),
         # exportierbar = im Store ODER aus Archiv-XML re-parsbar
         "exportable": sum(1 for m in matches
-                          if m["status"] in ("FREIGEGEBEN", "EXPORTIERT")),
+                          if m["status"] in ("FREIGEGEBEN", "EXPORTIERT", "BEZAHLT")),
         "invoices": matches,
     })
 
@@ -10156,7 +10665,26 @@ def api_invoice_mark_paid(inv_id):
         return _json({"error": "Nicht gefunden"}, 404)
     if getattr(inv, "status", "") in ("STORNIERT", "ZURUECKGEWIESEN"):
         return _json({"error": f"Status {inv.status} kann nicht auf BEZAHLT gesetzt werden"}, 400)
+    # Eigene Gutschrift- und Stornobelege (Belegart 381) werden nicht „bezahlt“ — sie mindern den offenen Betrag
+    # ihrer Bezugsrechnung (25.11.2026). Eingegangene Gutschriften von Lieferanten bleiben markierbar, sonst
+    # ließen sie sich aus den offenen Eingangsrechnungen nicht mehr erledigen.
+    if getattr(inv, "invoice_type_code", "380") == "381" and (getattr(inv, "_direction", "") or "AUSGANG") == "AUSGANG":
+        return _json({"error": "Gutschrift- und Stornobelege werden nicht als bezahlt markiert — sie mindern den offenen "
+                               "Betrag der Rechnung, auf die sie sich beziehen."}, 400)
     data = request.get_json(silent=True) or {}
+    _wer_markiert = _wer(data, _akt_benutzer() or "web-user")
+    _status_vorher = getattr(inv, "status", "") or ""
+    war_bezahlt = _status_vorher == "BEZAHLT"
+    _offen_vorher = _offener_betrag(inv, _collect_storno_targets(list(invoices.values())))
+    if not war_bezahlt:
+        # Für die Rücknahme merken, wie die Rechnung vorher stand (25.11.2026). Teilzahlungen (_teilzahlungen) bleiben
+        # beim Markieren wie bei der Rücknahme unberührt.
+        inv._bezahlt_manuell = {
+            "vorher": _status_vorher, "am": datetime.now().isoformat(timespec="seconds"), "von": _wer_markiert,
+            "paid_at_vorher": getattr(inv, "_paid_at", None), "paid_amount_vorher": getattr(inv, "_paid_amount", None),
+            "paid_note_vorher": getattr(inv, "_paid_note", None), "buchung_vorher": getattr(inv, "_paid_via_booking", None),
+            "skonto_vorher": (dict(inv._skonto_zahlung) if isinstance(getattr(inv, "_skonto_zahlung", None), dict) else None),
+        }
     setattr(inv, "_paid_at", (data.get("date") or date.today().isoformat())[:10])
     if data.get("amount") is not None:
         try:
@@ -10167,13 +10695,70 @@ def api_invoice_mark_paid(inv_id):
         setattr(inv, "_paid_note", str(data["comment"])[:300])
     _skonto_zahlung_setzen(inv, getattr(inv, "_paid_amount", None), getattr(inv, "_paid_at", None),
                            user=_wer(data, "web-user"))
-    war_bezahlt = getattr(inv, "status", "") == "BEZAHLT"
     try:
         inv.status = "BEZAHLT"
     except Exception:
         pass
+    try:
+        _betrag_txt = (f"Betrag {_eur(data['amount'])} EUR" if data.get("amount") is not None
+                       else f"offener Betrag {_eur(_offen_vorher)} EUR")
+        inv.add_audit("BEZAHLT_MARKIERT", user=_wer_markiert, old_value=_status_vorher, new_value="BEZAHLT",
+                      comment=f"Von Hand als bezahlt markiert, Zahlungsdatum {_de_datum(inv._paid_at)}, {_betrag_txt}"
+                              + (f" — {str(data['comment'])[:200]}" if data.get("comment") else ""))
+    except Exception:
+        pass
     auto_save()
     return _json({"ok": True, "status": inv.status, "paid_at": getattr(inv, "_paid_at", None)})
+
+
+def _bezahlt_manuell_ruecknehmbar(inv) -> bool:
+    """Lässt sich die Bezahlt-Markierung zurücknehmen? Nur, wenn die Rechnung von Hand markiert wurde und seither
+    keine Zahlung aus dem Bank-Abgleich dazugekommen ist (die wird dort über „Zuordnung lösen“ zurückgenommen)."""
+    bm = getattr(inv, "_bezahlt_manuell", None)
+    if not isinstance(bm, dict) or getattr(inv, "status", "") != "BEZAHLT":
+        return False
+    return getattr(inv, "_paid_via_booking", None) == bm.get("buchung_vorher")
+
+
+@app.route("/api/invoices/<inv_id>/mark-paid/undo", methods=["POST"])
+def api_invoice_mark_paid_undo(inv_id):
+    """Nimmt „Als bezahlt markieren“ zurück (25.11.2026): stellt Status, Zahlungsdatum und Betrag von vorher wieder
+    her und protokolliert die Rücknahme. Teilzahlungen aus dem Bank-Abgleich bleiben erhalten."""
+    inv = invoices.get(inv_id)
+    if not inv:
+        return _json({"error": "Nicht gefunden"}, 404)
+    bm = getattr(inv, "_bezahlt_manuell", None)
+    if not isinstance(bm, dict):
+        return _json({"error": "Diese Rechnung wurde nicht von Hand als bezahlt markiert. Eine Zahlung aus dem "
+                               "Bank-Abgleich nehmen Sie dort über „Zuordnung lösen“ zurück."}, 400)
+    if not _bezahlt_manuell_ruecknehmbar(inv):
+        return _json({"error": "Die Markierung lässt sich hier nicht mehr zurücknehmen: Die Rechnung ist nicht mehr als "
+                               "bezahlt geführt oder ihr wurde inzwischen eine Bankbuchung zugeordnet "
+                               "(dann bitte im Bank-Abgleich „Zuordnung lösen“)."}, 400)
+    data = request.get_json(silent=True) or {}
+    wer = _wer(data, _akt_benutzer() or "web-user")
+    for attr, alt in (("_paid_at", bm.get("paid_at_vorher")), ("_paid_amount", bm.get("paid_amount_vorher")),
+                      ("_paid_note", bm.get("paid_note_vorher")), ("_skonto_zahlung", bm.get("skonto_vorher"))):
+        if alt is None:
+            if hasattr(inv, attr):
+                try:
+                    delattr(inv, attr)
+                except Exception:
+                    pass
+        else:
+            setattr(inv, attr, dict(alt) if isinstance(alt, dict) else alt)
+    vorher = bm.get("vorher") or "FREIGEGEBEN"
+    inv.status = vorher
+    try:
+        delattr(inv, "_bezahlt_manuell")
+    except Exception:
+        pass
+    inv.add_audit("BEZAHLT_ZURUECKGENOMMEN", user=wer, old_value="BEZAHLT", new_value=vorher,
+                  comment=f"Bezahlt-Markierung vom {_de_datum(bm.get('am'))} zurückgenommen"
+                          + (f" (markiert von {bm.get('von')})" if bm.get("von") else ""))
+    auto_save()
+    _st = _collect_storno_targets(list(invoices.values()))
+    return _json({"ok": True, "status": inv.status, "open_amount": _offener_betrag(inv, _st)})
 
 
 @app.route("/api/invoices/<inv_id>/skonto", methods=["POST"])
@@ -10194,6 +10779,8 @@ def api_invoice_skonto(inv_id):
         inv.add_audit("SKONTO_ANERKANNT" if ja else "SKONTO_ZURUECKGENOMMEN", user=_wer(data, "web-user"),
                       comment=f"{float(sz.get('abzug') or 0):.2f} EUR Skonto, Frist war {sz.get('frist_bis')}")
         auto_save()
+        if ja:
+            _teilzahlung_abschliessen(inv)      # mit dem anerkannten Abzug gedeckt → jetzt BEZAHLT (25.11.2026)
     return _json({"ok": True, "skonto_zahlung": sz, "open_amount": _offener_betrag(inv, _collect_storno_targets(list(invoices.values())))})
 
 
@@ -10222,13 +10809,19 @@ def api_export(inv_id):
     data = request.get_json(silent=True) or {}
     fmt = data.get("format", "DATEV")
 
-    if inv.status != "FREIGEGEBEN":
-        return _json({"error": f"Nur freigegebene Rechnungen exportierbar (Status: {inv.status})"}, 400)
+    # 25.11.2026: auch bezahlte Rechnungen; schon exportierte lassen sich erneut abrufen. Der Status wechselt nur
+    # beim ersten Export einer freigegebenen Rechnung auf EXPORTIERT — BEZAHLT bleibt BEZAHLT.
+    if inv.status not in ("FREIGEGEBEN", "EXPORTIERT", "BEZAHLT"):
+        return _json({"error": f"Nur freigegebene, exportierte oder bezahlte Rechnungen exportierbar (Status: {inv.status})"}, 400)
+    _erstmals = inv.status == "FREIGEGEBEN"
 
-    result = exporter.export(inv, fmt)
+    # retry statt export: Die Datei gibt es jetzt als Download — ein früherer Export (auch aus der Sammelauswahl)
+    # darf den erneuten Abruf nicht mit „Bereits exportiert“ sperren. Die Datei auf dem Server wird dabei ersetzt.
+    result = exporter.retry(inv, fmt)
     if result.success:
-        wf_engine.mark_exported(inv, fmt)
-        notifier.notify_exported(inv, fmt, result.filename)
+        if _erstmals:
+            wf_engine.mark_exported(inv, fmt)
+            notifier.notify_exported(inv, fmt, result.filename)
     else:
         notifier.notify_export_error(inv, result.error)
     dash.set_export_log(exporter.get_log())
@@ -10238,6 +10831,8 @@ def api_export(inv_id):
         "filename": result.filename,
         "format": fmt,
         "error": result.error,
+        "content": result.content if result.success else "",     # Inhalt der Datei für den Download im Browser
+        "status": inv.status,
     })
 
 
@@ -10245,6 +10840,132 @@ def api_export(inv_id):
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
+    """Erzeugt eine XRechnung aus JSON-Daten — immer nur eine zur Zeit (Nummernvergabe ohne Wettlauf)."""
+    with _ERZEUGEN_SPERRE:
+        _gesperrt = _erzeugen_fehler_sperre()
+        if _gesperrt is not None:
+            return _gesperrt
+        return _api_generate_kern()
+
+
+def _pruefmeldungen(report) -> dict:
+    """Meldungen der eingebauten Prüfung als Texte, getrennt nach Fehlern, Warnungen und Hinweisen."""
+    aus = {"fehler": [], "warnungen": [], "hinweise": []}
+    for i in (getattr(report, "issues", None) or []):
+        sev = getattr(getattr(i, "severity", None), "value", "")
+        ziel = {"ERROR": "fehler", "WARNING": "warnungen"}.get(sev, "hinweise")
+        aus[ziel].append(f"[{i.rule_id}] {i.message}")
+    return aus
+
+
+def _erzeugen_fehlerantwort(meldungen: dict, nummer: str = ""):
+    """Antwort, wenn „XRechnung erzeugen“ wegen Prüffehlern nichts anlegt (HTTP 422)."""
+    fehler = list(meldungen.get("fehler") or [])
+    n = len(fehler)
+    return _json({"error": f"Die Rechnung wurde nicht angelegt: Die Prüfung meldet {n} Fehler. "
+                           + "; ".join(fehler[:6]) + (" …" if n > 6 else ""),
+                  "nicht_angelegt": True, "valid": False, "errors": n, "number": nummer,
+                  "fehler": fehler, "warnungen": list(meldungen.get("warnungen") or []),
+                  "hinweise": list(meldungen.get("hinweise") or [])}, 422)
+
+
+def _erzeugen_fehler_sperre():
+    """Maske „Rechnung erstellen“ und CSV-Import (Kennzeichen fehler_sperren, 25.11.2026): Hat die eingebaute Prüfung
+    FEHLER, wird nichts angelegt — keine Rechnung, keine Nummer (auch keine Gutschriftsnummer), kein Archiv.
+    Dazu läuft vor dem Anlegen derselbe Weg einmal als reine Prüfung. Ohne das Kennzeichen (Schnittstellen
+    /api/external/…, Energieausweis-Rechnungen) bleibt alles wie bisher. None = weiter mit dem Anlegen."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not data.get("fehler_sperren") or data.get("nur_pruefen"):
+        return None
+    vor = _api_generate_kern(nur_pruefen_erzwingen=True)
+    try:
+        if vor.status_code != 200:
+            return None         # Abbrüche (Nummer vergeben, Bezug unbekannt …) meldet der eigentliche Lauf selbst
+        j = json.loads(vor.get_data(as_text=True))
+    except Exception:
+        return None
+    if j.get("valid") is not False:
+        return None
+    return _erzeugen_fehlerantwort(j, j.get("number", ""))
+
+
+def _stammdaten_steuernummer(data) -> str:
+    """Steuernummer des Verkäufers (BT-32) für „Rechnung erstellen“ und den CSV-Import — aus den Stammdaten, wie es
+    der Vorgangsweg schon immer macht (_txn_invoice_registrieren). Bis 25.11.2026 ging hier nur die USt-ID in die
+    Rechnung; wer nur eine Steuernummer hat, bekam den Fehler BR-CO-26. Trägt die Anfrage eine ANDERE USt-ID als die
+    Stammdaten (fremder Verkäufer), wird nichts ergänzt."""
+    d = data if isinstance(data, dict) else {}
+    eigen = str(d.get("seller_tax_id") or "").strip()
+    if eigen:
+        return eigen
+    try:
+        ms = _load_mandant_settings()
+    except Exception:
+        return ""
+    nr = str(ms.get("tax_registration_id") or "").strip()
+    if not nr:
+        return ""
+    _n = lambda s: "".join(str(s or "").split()).upper()
+    if _n(d.get("seller_vat")) and _n(ms.get("vat_id")) and _n(d.get("seller_vat")) != _n(ms.get("vat_id")):
+        return ""
+    return nr
+
+
+def _steuerfall_anfrage(data) -> str:
+    """Steuerfall der Anfrage (Feld steuerfall). Fehlt das Feld (Schnittstellen, CSV ohne Spalte), gilt die
+    Stammdaten-Einstellung „Kleinunternehmer nach § 19 UStG“, sonst die Regelbesteuerung. Eine unbekannte Angabe
+    wird nicht geraten (ValueError → Antwort 400)."""
+    import models as _m
+    roh = data.get("steuerfall") if isinstance(data, dict) else None
+    if roh is None or str(roh).strip() == "":
+        try:
+            ms = _load_mandant_settings() or {}
+        except Exception:
+            ms = {}
+        return "kleinunternehmer" if ms.get("kleinunternehmer") else "regel"
+    return _m.steuerfall_normalisieren(roh)
+
+
+def _stammdaten_kennung(data, feld: str) -> str:
+    """Verkäuferkennung BT-29 (feld seller_id) bzw. Registernummer BT-30 (feld company_id): aus der Anfrage, sonst
+    aus den Stammdaten — wie bei der Steuernummer nicht, wenn die Anfrage einen fremden Verkäufer (andere USt-ID) trägt."""
+    d = data if isinstance(data, dict) else {}
+    eigen = " ".join(str(d.get(feld) or "").split())
+    if eigen:
+        return eigen[:60]
+    try:
+        ms = _load_mandant_settings() or {}
+    except Exception:
+        return ""
+    wert = " ".join(str(ms.get(feld) or "").split())
+    if not wert:
+        return ""
+    _n = lambda s: "".join(str(s or "").split()).upper()
+    if _n(d.get("seller_vat")) and _n(ms.get("vat_id")) and _n(d.get("seller_vat")) != _n(ms.get("vat_id")):
+        return ""
+    return wert[:60]
+
+
+def _steuerfall_vorgabe_vorgang(inv):
+    """Vorgangs- und Abschlagsweg bauen ihre Rechnung selbst und kennen keine Auswahl „Steuerfall“. Damit ein
+    Kleinunternehmer dort gültige Rechnungen bekommt: Verkäuferkennung/Registernummer aus den Stammdaten; und sind
+    die Stammdaten auf „Kleinunternehmer“ gestellt UND tragen alle Positionen 0 %, wird der Beleg zum
+    Kleinunternehmer-Beleg (Kategorie E, Hinweis § 19 UStG). Beträge und Sätze werden nicht verändert."""
+    try:
+        ms = _load_mandant_settings() or {}
+        for feld in ("seller_id", "company_id"):
+            if not getattr(inv.seller, feld, "") and ms.get(feld):
+                setattr(inv.seller, feld, " ".join(str(ms.get(feld)).split())[:60])
+        if (ms.get("kleinunternehmer") and (getattr(inv, "steuerfall", "regel") or "regel") == "regel"
+                and inv.lines and all(Decimal(str(l.tax_rate or 0)) == 0 for l in inv.lines)):
+            inv.steuerfall = "kleinunternehmer"
+            inv.steuerfall_anwenden()
+    except Exception as e:
+        print(f"[steuerfall] Vorgabe im Vorgangsweg nicht angewendet: {e}", flush=True)
+    return inv
+
+
+def _api_generate_kern(nur_pruefen_erzwingen=False):
     """Erzeugt eine XRechnung aus JSON-Daten."""
     data = request.get_json(silent=True)
     if not data:
@@ -10253,6 +10974,7 @@ def api_generate():
     try:
         _type_code = str(data.get("type", "380") or "380")
         _ist_gutschrift = (_type_code == "381")
+        _steuerfall = _steuerfall_anfrage(data)      # regel / kleinunternehmer / reverse_charge / steuerfrei / nullsatz
         _preceding = (data.get("preceding_invoice", "") or "").strip()
         if _ist_gutschrift and _preceding:
             # Bezug muss auf eine bekannte Ausgangsrechnung zeigen — sonst Tippfehler
@@ -10270,7 +10992,7 @@ def api_generate():
                 _gs_brutto = 0.0
                 for _ld in data.get("lines", []):
                     _n = float(_ld.get("net") or 0) or float(_ld.get("quantity", 1) or 0) * float(_ld.get("price", 0) or 0)
-                    _gs_brutto += _n * (1 + float(_ld.get("tax_rate", 19) or 0) / 100)
+                    _gs_brutto += _n * (1 + (float(_ld.get("tax_rate", 19) or 0) if _steuerfall == "regel" else 0.0) / 100)
                 _orig_brutto = float(_orig.tax_inclusive_amount())
                 _schon = _gutgeschrieben(_orig, _collect_storno_targets(invoices.values()))
                 _rest = round(_orig_brutto - _schon, 2)
@@ -10283,25 +11005,44 @@ def api_generate():
 
         # „Validieren" prueft nur (09.10.2026): bis dahin legte JEDER Klick — auch auf Validieren — eine
         # echte Rechnung an und verbrauchte eine Nummer; so entstanden RE-2026-00093/94/95 dreimal gleich.
-        _nur_pruefen = bool(data.get("nur_pruefen"))
+        _nur_pruefen = bool(data.get("nur_pruefen")) or bool(nur_pruefen_erzwingen)
         # Rechnungsnummer: automatisch vergeben wenn leer
         number = data.get("number", "").strip()
+        # RE-Kreis (25.11.2026): Der Zähler wird erst hochgezählt, wenn alle Prüfungen bestanden sind und die Rechnung
+        # wirklich angelegt wird (_re_zaehlen, siehe unten vor dem Eintragen). Vorher zählte schon der Versuch — eine
+        # später abgewiesene Rechnung (inhaltsgleich, Fehler) verbrauchte eine Nummer. Der GS-Kreis bleibt unverändert.
+        _re_zaehlen = False
+        _nummer_fest = bool(data.get("nummer_fest"))        # CSV-Import: eigene Nummern, der Server ändert sie nicht
+        _basis = _nummernteil(number)
+        if _nummer_fest and _basis and number:
+            # Eigene Nummer, die in den laufenden Kreis fällt: nie zweimal dieselbe laufende Nummer (auch nicht mit
+            # anderem Namenszusatz) — gemeldet schon beim Prüfen, damit die Vorschau des Imports es zeigt.
+            _belegt = _nummernteil_belegt(_basis)
+            if _belegt:
+                return _json({"error": f"Die laufende Rechnungsnummer {_basis} ist bereits vergeben ({_belegt}). "
+                                       f"Bitte eine andere Nummer verwenden."}, 409)
         if _nur_pruefen:
             if not number:
                 number = (_next_gutschrift_number(advance=False) if _ist_gutschrift
                           else _next_invoice_number(advance=False))
         elif not number:
-            number = (_next_gutschrift_number(advance=True) if _ist_gutschrift
-                      else _next_invoice_number(advance=True))
+            if _ist_gutschrift:
+                number = _next_gutschrift_number(advance=True)
+            else:
+                number = _next_invoice_number(advance=False)
+                _re_zaehlen = True
         else:
             # Dubletten-Check VOR dem Hochzaehlen — ein abgelehnter Versuch darf
             # keine Nummer verbrennen (sonst Luecke im Nummernkreis)
-            if any(v.invoice_number == number for v in invoices.values()):
+            if any(v.invoice_number == number for v in invoices.values()) and not (_basis and not _nummer_fest):
                 return _json({"error": f"Rechnungsnummer {number} existiert bereits im System."}, 409)
-            # Zaehler hochzaehlen wenn die Nummer mit RE-YYYY-XXXXX / GS-YYYY-XXXXX beginnt
-            import re
-            if re.match(r'^RE-\d{4}-\d{5}', number):
-                _next_invoice_number(advance=True)
+            if _basis:
+                # Laufender RE-Kreis: eindeutig ist der NUMMERNTEIL. Die Maske schickt Vorschau + Namenszusatz
+                # (RE-2026-00012-Müller); ist die 00012 inzwischen vergeben — mit oder ohne Zusatz —, vergibt der
+                # Server die nächste freie und behält den gewählten Zusatz. Die Antwort nennt die vergebene Nummer.
+                if not _nummer_fest and _nummernteil_belegt(_basis):
+                    number = _next_invoice_number(advance=False) + number[len(_basis):]
+                _re_zaehlen = True
             elif re.match(r'^GS-\d{4}-\d{5}', number):
                 _next_gutschrift_number(advance=True)
 
@@ -10351,6 +11092,11 @@ def api_generate():
             currency_code=data.get("currency", "EUR"),
             buyer_reference=data.get("buyer_reference", "").strip() or "PRIV-" + (data.get("buyer_id", "") or "00000"),
             note=data.get("note", ""),
+            order_reference=" ".join(str(data.get("order_reference") or "").split()),          # BT-13 Bestellnummer des Kunden
+            contract_reference=" ".join(str(data.get("contract_reference") or "").split()),    # BT-12 Vertragsnummer
+            project_reference=" ".join(str(data.get("project_reference") or "").split()),      # BT-11 Projektnummer
+            steuerfall=_steuerfall,
+            steuerbefreiung_grund=" ".join(str(data.get("steuerbefreiung_grund") or "").split()),
             seller=Seller(
                 name=data.get("seller_name", ""),
                 address=Address(street=data.get("seller_street", ""),
@@ -10363,6 +11109,9 @@ def api_generate():
                                 data.get("seller_phone", ""),
                                 data.get("seller_contact_email", "")),
                 vat_id=data.get("seller_vat", ""),
+                seller_id=_stammdaten_kennung(data, "seller_id"),        # BT-29 Verkäuferkennung
+                company_id=_stammdaten_kennung(data, "company_id"),      # BT-30 Registernummer
+                tax_registration_id=_stammdaten_steuernummer(data),      # BT-32 aus den Stammdaten (25.11.2026)
             ),
             buyer=Buyer(
                 name=_buyer_display,
@@ -10396,10 +11145,15 @@ def api_generate():
                 item_id=str(line_data.get("item_id") or line_data.get("art_nr") or "")[:60],
                 unit_price=Decimal(str(line_data.get("price", 0))),
                 line_net_amount=Decimal(str(line_data.get("net", 0))),
-                tax_rate=Decimal(str(_steuersatz(line_data.get("tax_rate")))),
+                tax_rate=Decimal(str(_steuersatz(line_data.get("tax_rate"), 19 if _steuerfall == "regel" else 0))),
                 unit_code=str(line_data.get("unit") or "C62"),                 # Einheit und Zusatztext kommen aus dem CSV-Import;
                 item_description=str(line_data.get("description") or ""),      # die Maske schickt sie nicht mit
             ))
+
+        # Steuerfall: Kategorie (E, AE, Z) in alle Positionen. Der Steuersatz wird NICHT stillschweigend
+        # geändert — trägt eine Position trotz Kleinunternehmer/§ 13b/steuerfrei einen Satz über 0, meldet die
+        # Prüfung das als Fehler (BR-E-05, BR-AE-05, BR-Z-05).
+        inv.steuerfall_anwenden()
 
         # Dubletten-Check: Rechnungsnummer bereits vergeben?
         existing = [v for v in invoices.values() if v.invoice_number == inv.invoice_number]
@@ -10409,10 +11163,14 @@ def api_generate():
         report = validate_invoice(inv)
         xml_bytes = generate_and_serialize(inv)
         if _nur_pruefen:
-            return _json({"geprueft": True, "number": inv.invoice_number, "valid": report.is_valid,
+            return _json(dict({"geprueft": True, "number": inv.invoice_number, "valid": report.is_valid,
                           "errors": report.error_count, "xml_size": len(xml_bytes),
                           "meldungen": [f"[{i.rule_id}] {i.message}" for i in report.issues if i.severity.value == "ERROR"][:6],
-                          "gross": float(inv.tax_inclusive_amount())})
+                          "gross": float(inv.tax_inclusive_amount())}, **_pruefmeldungen(report)))
+        # Fehler der eingebauten Prüfung (25.11.2026): Maske und CSV-Import legen dann nichts an. Der Vorlauf in
+        # _erzeugen_fehler_sperre fängt das schon vor der Nummernvergabe ab; hier die zweite Sicherung.
+        if not report.is_valid and data.get("fehler_sperren"):
+            return _erzeugen_fehlerantwort(_pruefmeldungen(report), inv.invoice_number)
 
         # Inhaltsgleiche Rechnung liegt schon unversendet vor? Dann nicht noch einmal anlegen (09.10.2026).
         # Gleich heisst: Ausgang, Status NEU, selber Kunde, selbes Datum, selbe Belegart, selbe Positionen und Betraege.
@@ -10433,6 +11191,9 @@ def api_generate():
                                        f"(gleicher Kunde, gleiches Datum, gleiche Positionen). Es wurde keine weitere angelegt.",
                               "dublette_von": _gleich.invoice_number, "id": _gleich._id}, 409)
 
+        # Alle Prüfungen bestanden — erst jetzt zählt die Nummer (25.11.2026)
+        if _re_zaehlen:
+            _rechnungszaehler_nachziehen(inv.invoice_number)
         inv._direction = "AUSGANG"
         invoices[inv._id] = inv
         inbox.duplicates.register(inv, inv._id)
@@ -10469,6 +11230,7 @@ def api_generate():
             "xml_size": len(xml_bytes),
             "gross": float(inv.tax_inclusive_amount()),
             "xml_b64": __import__("base64").b64encode(xml_bytes).decode(),
+            **_pruefmeldungen(report),
         })
 
     except Exception as e:
@@ -10502,6 +11264,16 @@ def _storno_anlegen(inv, user, reason, storno_number=None):
         buyer=copy.deepcopy(inv.buyer),
         payment=copy.deepcopy(inv.payment),
     )
+    # Steuerfall, Befreiungsgrund und Bezüge der Ursprungsrechnung gelten auch für das Storno — ohne den
+    # Grund wäre das Storno einer Kleinunternehmer- oder § 13b-Rechnung amtlich ungültig.
+    for _feld in ("steuerfall", "steuerbefreiung_grund", "steuerbefreiung_code",
+                  "order_reference", "contract_reference", "project_reference"):
+        setattr(storno, _feld, getattr(inv, _feld, "") or ("regel" if _feld == "steuerfall" else ""))
+    # Skonto gilt für die Ursprungsrechnung, nicht für das Storno (25.11.2026)
+    storno.payment.skonto_percent = 0.0
+    storno.payment.skonto_days = 0
+    if "skonto" in (storno.payment.payment_terms or "").lower():
+        storno.payment.payment_terms = ""
 
     # Positionen werden 1:1 übernommen. Die Gutschrift-Semantik kommt
     # aus invoice_type_code="381"; Mengen/Preise/Netto bleiben positiv
@@ -10593,6 +11365,15 @@ def api_storno(inv_id):
     if inv.status not in ("FREIGEGEBEN", "EXPORTIERT"):
         return _json({"error": f"Stornierung nur bei freigegebenen oder exportierten Rechnungen möglich (aktuell: {inv.status})."}, 400)
 
+    # Storno nach Teilgutschrift (25.11.2026): der Storno übernimmt ALLE Positionen ungekürzt — nach einer Gutschrift
+    # über 238,00 EUR schrieb er die vollen 1.190,00 EUR noch einmal gut (zusammen 1.428,00 EUR).
+    _schon_gut = _gutgeschrieben(inv, _collect_storno_targets(list(invoices.values())))
+    if _schon_gut > 0.005:
+        return _json({"error": f"Zu dieser Rechnung gibt es bereits Gutschriften über {_eur(_schon_gut)} EUR. "
+                               f"Ein Storno würde den vollen Betrag noch einmal gutschreiben. "
+                               f"Bitte den Restbetrag über „Gutschrift“ gutschreiben.",
+                      "credited_total": _schon_gut}, 400)
+
     data = request.get_json(silent=True) or {}
     user = _wer(data, "web-user")
     reason = data.get("reason", "Stornierung")
@@ -10678,6 +11459,11 @@ def api_gutschrift(inv_id):
         buyer=copy.deepcopy(inv.buyer),
         payment=copy.deepcopy(inv.payment),
     )
+    # Skonto gilt für die Ursprungsrechnung, nicht für die Gutschrift (25.11.2026)
+    gs.payment.skonto_percent = 0.0
+    gs.payment.skonto_days = 0
+    if "skonto" in (gs.payment.payment_terms or "").lower():
+        gs.payment.payment_terms = ""
     gs.payment.due_date = None
     gs.payment.payment_terms = GUTSCHRIFT_TERMS   # BR-CO-25: Zahlungsbedingung statt Faelligkeit
 
@@ -10719,6 +11505,12 @@ def api_gutschrift(inv_id):
                 percentage=ac.percentage, reason=ac.reason,
                 tax_category=ac.tax_category, tax_rate=ac.tax_rate,
             ))
+    # Steuerfall und Befreiungsgrund der Ursprungsrechnung übernehmen (Kategorie E/AE/Z auch für frei
+    # eingegebene Positionen)
+    for _feld in ("steuerfall", "steuerbefreiung_grund", "steuerbefreiung_code",
+                  "order_reference", "contract_reference", "project_reference"):
+        setattr(gs, _feld, getattr(inv, _feld, "") or ("regel" if _feld == "steuerfall" else ""))
+    gs.steuerfall_anwenden()
     if not gs.lines:
         return _json({"error": "Eine Gutschrift braucht mindestens eine Position."}, 400)
 
@@ -10870,7 +11662,15 @@ def api_send_invoice(inv_id):
                                f"Der Empfänger könnte sie zurückweisen. Bitte die Fehler in der Rechnungsansicht ansehen.",
                       "kosit": _k}, 409)
 
+    # Zurückgewiesene und stornierte Rechnungen gehen nicht mehr hinaus (25.11.2026). Storno- und Gutschriftbelege
+    # selbst haben den Status FREIGEGEBEN und sind nicht betroffen.
+    if getattr(inv, "status", "") in ("ZURUECKGEWIESEN", "STORNIERT"):
+        _was = "storniert" if inv.status == "STORNIERT" else "zurückgewiesen"
+        return _json({"error": f"Die Rechnung {inv.invoice_number} ist {_was} und wird nicht versendet."
+                               + (" Versenden Sie bitte den Stornobeleg." if inv.status == "STORNIERT" else "")}, 400)
+
     data = request.get_json(silent=True) or {}
+    _versender = _wer(data, _akt_benutzer() or "system")      # wer versendet: angemeldeter Benutzer statt „system“
     recipient = data.get("recipient", "")
     if not recipient:
         return _json({"error": "Empfaenger-E-Mail (recipient) erforderlich"}, 400)
@@ -10914,7 +11714,7 @@ def api_send_invoice(inv_id):
     # Versand im Audit-Trail protokollieren
     if send_log.success:
         att_info = "PDF + XML" if pdf_attachments else "XML"
-        inv.add_audit("EMAIL_VERSENDET",
+        inv.add_audit("EMAIL_VERSENDET", user=_versender,
                       comment=f"An {recipient} ({att_info}), Message-ID: {send_log.message_id}")
         _log_sent_mail(recipient, send_log.subject or subject, body,
                        doc_type="invoice", reference=inv.invoice_number,
@@ -10930,7 +11730,7 @@ def api_send_invoice(inv_id):
         if inv.status in ("NEU", "IN_PRUEFUNG", "IN_FREIGABE"):
             _old_status = inv.status
             inv.status = "FREIGEGEBEN"
-            inv.add_audit("FREIGEGEBEN", user="system",
+            inv.add_audit("FREIGEGEBEN", user=_versender,
                           comment="Automatisch freigegeben durch Versand",
                           old_value=_old_status)
         # WICHTIG: Versand persistieren, damit das EMAIL_VERSENDET-Audit
@@ -11190,6 +11990,10 @@ def api_set_accounting(inv_id):
     cost_center = data.get("cost_center", "")
     project = data.get("project", "")
     accounting.learn_from_invoice(inv, account, cost_center, project)
+    # Kontierung an der Rechnung speichern (25.11.2026) — bis dahin stand sie nur im Verlauf und ging in keinen
+    # Export ein. Das Sachkonto wird im DATEV-Export als Gegenkonto verwendet (export.DATEVExporter).
+    inv._kontierung = {"account": str(account or "").strip(), "cost_center": str(cost_center or "").strip(),
+                       "project": str(project or "").strip()}
     inv.add_audit("KONTIERUNG", _wer(data, "web"), f"Konto: {account}, KSt: {cost_center}")
     return _json({"saved": True, "account": account, "cost_center": cost_center})
 
@@ -11254,9 +12058,18 @@ def api_bulk_export():
     fmt = data.get("format", "DATEV")
     inv_list = [invoices[i] for i in ids if i in invoices]
     result = bulk.bulk_export(inv_list, fmt)
-    return _json({"action": result.action, "total": result.total,
+    # Download (25.11.2026): die Auswahl zusätzlich als EINE Datei an den Browser — bisher lagen die Dateien nur auf
+    # dem Server. Enthalten sind freigegebene, exportierte und bezahlte Rechnungen der Auswahl.
+    _dl = {}
+    if fmt == "DATEV":
+        _waehlbar = [i for i in inv_list if i.status in ("FREIGEGEBEN", "EXPORTIERT", "BEZAHLT")]
+        if _waehlbar:
+            _sammel = exporter.datev.export_bulk(_waehlbar)
+            if _sammel.success:
+                _dl = {"content": _sammel.target, "filename": _sammel.filename, "download_count": len(_waehlbar)}
+    return _json(dict({"action": result.action, "total": result.total,
                    "success": result.success, "skipped": result.skipped,
-                   "failed": result.failed, "details": result.details})
+                   "failed": result.failed, "details": result.details}, **_dl))
 
 
 # ── API: Aufbewahrungsfristen (FR-530) ─────────────────────────────────
@@ -12385,3 +13198,11 @@ if __name__ == "__main__":
 # Lokale Erweiterungen laden — am Modulende, damit alle oben definierten
 # Namen bereitstehen und jeder Starter sie bekommt.
 _load_extensions()
+
+
+# Gutschriftverfahren (Selbstfakturierung, Belegart 389) — eigenes, abschaltbares Modul gutschriftverfahren.py
+try:
+    import gutschriftverfahren as _gv
+    _gv.einrichten(app, globals())
+except Exception as _gv_fehler:
+    print(f"[gutschriftverfahren] nicht geladen: {_gv_fehler}", flush=True)

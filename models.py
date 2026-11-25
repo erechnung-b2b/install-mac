@@ -65,7 +65,22 @@ class Seller:
     vat_id: str = ""
     tax_registration_id: str = ""
     registration_name: str = ""
-    company_id: str = ""
+    company_id: str = ""          # BT-30 Registernummer (z. B. HRB 4711)
+    seller_id: str = ""           # BT-29 Verkäuferkennung (frei vergebene Kennung, z. B. Lieferantennummer)
+
+    def kennung(self) -> str:
+        """Wirksame Verkäuferkennung BT-29 für die E-Rechnung.
+
+        EN 16931 (BR-CO-26) verlangt zur Identifikation des Verkäufers die USt-ID (BT-31), die
+        Registernummer (BT-30) ODER eine Verkäuferkennung (BT-29). Wer keine USt-ID und keine
+        Registernummer hat (typisch: Kleinunternehmer), wird über seine Steuernummer identifiziert —
+        sie steht ohnehin als BT-32 im Beleg. Eine ausdrücklich hinterlegte Kennung hat Vorrang.
+        """
+        if (self.seller_id or "").strip():
+            return self.seller_id.strip()
+        if not (self.vat_id or "").strip() and not (self.company_id or "").strip():
+            return (self.tax_registration_id or "").strip()
+        return ""
 
 
 @dataclass
@@ -156,6 +171,79 @@ class TaxSubtotal:
     category_code: str = "S"
     rate: Decimal = Decimal("19.00")
     exemption_reason: str = ""
+    exemption_reason_code: str = ""     # BT-121 (VATEX)
+
+
+# ── Steuerfall je Beleg (25.11.2026) ───────────────────────────────────────────────────────────────
+# Ein Beleg trägt EINEN Steuerfall. Er bestimmt die Umsatzsteuerkategorie aller Positionen (BT-151),
+# die Aufschlüsselung (BT-118), den Steuersatz 0 und den Befreiungsgrund (BT-120, bei § 13b auch BT-121).
+#   regel             S   Regelbesteuerung mit 19 % / 7 %
+#   kleinunternehmer  E   § 19 UStG — keine Umsatzsteuer, fester Hinweistext
+#   reverse_charge    AE  § 13b UStG — Steuerschuldnerschaft des Leistungsempfängers
+#   steuerfrei        E   steuerfreier Umsatz, Grund frei einzugeben
+#   nullsatz          Z   Nullsteuersatz (kein Befreiungsgrund in der E-Rechnung erlaubt, BR-Z-10)
+# Innergemeinschaftliche Lieferung (K) gibt es bewusst nicht: dafür fehlen Lieferanschrift und Ausland.
+TEXT_KLEINUNTERNEHMER = "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet."
+TEXT_REVERSE_CHARGE = "Steuerschuldnerschaft des Leistungsempfängers"
+TEXT_NULLSATZ = "Es gilt der Nullsteuersatz (0 % Umsatzsteuer)."
+STEUERFAELLE = {
+    "regel":            {"kategorie": "S",  "text": "",                    "code": "",            "name": "Regelbesteuerung"},
+    "kleinunternehmer": {"kategorie": "E",  "text": TEXT_KLEINUNTERNEHMER, "code": "",            "name": "Kleinunternehmer (§ 19 UStG)"},
+    "reverse_charge":   {"kategorie": "AE", "text": TEXT_REVERSE_CHARGE,   "code": "VATEX-EU-AE", "name": "Steuerschuldnerschaft des Leistungsempfängers (§ 13b UStG)"},
+    "steuerfrei":       {"kategorie": "E",  "text": "",                    "code": "",            "name": "Steuerfreier Umsatz"},
+    "nullsatz":         {"kategorie": "Z",  "text": "",                    "code": "",            "name": "Nullsteuersatz"},
+}
+# Kategorien, die einen Befreiungsgrund (BT-120 oder BT-121) verlangen
+KATEGORIEN_MIT_GRUND = ("E", "AE", "K", "G", "O")
+_STEUERFALL_ALIAS = {
+    "regel": "regel", "standard": "regel", "s": "regel", "regelbesteuerung": "regel",
+    "kleinunternehmer": "kleinunternehmer", "§19": "kleinunternehmer", "19ustg": "kleinunternehmer",
+    "§19ustg": "kleinunternehmer", "klein": "kleinunternehmer",
+    "reverse_charge": "reverse_charge", "reversecharge": "reverse_charge", "reverse-charge": "reverse_charge",
+    "§13b": "reverse_charge", "13b": "reverse_charge", "§13bustg": "reverse_charge", "ae": "reverse_charge",
+    "steuerfrei": "steuerfrei", "befreit": "steuerfrei", "e": "steuerfrei",
+    "nullsatz": "nullsatz", "nullsteuersatz": "nullsatz", "z": "nullsatz",
+}
+
+
+def steuerfall_normalisieren(wert) -> str:
+    """Eingabe (Maske, Schnittstelle, CSV) → Schlüssel aus STEUERFAELLE. Leer = „regel“.
+    Unbekannte Angaben werden nicht geraten: ValueError mit Klartext."""
+    t = "".join(str(wert or "").lower().split())
+    if not t:
+        return "regel"
+    if t in _STEUERFALL_ALIAS:
+        return _STEUERFALL_ALIAS[t]
+    raise ValueError(f"Steuerfall „{wert}“ ist unbekannt. Möglich sind: regel, kleinunternehmer, "
+                     f"reverse_charge, steuerfrei, nullsatz.")
+
+
+def steuerfall_ableiten(kategorien, grund: str = "") -> str:
+    """Steuerfall eines EINGELESENEN Belegs aus seinen Kategorien (und dem Grundtext)."""
+    k = {str(x or "S") for x in kategorien}
+    if k == {"AE"}:
+        return "reverse_charge"
+    if k == {"Z"}:
+        return "nullsatz"
+    if k == {"E"}:
+        g = (grund or "").lower()
+        return "kleinunternehmer" if ("§ 19" in g or "§19" in g or "kleinunternehmer" in g) else "steuerfrei"
+    return "regel"
+
+
+def steuerfall_setzen(inv, fall: str, grund: str = "", satz_null: bool = True):
+    """Setzt den Steuerfall eines Belegs — der eine Aufruf für jeden Aufrufer, auch für andere Module:
+
+        steuerfall_setzen(inv, "kleinunternehmer")
+        steuerfall_setzen(inv, "steuerfrei", "Steuerfrei nach § 4 Nr. 21 UStG")
+        steuerfall_setzen(inv, "reverse_charge")
+
+    Trägt Kategorie (und mit satz_null=True den Satz 0) in alle Positionen und Belegnachlässe ein.
+    Danach liefern compute_tax_subtotals(), der UBL- und der CII-Generator Kategorie und Befreiungsgrund."""
+    inv.steuerfall = steuerfall_normalisieren(fall)
+    inv.steuerbefreiung_grund = " ".join(str(grund or "").split())
+    inv.steuerfall_anwenden(satz_null=satz_null)
+    return inv
 
 
 @dataclass
@@ -197,6 +285,14 @@ class Invoice:
     # so im PDF unter "Bereits geleistete Anzahlungen". Ohne ihn muesste das PDF
     # den Betrag erraten und wuerde wieder von der XRechnung abweichen.
     prepaid_details: list = field(default_factory=list)
+
+    # Steuerfall des Belegs (25.11.2026), siehe STEUERFAELLE. Altbestand ohne das Feld = „regel“.
+    steuerfall: str = "regel"
+    # Befreiungsgrund BT-120: eigener Text des Ausstellers bzw. der eingelesene Text eines Fremdbelegs.
+    # Leer = Standardtext des Steuerfalls (Kleinunternehmer, § 13b).
+    steuerbefreiung_grund: str = ""
+    # Befreiungsgrund BT-121 (VATEX-Code); leer = Vorgabe des Steuerfalls (nur § 13b: VATEX-EU-AE)
+    steuerbefreiung_code: str = ""
 
     seller: Seller = field(default_factory=Seller)
     buyer: Buyer = field(default_factory=Buyer)
@@ -243,8 +339,64 @@ class Invoice:
         for (cat, rate), taxable in sorted(buckets.items()):
             taxable = taxable.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             tax = (taxable * rate / Decimal("100")).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-            result.append(TaxSubtotal(taxable_amount=taxable, tax_amount=tax, category_code=cat, rate=rate))
+            result.append(TaxSubtotal(taxable_amount=taxable, tax_amount=tax, category_code=cat, rate=rate,
+                                      exemption_reason=self.befreiungsgrund_text(cat),
+                                      exemption_reason_code=self.befreiungsgrund_code(cat)))
         return result
+
+    # ── Steuerfall ──
+    def steuerfall_kategorie(self) -> str:
+        return STEUERFAELLE.get(self.steuerfall or "regel", STEUERFAELLE["regel"])["kategorie"]
+
+    def steuerfall_anwenden(self, satz_null: bool = False) -> None:
+        """Trägt die Kategorie des Steuerfalls in alle Positionen und Belegnachlässe/-zuschläge ein.
+        Bei „regel“ bleibt alles, wie es ist. satz_null=True setzt zusätzlich den Steuersatz auf 0."""
+        fall = self.steuerfall or "regel"
+        if fall == "regel" or fall not in STEUERFAELLE:
+            return
+        kat = STEUERFAELLE[fall]["kategorie"]
+        for x in list(self.lines) + list(self.allowances_charges):
+            x.tax_category = kat
+            if satz_null:
+                x.tax_rate = Decimal("0")
+
+    def befreiungsgrund_text(self, kategorie: str = None) -> str:
+        """BT-120 für eine Kategorie; leer, wenn die Kategorie keinen Grund trägt (S, Z)."""
+        kat = kategorie or self.steuerfall_kategorie()
+        if kat not in KATEGORIEN_MIT_GRUND:
+            return ""
+        eigen = " ".join((self.steuerbefreiung_grund or "").split())
+        fall = self.steuerfall or "regel"
+        if fall in STEUERFAELLE and STEUERFAELLE[fall]["kategorie"] == kat:
+            if fall == "reverse_charge":
+                # Pflichtangabe nach § 14a Abs. 5 UStG steht immer da; ein eigener Zusatz wird angehängt
+                if not eigen or "steuerschuldnerschaft" in eigen.lower():
+                    return eigen or TEXT_REVERSE_CHARGE
+                return TEXT_REVERSE_CHARGE + " – " + eigen
+            return eigen or STEUERFAELLE[fall]["text"]
+        return eigen
+
+    def befreiungsgrund_code(self, kategorie: str = None) -> str:
+        """BT-121 (VATEX) für eine Kategorie."""
+        kat = kategorie or self.steuerfall_kategorie()
+        if kat not in KATEGORIEN_MIT_GRUND:
+            return ""
+        eigen = (self.steuerbefreiung_code or "").strip()
+        if eigen:
+            return eigen
+        fall = self.steuerfall or "regel"
+        if fall in STEUERFAELLE and STEUERFAELLE[fall]["kategorie"] == kat:
+            return STEUERFAELLE[fall]["code"]
+        return ""
+
+    def steuerhinweis(self) -> str:
+        """Hinweissatz für das PDF: warum keine Umsatzsteuer berechnet wird. Leer bei Regelbesteuerung."""
+        fall = self.steuerfall or "regel"
+        if fall == "regel" or fall not in STEUERFAELLE:
+            return ""
+        if fall == "nullsatz":
+            return " ".join((self.steuerbefreiung_grund or "").split()) or TEXT_NULLSATZ
+        return self.befreiungsgrund_text(STEUERFAELLE[fall]["kategorie"])
 
     def tax_amount(self) -> Decimal:
         return sum((t.tax_amount for t in self.compute_tax_subtotals()), Decimal("0.00"))

@@ -448,7 +448,11 @@ class TransactionManager:
                      "skonto_percent", "skonto_days", "verkaeufer",
                      # Vertragswahl + Gebäude für den ausgefüllten Dienstvertrag (16.10.2026) —
                      # standen bisher nicht in der Liste und wurden still verworfen
-                     "vertrag_dateien", "vertrag_datei", "vertrag_gebaeude"):
+                     "vertrag_dateien", "vertrag_datei", "vertrag_gebaeude",
+                     # Mahnhistorie der Mahnstufe (25.11.2026): je erzeugtem Mahnschreiben ein Eintrag
+                     # {level, date, reference, invoice_ref, amount, fee} — stand nicht in der Liste, deshalb wusste die
+                     # Mahnliste nie, welche Stufe schon erzeugt war
+                     "levels"):
             if key in data:
                 step[key] = data[key]
 

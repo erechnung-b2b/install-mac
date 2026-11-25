@@ -78,12 +78,34 @@ class InvoiceStore:
             "tax_point_date": inv.tax_point_date.isoformat() if inv.tax_point_date else None,
             "period_start": inv.period_start.isoformat() if inv.period_start else None,
             "period_end": inv.period_end.isoformat() if inv.period_end else None,
+            # 25.11.2026: BT-113 Vorauszahlung wurde geladen, aber nie gespeichert — nach dem nächsten Laden
+            # forderte eine Schlussrechnung wieder den vollen Betrag.
+            "prepaid_amount": str(getattr(inv, "prepaid_amount", None) or "0.00"),
+            "prepaid_details": list(getattr(inv, "prepaid_details", None) or []),
+            # Steuerfall, Befreiungsgrund BT-120, Code BT-121 (fehlt im Altbestand = „regel“)
+            "steuerfall": getattr(inv, "steuerfall", "regel") or "regel",
+            "steuerbefreiung_grund": getattr(inv, "steuerbefreiung_grund", "") or "",
+            "steuerbefreiung_code": getattr(inv, "steuerbefreiung_code", "") or "",
+            # Summen aus der eingelesenen Datei (BT-106 … BT-115), nur bei Eingangsbelegen
+            "_datei_summen": ({k: str(v) for k, v in getattr(inv, "_datei_summen").items()}
+                              if isinstance(getattr(inv, "_datei_summen", None), dict) and getattr(inv, "_datei_summen")
+                              else None),
             "status": inv.status,
             "assigned_to": inv.assigned_to,
             "_paid_at": getattr(inv, '_paid_at', None),
             "_paid_amount": getattr(inv, '_paid_amount', None),
             "_paid_via_booking": getattr(inv, '_paid_via_booking', None),
             "_skonto_zahlung": getattr(inv, '_skonto_zahlung', None),
+            # Teilzahlungen (25.11.2026): Zahlungen, die den Rechnungsbetrag noch nicht decken — je Bankbuchung ein Eintrag
+            # {buchung, betrag, datum}. Solange die Rechnung nicht gedeckt ist, bleibt _paid_at leer und der Status offen.
+            "_teilzahlungen": getattr(inv, '_teilzahlungen', None),
+            # 25.11.2026 (Prüfung Punkte 6, 8, 10):
+            # _mahnungen: erzeugte Mahnschreiben zu einer Rechnung OHNE Vorgang — [{level, date, reference, betrag, gebuehr, dokument, von}]
+            # _kontierung: gespeicherte Kontierung {account, cost_center, project} — das Sachkonto geht als Gegenkonto in den DATEV-Export
+            # _bezahlt_manuell: „Als bezahlt markieren“ von Hand — merkt den vorherigen Status für die Rücknahme
+            "_mahnungen": getattr(inv, '_mahnungen', None),
+            "_kontierung": getattr(inv, '_kontierung', None),
+            "_bezahlt_manuell": getattr(inv, '_bezahlt_manuell', None),
             # Dauerrechnung Online-Zugang (11.10.2026): Bezug zum Abo der Haupt-App + die Monatszahlungen nach der ersten
             "_nutzerabo": getattr(inv, '_nutzerabo', None),
             "_kosit": getattr(inv, '_kosit', None),      # Ergebnis der amtlichen Prüfung (KoSIT), 24.11.2026
@@ -103,6 +125,9 @@ class InvoiceStore:
                 "contact_name": inv.seller.contact.name,
                 "contact_phone": inv.seller.contact.telephone,
                 "contact_email": inv.seller.contact.email,
+                "registration_name": getattr(inv.seller, "registration_name", "") or "",
+                "company_id": getattr(inv.seller, "company_id", "") or "",        # BT-30
+                "seller_id": getattr(inv.seller, "seller_id", "") or "",          # BT-29
             },
             "buyer": {
                 "name": inv.buyer.name,
@@ -116,6 +141,10 @@ class InvoiceStore:
                 "electronic_address_scheme": inv.buyer.electronic_address_scheme,
                 "vat_id": inv.buyer.vat_id,
                 "buyer_reference": inv.buyer.buyer_reference,
+                "company_id": getattr(inv.buyer, "company_id", "") or "",         # BT-47
+                "contact_name": (inv.buyer.contact.name if getattr(inv.buyer, "contact", None) else ""),       # BT-56
+                "contact_phone": (inv.buyer.contact.telephone if getattr(inv.buyer, "contact", None) else ""), # BT-57
+                "contact_email": (inv.buyer.contact.email if getattr(inv.buyer, "contact", None) else ""),     # BT-58
             },
             "payment": {
                 "means_code": inv.payment.means_code,
@@ -144,6 +173,19 @@ class InvoiceStore:
                 "item_id": l.item_id,
                 "period_start": l.period_start.isoformat() if l.period_start else None,
                 "period_end": l.period_end.isoformat() if l.period_end else None,
+                "note": getattr(l, "note", "") or "",                             # BT-127
+                "order_reference": getattr(l, "order_reference", "") or "",       # BT-132
+                # BT-136 … BT-145: ohne sie passt der Positionsbetrag nach dem Laden nicht mehr zu Menge × Preis (BR-CO-10)
+                "allowances_charges": [{
+                    "is_charge": bool(a.is_charge),
+                    "amount": str(a.amount),
+                    "base_amount": str(a.base_amount) if a.base_amount else None,
+                    "percentage": str(a.percentage) if a.percentage else None,
+                    "reason": a.reason,
+                    "reason_code": a.reason_code,
+                    "tax_category": a.tax_category,
+                    "tax_rate": str(a.tax_rate),
+                } for a in (getattr(l, "allowances_charges", None) or [])],
             } for l in inv.lines],
             "allowances_charges": [{
                 "is_charge": ac.is_charge,
@@ -186,6 +228,9 @@ class InvoiceStore:
             # Anzahlungen (BT-113) — fehlt bei Altbestaenden, dann 0,00
             prepaid_amount=Decimal(str(d.get("prepaid_amount") or "0.00")),
             prepaid_details=list(d.get("prepaid_details") or []),
+            steuerfall=(d.get("steuerfall") or "regel"),
+            steuerbefreiung_grund=(d.get("steuerbefreiung_grund") or ""),
+            steuerbefreiung_code=(d.get("steuerbefreiung_code") or ""),
             note=d.get("note", ""),
             tax_point_date=date.fromisoformat(d["tax_point_date"]) if d.get("tax_point_date") else None,
             period_start=date.fromisoformat(d["period_start"]) if d.get("period_start") else None,
@@ -206,6 +251,9 @@ class InvoiceStore:
                 electronic_address_scheme=s.get("electronic_address_scheme", "EM"),
                 vat_id=s.get("vat_id", ""),
                 tax_registration_id=s.get("tax_registration_id", ""),
+                registration_name=s.get("registration_name", "") or "",
+                company_id=s.get("company_id", "") or "",
+                seller_id=s.get("seller_id", "") or "",
                 contact=Contact(s.get("contact_name", ""), s.get("contact_phone", ""),
                                 s.get("contact_email", "")),
             ),
@@ -223,6 +271,10 @@ class InvoiceStore:
                 electronic_address_scheme=b.get("electronic_address_scheme", "EM"),
                 buyer_reference=b.get("buyer_reference", ""),
                 vat_id=b.get("vat_id", ""),
+                company_id=b.get("company_id", "") or "",
+                contact=(Contact(b.get("contact_name", "") or "", b.get("contact_phone", "") or "",
+                                 b.get("contact_email", "") or "")
+                         if (b.get("contact_name") or b.get("contact_phone") or b.get("contact_email")) else None),
             ),
             payment=PaymentInfo(
                 means_code=p.get("means_code", "58"),
@@ -247,6 +299,11 @@ class InvoiceStore:
         inv._source_format = d.get("_source_format", "")
         inv._received_at = d.get("_received_at", "")
         inv._sender_email = d.get("_sender_email", "")
+        if isinstance(d.get("_datei_summen"), dict) and d["_datei_summen"]:
+            try:
+                inv._datei_summen = {k: Decimal(str(v)) for k, v in d["_datei_summen"].items()}
+            except Exception:
+                pass
 
         # Positionen
         for ld in d.get("lines", []):
@@ -264,6 +321,18 @@ class InvoiceStore:
                 item_id=ld.get("item_id", ""),
                 period_start=date.fromisoformat(ld["period_start"]) if ld.get("period_start") else None,
                 period_end=date.fromisoformat(ld["period_end"]) if ld.get("period_end") else None,
+                note=ld.get("note", "") or "",
+                order_reference=ld.get("order_reference", "") or "",
+                allowances_charges=[AllowanceCharge(
+                    is_charge=bool(a.get("is_charge")),
+                    amount=Decimal(str(a.get("amount") or "0")),
+                    base_amount=Decimal(str(a.get("base_amount") or "0")),
+                    percentage=Decimal(str(a.get("percentage") or "0")),
+                    reason=a.get("reason", "") or "",
+                    reason_code=a.get("reason_code", "") or "",
+                    tax_category=a.get("tax_category", "S") or "S",
+                    tax_rate=Decimal(str(a.get("tax_rate") or "0")),
+                ) for a in (ld.get("allowances_charges") or [])],
             ))
 
         # Nachlasse/Zuschlaege
@@ -305,6 +374,14 @@ class InvoiceStore:
             inv._paid_via_booking = d["_paid_via_booking"]
         if d.get("_skonto_zahlung"):
             inv._skonto_zahlung = dict(d["_skonto_zahlung"])
+        if d.get("_teilzahlungen"):
+            inv._teilzahlungen = [dict(z) for z in d["_teilzahlungen"] if isinstance(z, dict)]
+        if d.get("_mahnungen"):
+            inv._mahnungen = [dict(z) for z in d["_mahnungen"] if isinstance(z, dict)]
+        if isinstance(d.get("_kontierung"), dict) and d["_kontierung"]:
+            inv._kontierung = dict(d["_kontierung"])
+        if isinstance(d.get("_bezahlt_manuell"), dict) and d["_bezahlt_manuell"]:
+            inv._bezahlt_manuell = dict(d["_bezahlt_manuell"])
 
         return inv
 

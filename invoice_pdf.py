@@ -192,12 +192,28 @@ def build(inv, doc_gen, buyers, mandant_settings):
     import doc_generator as _dg
     _terms = str((inv.payment.payment_terms if inv.payment else "") or "")
     _dg._BEZAHLT_HINWEIS = _terms if (_terms.startswith("Bereits bezahlt") and not is_credit) else None
+    # Steuerfall und Bezüge (25.11.2026): Hinweis nach § 19 / § 13b / Befreiungsgrund unter den Summen;
+    # Bestell-, Vertrags-, Projektnummer und eine echte Leitweg-ID in der Kopfzeile.
+    _steuer_pdf = {"steuer_hinweis": ""}
+    try:
+        _steuer_pdf["steuer_hinweis"] = inv.steuerhinweis() if hasattr(inv, "steuerhinweis") else ""
+        _steuer_pdf["steuerfall"] = getattr(inv, "steuerfall", "regel") or "regel"
+        _bez = [("Ihre Bestellung", getattr(inv, "order_reference", "") or ""),
+                ("Vertrag", getattr(inv, "contract_reference", "") or ""),
+                ("Projekt", getattr(inv, "project_reference", "") or "")]
+        from validator import leitweg_pruefen as _lw
+        _kref = (getattr(inv, "buyer_reference", "") or "").strip()
+        if _kref and _lw(_kref) == (True, ""):
+            _bez.append(("Leitweg-ID", _kref))
+        _steuer_pdf["bezuege"] = [(k, v) for k, v in _bez if v]
+    except Exception:
+        pass
     try:
       pdf_entry = doc_gen.generate(
         doc_type=doc_type_for_pdf,
         recipient=buyer_data,
         positions=positions,
-        step={"date": inv.invoice_date,
+        step={"date": inv.invoice_date, **_steuer_pdf,
               "skonto_percent": getattr(inv.payment, "skonto_percent", 0) if inv.payment else 0,
               "skonto_days": getattr(inv.payment, "skonto_days", 0) if inv.payment else 0},
         reference=inv.invoice_number,

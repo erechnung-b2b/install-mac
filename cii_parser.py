@@ -124,6 +124,7 @@ def _verkaeufer(agr) -> Seller:
         vat_id=vat,
         tax_registration_id=fc,
         registration_name=_t(p, "ram:SpecifiedLegalOrganization/ram:TradingBusinessName") or _t(p, "ram:Name"),
+        seller_id=_t(p, "ram:ID") or _t(p, "ram:GlobalID"),      # BT-29
         company_id=_t(p, "ram:SpecifiedLegalOrganization/ram:ID"),
     )
 
@@ -246,11 +247,40 @@ def parse_cii(xml_bytes: bytes, source_file: str = "") -> Invoice:
         inv.prepaid_amount = _d(st, "ram:SpecifiedTradeSettlementHeaderMonetarySummation/ram:TotalPrepaidAmount")
         inv.preceding_invoice = _t(st, "ram:InvoiceReferencedDocument/ram:IssuerAssignedID")
         inv.preceding_invoice_date = _datum(st, "ram:InvoiceReferencedDocument/ram:FormattedIssueDateTime")  # BT-26
-        # Befreiungsgrund je Steuerkategorie (Anzeige / Pruefung)
+        # Befreiungsgrund je Steuerkategorie (BT-120/BT-121)
+        for _tt in st.findall("ram:ApplicableTradeTax", NS):
+            _g, _c = _t(_tt, "ram:ExemptionReason"), _t(_tt, "ram:ExemptionReasonCode")
+            if _g and not inv.steuerbefreiung_grund:
+                inv.steuerbefreiung_grund = _g
+            if _c and not inv.steuerbefreiung_code:
+                inv.steuerbefreiung_code = _c
+        # Summen der Datei (BT-106 … BT-115) getrennt ablegen — das Modell berechnet seine Summen selbst,
+        # die Prüfung vergleicht beide (25.11.2026)
+        _sm = st.find("ram:SpecifiedTradeSettlementHeaderMonetarySummation", NS)
+        _summen = {}
+        if _sm is not None:
+            for _bt, _tag in (("BT-106", "LineTotalAmount"), ("BT-107", "AllowanceTotalAmount"),
+                              ("BT-108", "ChargeTotalAmount"), ("BT-109", "TaxBasisTotalAmount"),
+                              ("BT-110", "TaxTotalAmount"), ("BT-112", "GrandTotalAmount"),
+                              ("BT-113", "TotalPrepaidAmount"), ("BT-114", "RoundingAmount"),
+                              ("BT-115", "DuePayableAmount")):
+                _kn = _sm.findall("ram:" + _tag, NS)
+                if _bt == "BT-110" and len(_kn) > 1:      # zweite Angabe = Steuer in Buchungswährung (BT-111)
+                    _kn = [k for k in _kn if (k.get("currencyID") or inv.currency_code) == inv.currency_code] or _kn
+                if _kn and (_kn[0].text or "").strip():
+                    try:
+                        _summen[_bt] = Decimal(_kn[0].text.strip())
+                    except InvalidOperation:
+                        pass
+        inv._datei_summen = _summen
     inv.payment = pay
 
     for li in (tx.findall("ram:IncludedSupplyChainTradeLineItem", NS) if tx is not None else []):
         inv.lines.append(_position(li))
+
+    from models import steuerfall_ableiten
+    if inv.lines:
+        inv.steuerfall = steuerfall_ableiten([l.tax_category for l in inv.lines], inv.steuerbefreiung_grund)
 
     gid = ""
     try:

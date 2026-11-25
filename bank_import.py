@@ -537,6 +537,26 @@ def auto_match(transaction, invoices_iter):
             score += 8
             reasons.append(f"Betrag ähnlich (Δ {diff:.2f}€, ≈{diff/gross*100:.1f}%)")
 
+        # 2a) Teilzahlung (25.11.2026): Deckt ein Zahlungseingang den noch offenen Zahlbetrag der Rechnung nicht
+        # (Zahlbetrag nach Anzahlungen, minus Gutschriften, minus frühere Teilzahlungen; fristgerechtes Skonto gilt
+        # als gedeckt), darf er nie automatisch zugeordnet werden — Rechnungsnummer (60) + Datum (12) reichten bisher
+        # für „high“, und 500,00 € machten eine Rechnung über 1.190,00 € „bezahlt“. Die Wertung bleibt, wie sie ist;
+        # der Treffer wird nur vom automatischen Verbuchen zum Vorschlag. Toleranz 0,02 € wie bei „Betrag exakt“.
+        unterzahlung = False
+        if is_credit and not (sk and sk["fristgerecht"]):
+            try:
+                _soll = float(inv.amount_due()) - _gut
+            except Exception:
+                _soll = gross
+            if not schon_bezahlt and not getattr(inv, '_paid_at', None):
+                try:
+                    _soll -= abs(float(getattr(inv, '_paid_amount', 0) or 0))
+                except (TypeError, ValueError):
+                    pass
+            unterzahlung = amount < round(_soll, 2) - 0.02
+            if unterzahlung:
+                reasons.append(f"Betrag deckt den offenen Rechnungsbetrag nicht (es fehlen {round(_soll - amount, 2):.2f}€) — Teilzahlung?")
+
         # 2b) Datum: Rechnungsdatum ist die Untergrenze, Fälligkeit der Zielpunkt.
         # Eine Zahlung kann nicht vor der Rechnung liegen — das war bisher egal, weil
         # nur der ABSTAND zählte (01.09.2026). Jetzt: vorher = unplausibel,
@@ -677,6 +697,7 @@ def auto_match(transaction, invoices_iter):
                 "schon_bezahlt": schon_bezahlt,
                 "vor_rechnungsdatum": vor_rechnungsdatum,
                 "skonto": sk,
+                "unterzahlung": unterzahlung,
             })
 
     if not candidates:
@@ -695,7 +716,8 @@ def auto_match(transaction, invoices_iter):
 
     if (best["score"] >= 65 and not ambiguous
             and not best.get("schon_bezahlt")
-            and not best.get("vor_rechnungsdatum")):
+            and not best.get("vor_rechnungsdatum")
+            and not best.get("unterzahlung")):      # Teilzahlung: höchstens ein Vorschlag (25.11.2026)
         conf = "high"
     elif best["score"] >= 35:
         conf = "medium"

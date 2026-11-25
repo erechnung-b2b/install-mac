@@ -95,7 +95,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--accent)}
 #txn-pos-editor .data-table td{vertical-align:middle;padding:4px 3px}
 
 .shell{display:flex;min-height:100vh}
-.sidebar{width:220px;background:var(--bg2);border-right:1px solid var(--border);padding:16px 0;flex-shrink:0}
+.sidebar{width:220px;background:var(--bg2);border-right:1px solid var(--border);padding:16px 0;flex-shrink:0;position:sticky;top:0;height:100vh;overflow-y:auto;align-self:flex-start}
 .sidebar h1{font-size:15px;font-weight:600;padding:0 16px 16px;border-bottom:1px solid var(--border)}
 .sidebar h1 span{font-size:11px;color:var(--text2);display:block;font-weight:400;margin-top:2px}
 .nav-item{display:flex;align-items:center;gap:10px;padding:10px 16px;cursor:pointer;font-size:13px;color:var(--text2);transition:all .15s;border-left:3px solid transparent}
@@ -387,6 +387,7 @@ th.c,td.c{text-align:center}
       <button id="btn-kosit" onclick="validateWithKosit()">KoSIT prüfen</button>
       <button id="btn-send" onclick="showSendDialog()">&#9993; Per E-Mail senden</button>
       <button id="btn-paid" onclick="markInvoicePaid(currentInvoiceId)" style="display:none;background:var(--success-bg);color:var(--success);border-color:var(--success)">&#10003; Als bezahlt markieren</button>
+      <button id="btn-paid-undo" onclick="markInvoicePaidUndo(currentInvoiceId)" style="display:none" title="Die Rechnung wurde von Hand als bezahlt markiert – Markierung zurücknehmen, die Rechnung erhält wieder den Status von vorher">&#8617; Bezahlt-Markierung zurücknehmen</button>
       <button id="btn-gutschrift" onclick="showGutschriftDialog()" style="display:none;background:var(--warning-bg);color:var(--warning);border-color:var(--warning)" title="Teil- oder Vollgutschrift zu dieser Rechnung (Rechnung bleibt gültig, offener Betrag sinkt)">&#8630; Gutschrift</button>
       <button id="btn-storno" onclick="stornoInvoice()" style="display:none;background:var(--danger-bg);color:var(--danger);border-color:var(--danger)">&#10007; Stornieren</button>
     </div>
@@ -470,6 +471,54 @@ th.c,td.c{text-align:center}
       <div id="csv-ergebnis" style="margin-top:12px;max-height:340px;overflow:auto"></div>
     </div>
   </details>
+  <!-- Gutschrift im Gutschriftverfahren ausstellen (Selbstfakturierung, Belegart 389) — nur sichtbar, wenn in den Einstellungen eingeschaltet.
+       EINBAU: Seite „Rechnung erstellen“ (id="page-create"). Direkt NACH dem </details> der Karte id="csv-karte"
+       (das ist das </details> zwei Zeilen unter  <div id="csv-ergebnis" ), also VOR der Zeile
+           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+       mit der Karte „Verkäufer“. -->
+  <details class="card" id="gv-karte" style="display:none;margin-bottom:16px" ontoggle="if(this.open)gvOeffnen()">
+    <summary style="padding:14px 18px;cursor:pointer;font-weight:600">&#128228; Gutschrift im Gutschriftverfahren ausstellen <span style="font-weight:400;color:var(--text2);font-size:12px">– Sie rechnen selbst über die Leistung Ihres Lieferanten ab (Belegart 389)</span></summary>
+    <div class="card-body" oninput="gvGeaendert()" onchange="gvGeaendert()">
+      <p style="font-size:13px;color:var(--text2);margin:0 0 12px">Aussteller und Leistungsempfänger sind Sie: <b id="gv-aussteller">–</b> (aus den Stammdaten). Der Lieferant ist der leistende Unternehmer; der Betrag wird auf <b>sein</b> Konto überwiesen. Nächste Nummer: <span id="gv-nummer" style="font-family:var(--mono,monospace)">–</span></p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div>
+          <div class="form-row"><label>Lieferant aus dem Lieferantenstamm</label><select id="gv-l-wahl" onchange="gvLieferantWahl()"><option value="">– von Hand eingeben –</option></select></div>
+          <div class="form-row"><label>Firma / Name des Lieferanten</label><input id="gv-l-name"></div>
+          <div class="form-row-2"><div class="form-row"><label>Straße</label><input id="gv-l-strasse"></div>
+            <div class="form-row"><label>Hausnummer</label><input id="gv-l-hausnummer" style="max-width:110px"></div></div>
+          <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:8px"><input id="gv-l-plz" style="width:80px" maxlength="5" inputmode="numeric"><input id="gv-l-ort"></div></div>
+          <div class="form-row-2"><div class="form-row"><label>USt-IdNr.</label><input id="gv-l-ust" placeholder="DE123456789"></div>
+            <div class="form-row"><label>Steuernummer (zusätzlich möglich)</label><input id="gv-l-steuernummer"></div></div>
+        </div>
+        <div>
+          <div class="form-row-2"><div class="form-row"><label>E-Mail des Lieferanten (für die E-Rechnung)</label><input id="gv-l-email" type="email"></div>
+            <div class="form-row"><label>Telefon</label><input id="gv-l-telefon"></div></div>
+          <div class="form-row"><label>Ansprechpartner (leer = Firmenname)</label><input id="gv-l-ansprechpartner"></div>
+          <div class="form-row-2"><div class="form-row"><label>IBAN des Lieferanten</label><input id="gv-l-iban" placeholder="DE89…"></div>
+            <div class="form-row"><label>BIC</label><input id="gv-l-bic"></div></div>
+          <div class="form-row-2"><div class="form-row"><label>Datum der Gutschrift</label><input id="gv-datum" type="date"></div>
+            <div class="form-row"><label>Leistungsdatum</label><input id="gv-leistungsdatum" type="date"></div></div>
+          <div class="form-row-2"><div class="form-row"><label>Zahlungsziel in Tagen</label><input id="gv-ziel" type="number" min="0" max="365" value="14" style="max-width:110px"></div>
+            <div class="form-row"><label>Zahlungsbedingung (leer = Standardtext)</label><input id="gv-bedingung"></div></div>
+        </div>
+      </div>
+      <div class="form-row"><label>Bemerkung auf der Gutschrift</label><input id="gv-notiz" placeholder="z. B. Abrechnung der Anlieferungen im Oktober laut Wiegescheinen"></div>
+      <table style="width:100%;font-size:13px;margin-top:6px">
+        <thead><tr><th style="text-align:left">Bezeichnung</th><th style="text-align:right;width:90px">Menge</th><th style="text-align:left;width:130px">Einheit</th><th style="text-align:right;width:120px">Einzelpreis netto</th><th style="text-align:right;width:80px">USt %</th><th style="text-align:right;width:110px">Netto</th><th style="width:36px"></th></tr></thead>
+        <tbody id="gv-positionen"></tbody>
+      </table>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:10px">
+        <button onclick="gvZeileNeu()" style="font-size:12px">+ Position</button>
+        <span id="gv-summe" style="font-size:13px"></span>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px">
+        <button onclick="gvSenden(false)">1. Prüfen</button>
+        <button class="primary" id="gv-ausstellen" onclick="gvSenden(true)" disabled>2. Ausstellen</button>
+        <span id="gv-stand" style="font-size:13px;color:var(--text2)"></span>
+      </div>
+      <div id="gv-ergebnis" style="margin-top:12px;max-height:340px;overflow:auto"></div>
+    </div>
+  </details>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
     <div class="card"><div class="card-header"><h3>Verkäufer</h3><span style="font-size:11px;color:var(--text2)">(aus Stammdaten)</span></div><div class="card-body">
       <div class="form-row" id="c-seller-wahl-zeile" style="display:none"><label>Verkäufer wählen</label><select id="c-seller-wahl" onchange="sellerWahl()"></select></div>
@@ -517,7 +566,7 @@ th.c,td.c{text-align:center}
         </div>
         <div class="form-row"><label>E-Mail / Telefon</label><div style="display:flex;gap:6px"><input id="c-buyer-email" placeholder="kunde@firma.de" style="flex:1"><input id="c-buyer-phone" placeholder="0176…" style="width:130px"></div></div>
       </div>
-      <div class="form-row-2"><div class="form-row"><label>Buyer Reference</label><input id="c-buyer-ref" placeholder="Leitweg-ID oder Referenz" oninput="updateInvoiceNumber()"></div>
+      <div class="form-row-2"><div class="form-row"><label title="BT-10. Bei Rechnungen an Behörden die Leitweg-ID (Aufbau Grobadressierung-Feinadressierung-Prüfziffer, z. B. 04011000-1234512345-06), sonst Ihre Kundennummer oder das Zeichen des Kunden.">Leitweg-ID / Käuferreferenz</label><input id="c-buyer-ref" placeholder="Leitweg-ID der Behörde oder Kundennummer" oninput="updateInvoiceNumber();leitwegHinweis()" onchange="leitwegHinweis()"><div id="c-leitweg-hinweis" style="font-size:11px;margin-top:2px;min-height:14px"></div></div>
         <div class="form-row"><label>USt-ID</label><input id="c-buyer-vat" placeholder="DE..."></div></div>
       <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
         <button onclick="saveBuyerFromForm()" style="font-size:12px">Neu speichern</button>
@@ -547,6 +596,25 @@ th.c,td.c{text-align:center}
         </select></div>
       <div class="form-row" id="c-preceding-row" style="display:none"><label>Bezug auf Rechnung (optional)</label>
         <input id="c-preceding" placeholder="RE-2026-00012 – leer lassen für eine freie Gutschrift ohne Bezug" title="Wird eine Rechnungsnummer angegeben, mindert die Gutschrift deren offenen Betrag. Tipp: Gutschriften zu einer bestehenden Rechnung lassen sich bequemer im Rechnungsdetail über „↺ Gutschrift“ anlegen."></div>
+    </div>
+    <!-- Steuerfall (BT-118/BT-151 mit Befreiungsgrund BT-120) und Bezüge des Kunden (BT-13, BT-12, BT-11) — 25.11.2026 -->
+    <div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-bottom:4px">
+      <div class="form-row"><label>Steuerfall</label>
+        <select id="c-steuerfall" onchange="this.dataset.manuell='1';steuerfallAnwenden()">
+          <option value="regel" selected>Regelbesteuerung (19 % / 7 %)</option>
+          <option value="kleinunternehmer">Kleinunternehmer (§ 19 UStG)</option>
+          <option value="reverse_charge">Steuerschuld des Kunden (§ 13b UStG)</option>
+          <option value="steuerfrei">Steuerfreier Umsatz</option>
+          <option value="nullsatz">Nullsteuersatz (0 %)</option>
+        </select></div>
+      <div class="form-row" id="c-steuergrund-row" style="display:none"><label id="c-steuergrund-label">Grund der Steuerbefreiung</label>
+        <input id="c-steuergrund" maxlength="200" placeholder=""></div>
+    </div>
+    <div id="c-steuerfall-hinweis" style="font-size:12px;color:var(--text2);margin-bottom:12px;min-height:16px"></div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px">
+      <div class="form-row"><label title="BT-13: die Bestellnummer, die Ihr Kunde auf der Rechnung erwartet">Bestellnummer des Kunden <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input id="c-order-ref" maxlength="80" placeholder="z. B. 4500012345"></div>
+      <div class="form-row"><label title="BT-12: Nummer des Vertrags, auf den sich die Rechnung bezieht">Vertragsnummer <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input id="c-contract-ref" maxlength="80" placeholder="z. B. V-2026-017"></div>
+      <div class="form-row"><label title="BT-11: Projektnummer bzw. Projektkennung des Kunden">Projektnummer <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input id="c-project-ref" maxlength="80" placeholder="z. B. P-0815"></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px">
       <div class="form-row"><label id="c-number-label">Rechnungsnummer</label><input id="c-number" placeholder="Wird automatisch vergeben" readonly style="background:var(--bg3)">
@@ -1639,10 +1707,10 @@ th.c,td.c{text-align:center}
     <div class="card-body">
       <!-- Geraete-ID: immer sichtbar -->
       <div id="lic-device" style="padding:12px 16px;background:var(--bg2);border:1px dashed var(--border);border-radius:var(--radius);margin-bottom:14px">
-        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Ihre Geraete-ID (fuer die Lizenzbestellung):</div>
+        <div style="font-size:11px;color:var(--muted);margin-bottom:4px">Ihre Geräte-ID (für die Lizenzbestellung):</div>
         <div style="display:flex;align-items:center;gap:10px">
           <span id="lic-device-id" style="font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:3px;color:var(--accent)">---</span>
-          <button onclick="navigator.clipboard.writeText(document.getElementById('lic-device-id').textContent);toast('Geraete-ID kopiert')" style="font-size:11px;padding:3px 10px">Kopieren</button>
+          <button onclick="navigator.clipboard.writeText(document.getElementById('lic-device-id').textContent);toast('Geräte-ID kopiert')" style="font-size:11px;padding:3px 10px">Kopieren</button>
         </div>
         <div style="font-size:11px;color:var(--muted);margin-top:6px">Bitte teilen Sie diese ID Ihrem Anbieter mit, um einen Lizenzschluessel zu erhalten.</div>
       </div>
@@ -1812,8 +1880,15 @@ th.c,td.c{text-align:center}
     <div class="card-body">
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
         <div class="form-row"><label>Firmenname *</label><input id="s-mandant-name" value=""></div>
-        <div class="form-row"><label>USt-ID *</label><input id="s-mandant-vat" value="" placeholder="DE123456789"></div>
+        <div class="form-row"><label>USt-ID <span style="font-weight:400;color:var(--text2)">(entfällt, wenn Sie keine haben)</span></label><input id="s-mandant-vat" value="" placeholder="DE123456789"></div>
         <div class="form-row"><label>Steuernummer</label><input id="s-mandant-taxreg" value="" placeholder="147/214/00001"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:8px">
+        <div class="form-row"><label>Umsatzsteuer</label>
+          <label style="display:flex;gap:8px;align-items:center;font-weight:400;cursor:pointer" title="Setzt bei neuen Rechnungen den Steuerfall „Kleinunternehmer (§ 19 UStG)“ vor: keine Umsatzsteuer, Hinweis auf der Rechnung. Je Rechnung änderbar.">
+            <input type="checkbox" id="s-mandant-kleinunternehmer" style="width:auto"> Kleinunternehmer nach § 19 UStG</label></div>
+        <div class="form-row"><label title="BT-30, z. B. HRB 4711 Amtsgericht Musterstadt. Wird in die E-Rechnung geschrieben.">Handelsregisternummer <span style="font-weight:400;color:var(--text2)">(falls vorhanden)</span></label><input id="s-mandant-companyid" value="" maxlength="60" placeholder="HRB 4711"></div>
+        <div class="form-row"><label title="BT-29. Eine Kennung, unter der Ihre Kunden Sie führen. Ohne USt-ID und ohne Handelsregisternummer verlangt die E-Rechnung eine Kennung; bleibt das Feld leer, wird dann Ihre Steuernummer verwendet.">Verkäuferkennung <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input id="s-mandant-sellerid" value="" maxlength="60" placeholder="leer = Steuernummer, wenn keine USt-ID"></div>
       </div>
       <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;margin-top:8px">
         <div class="form-row"><label>Straße *</label><input id="s-mandant-street" value="" placeholder="Hauptstraße 42"></div>
@@ -1838,6 +1913,16 @@ th.c,td.c{text-align:center}
         <input type="checkbox" id="s-zahlkonto-alt" onchange="toggleZahlkonto(this.checked)" style="margin-top:3px">
         <span><b>Kundenzahlungen auf <span id="s-zahlkonto-alt-bank">Zweitkonto</span>: <span id="s-zahlkonto-alt-iban" style="font-family:var(--mono,monospace)">—</span></b><br>
         <span style="font-size:12px;color:var(--text2)">Ist das Häkchen gesetzt, stehen auf allen <b>neuen</b> Rechnungen, im GiroCode und in den Zahlungsdaten dieses Konto. Ohne Häkchen gilt die IBAN oben. Verschickte Rechnungen bleiben unverändert. <span id="s-zahlkonto-status"></span></span></span>
+      </label>
+      <!-- Gutschriftverfahren (Selbstfakturierung, Belegart 389) — Schalter; sichtbar nur, wenn der Server das Modul anbietet.
+           EINBAU: Seite „Einstellungen“, Karte Stammdaten. Direkt VOR der Zeile
+               <div style="display:flex;gap:8px;margin-top:12px">
+           die den Knopf  onclick="saveMandantSettings()">Stammdaten speichern  enthält
+           (= direkt NACH dem </label> des Kastens id="s-zahlkonto-box"). -->
+      <label id="gv-schalter-box" style="display:none;gap:10px;align-items:flex-start;margin-top:10px;padding:10px 12px;border:1px solid var(--border,#ddd);border-radius:8px;cursor:pointer">
+        <input type="checkbox" id="gv-schalter" onchange="gvSchalter(this.checked)" style="margin-top:3px;width:auto">
+        <span><b>Gutschriftverfahren nutzen (Selbstfakturierung, Belegart 389)</b><br>
+        <span style="font-size:12px;color:var(--text2)">Mit Häkchen erscheint unter „Rechnung erstellen“ die Karte „Gutschrift im Gutschriftverfahren ausstellen“: Sie rechnen als Leistungsempfänger selbst über die Lieferungen Ihres Lieferanten ab. Eigener Nummernkreis GV-JJJJ-NNNNN. Nicht gemeint ist die Gutschrift an einen Kunden (Rechnungskorrektur) – die erstellen Sie wie bisher an der Rechnung. <span id="gv-schalter-status"></span></span></span>
       </label>
       <div style="display:flex;gap:8px;margin-top:12px">
         <button class="primary" onclick="saveMandantSettings()">Stammdaten speichern</button>
@@ -1946,7 +2031,7 @@ th.c,td.c{text-align:center}
 
     <!-- Stellvertretung (FR-360) -->
     <div class="card">
-      <div class="card-header"><h3>Stellvertretung (FR-360)</h3></div>
+      <div class="card-header"><h3>Stellvertretung</h3></div>
       <div class="card-body">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
           <div class="form-row"><label>Abwesend</label><input id="dep-absent" placeholder="Benutzername"></div>
@@ -1981,7 +2066,7 @@ th.c,td.c{text-align:center}
 
   <!-- Aufbewahrungsfristen (FR-530) -->
   <div class="card" style="margin-top:16px">
-    <div class="card-header"><h3>Aufbewahrungsfristen (FR-530)</h3>
+    <div class="card-header"><h3>Aufbewahrungsfristen</h3>
       <button onclick="loadRetention()" style="font-size:12px">Aktualisieren</button>
     </div>
     <div class="card-body">
@@ -1993,13 +2078,13 @@ th.c,td.c{text-align:center}
     </div>
   </div>
 
-  <!-- Daten zuruecksetzen -->
+  <!-- Daten zurücksetzen -->
   <div class="card" style="margin-top:16px;border-color:var(--danger)">
-    <div class="card-header"><h3 style="color:var(--danger)">Daten zuruecksetzen</h3></div>
+    <div class="card-header"><h3 style="color:var(--danger)">Daten zurücksetzen</h3></div>
     <div class="card-body">
-      <p style="font-size:13px;color:var(--text2);margin:0 0 12px">Loescht alle Rechnungen, Archiveintraege und Inbox-Daten. Stammdaten, Lizenz und E-Mail-Einstellungen bleiben erhalten. Dieser Vorgang kann nicht rueckgaengig gemacht werden.</p>
+      <p style="font-size:13px;color:var(--text2);margin:0 0 12px">Löscht alle Rechnungen, Archiveinträge und Inbox-Daten. Stammdaten, Lizenz und E-Mail-Einstellungen bleiben erhalten. Dieser Vorgang kann nicht rückgängig gemacht werden.</p>
       <div style="display:flex;gap:8px;align-items:center">
-        <button style="background:var(--danger);color:#fff;border-color:var(--danger)" onclick="resetAllData()">Alle Rechnungsdaten loeschen</button>
+        <button style="background:var(--danger);color:#fff;border-color:var(--danger)" onclick="resetAllData()">Alle Rechnungsdaten löschen</button>
         <span id="reset-result" style="font-size:12px"></span>
       </div>
     </div>
@@ -2598,14 +2683,14 @@ async function loadInvoices() {
   document.getElementById('inv-table').innerHTML = res.invoices.map(i=>`
     <tr class="clickable" onclick="openDetail('${i.id}')">
       <td onclick="event.stopPropagation()"><input type="checkbox" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this.checked)" style="width:auto"></td>
-      <td style="font-weight:500">${i.number}${i.type_code==='381' ? ' <span title="'+(i.is_storno?'Stornorechnung':'Gutschrift')+(i.preceding_invoice?' zu '+esc(i.preceding_invoice):'')+'" style="background:'+(i.is_storno?'var(--danger-bg);color:var(--danger)':'var(--warning-bg);color:var(--warning)')+';padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">'+(i.is_storno?'STORNO':'GUTSCHRIFT')+'</span>' : ''}</td><td>${invPartnerCell(i)}</td>
+      <td style="font-weight:500">${i.number}${i.type_code==='381' ? ' <span title="'+(i.is_storno?'Stornorechnung':'Gutschrift')+(i.preceding_invoice?' zu '+esc(i.preceding_invoice):'')+'" style="background:'+(i.is_storno?'var(--danger-bg);color:var(--danger)':'var(--warning-bg);color:var(--warning)')+';padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">'+(i.is_storno?'STORNO':'GUTSCHRIFT')+'</span>' : ''}${i.type_code==='389' ? ' <span title="Gutschrift im Gutschriftverfahren (Selbstfakturierung, Belegart 389)" style="background:var(--info-bg);color:var(--info);padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">GUTSCHRIFTVERFAHREN</span>' : ''}</td><td>${invPartnerCell(i)}</td>
       <td class="c">${dirBadge(i.direction)}</td>
       <td class="r">${fmt(i.net)}</td><td class="r" style="font-weight:500">${fmt(i.gross)} EUR${(i.credited > 0 && i.type_code!=='381' && (i.status||'').toUpperCase()!=='STORNIERT') ? '<div title="Gutschriften zu dieser Rechnung" style="font-size:11px;font-weight:400;color:var(--warning)">↺ −'+fmt(i.credited)+' · offen '+fmt(i.open_amount)+'</div>' : ''}</td>
       <td class="c"><span class="badge" style="background:var(--bg3);color:var(--text2)">${i.format||'XRechnung'}</span></td>
       <td class="c">${validBadge(i.valid, i.direction, i.hard_error)}</td><td class="c">${i.overpaid ? '<span style="background:#FEF3C7;color:#92400E;padding:1px 8px;border-radius:4px;font-size:11px;font-weight:600">⬆ Überzahlt</span>' : statusBadge(i.status, i.direction)}${i.overdue ? ' <span title="überfällig" style="background:#FEE2E2;color:#991B1B;padding:1px 5px;border-radius:4px;font-size:10px">⏰</span>' : ''}</td>
       <td><button onclick="event.stopPropagation();openDetail('${i.id}')" style="font-size:12px">Detail</button>
         <button onclick="event.stopPropagation();currentInvoiceId='${i.id}';showViewer()" style="font-size:12px;margin-left:4px">Beleg</button>${
-        !['BEZAHLT','STORNIERT','ZURUECKGEWIESEN'].includes((i.status||'').toUpperCase())
+        (!['BEZAHLT','STORNIERT','ZURUECKGEWIESEN'].includes((i.status||'').toUpperCase()) && !(i.type_code==='381' && (i.direction||'AUSGANG').toUpperCase()==='AUSGANG'))
           ? `<button onclick="markInvoicePaid('${i.id}',event)" title="Als bezahlt / erledigt markieren" style="font-size:12px;margin-left:4px;background:var(--success-bg);color:var(--success);border:1px solid var(--success);border-radius:4px;padding:2px 8px;cursor:pointer">&#10003; Bezahlt</button>`
           : ''}${
         (i.overdue && (i.direction||'').toUpperCase()==='AUSGANG' && !['BEZAHLT','STORNIERT','ZURUECKGEWIESEN'].includes((i.status||'').toUpperCase()))
@@ -2714,6 +2799,22 @@ async function openDetail(id) {
       }
     }
   }
+  // Teilzahlung (25.11.2026): Zahlung zugeordnet, aber der Rechnungsbetrag ist noch nicht gedeckt — die Rechnung bleibt offen
+  if (!inv.paid_at && !['BEZAHLT','STORNIERT','ZURUECKGEWIESEN'].includes(inv.status) && inv.paid_amount != null
+      && inv.type_code !== '381' && (inv.direction || 'AUSGANG') === 'AUSGANG' && Number(inv.open_amount || 0) > 0.02) {
+    const cur = inv.currency || 'EUR';
+    const de = x => Number(x || 0).toLocaleString('de-DE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    stornoHtml += `<div style="padding:10px 16px;background:var(--warning-bg);border:1px solid #FAC775;border-radius:var(--radius);margin-bottom:12px;font-size:13px;color:var(--warning)">
+      <strong>Teilzahlung:</strong> ${de(Math.abs(inv.paid_amount))} ${cur} erhalten · <strong>noch offen: ${de(inv.open_amount)} ${cur}</strong>. Die Rechnung bleibt offen, bis der Restbetrag gedeckt ist.</div>`;
+    const szT = inv.skonto_zahlung;
+    if (szT && szT.abzug && !szT.anerkannt) {
+      const fristT = (szT.frist_bis || '').split('-').reverse().join('.');
+      stornoHtml += `<div style="padding:10px 16px;background:var(--warning-bg);border:1px solid #FAC775;border-radius:var(--radius);margin-bottom:12px;font-size:13px;color:var(--warning);display:flex;justify-content:space-between;align-items:center;gap:12px">
+        <div><strong>Skonto ${String(szT.prozent).replace('.', ',')} % abgezogen (${de(szT.abzug)} ${cur}), aber die Frist ${fristT} war überschritten.</strong> Der Abzug steht noch offen.</div>
+        <button onclick="skontoAnerkennen('${inv.id}', true)" style="font-size:11px;padding:3px 10px;color:var(--warning);background:#fff;border:1px solid #FAC775;border-radius:var(--radius);cursor:pointer;white-space:nowrap">Skonto trotzdem anerkennen</button>
+      </div>`;
+    }
+  }
   if (inv.status === 'STORNIERT') {
     const stornoEvt = inv.audit_trail?.find(e => e.type === 'STORNIERT');
     const stornoRef = stornoEvt?.comment || '';
@@ -2745,14 +2846,16 @@ async function openDetail(id) {
   }
 
   const canApprove = ['NEU','IN_PRUEFUNG','IN_FREIGABE'].includes(inv.status);
-  const canExport = inv.status === 'FREIGEGEBEN';
+  const canExport = ['FREIGEGEBEN','EXPORTIERT','BEZAHLT'].includes(inv.status);   // 25.11.2026: auch bezahlte; exportierte erneut abrufbar (Download)
   document.getElementById('btn-approve').style.display = canApprove ? '' : 'none';
   document.getElementById('btn-reject').style.display = canApprove ? '' : 'none';
   document.getElementById('btn-export').style.display = canExport ? '' : 'none';
-  document.getElementById('btn-send').style.display = inv.validation?.valid ? '' : 'none';
+  // Zurückgewiesene und stornierte Rechnungen werden nicht mehr versendet (25.11.2026) — der Server lehnt es auch ab
+  document.getElementById('btn-send').style.display = (inv.validation?.valid && !['ZURUECKGEWIESEN','STORNIERT'].includes(inv.status)) ? '' : 'none';
   const canStorno = ['FREIGEGEBEN','EXPORTIERT'].includes(inv.status)
     && inv.type_code !== '381'
-    && (inv.direction || 'AUSGANG') === 'AUSGANG';
+    && (inv.direction || 'AUSGANG') === 'AUSGANG'
+    && !(Number(inv.credited_total||0) > 0.005);   // nach einer Gutschrift nur noch „Gutschrift“ über den Rest (25.11.2026) — der Server lehnt den Storno sonst ab
   document.getElementById('btn-storno').style.display = canStorno ? '' : 'none';
   // Gutschrift: Rechnung bleibt gültig, offener Betrag sinkt — auch bei bezahlten Rechnungen möglich
   const canGutschrift = ['FREIGEGEBEN','EXPORTIERT','BEZAHLT'].includes(inv.status)
@@ -2761,8 +2864,12 @@ async function openDetail(id) {
     && (Number(inv.totals?.gross||0) - Number(inv.credited_total||0)) > 0.01;
   document.getElementById('btn-gutschrift').style.display = canGutschrift ? '' : 'none';
   // „Als bezahlt markieren" für jede noch offene Rechnung (Forderung wie Eingangsrechnung)
-  const canPaid = !['BEZAHLT','STORNIERT','ZURUECKGEWIESEN'].includes(inv.status);
+  // nicht für eigene Gutschrift-/Stornobelege (Belegart 381) — sie mindern den offenen Betrag ihrer Bezugsrechnung (25.11.2026)
+  const canPaid = !['BEZAHLT','STORNIERT','ZURUECKGEWIESEN'].includes(inv.status)
+    && !(inv.type_code === '381' && (inv.direction || 'AUSGANG') === 'AUSGANG');
   document.getElementById('btn-paid').style.display = canPaid ? '' : 'none';
+  // Rücknahme nur für von Hand markierte Rechnungen (Zahlungen aus dem Bank-Abgleich: dort „Zuordnung lösen“)
+  document.getElementById('btn-paid-undo').style.display = (inv.status === 'BEZAHLT' && inv.bezahlt_manuell && inv.bezahlt_manuell.ruecknehmbar) ? '' : 'none';
   window._currentInvoiceData = inv;
 
   document.getElementById('det-seller').innerHTML = `
@@ -2803,7 +2910,7 @@ async function openDetail(id) {
 
   document.getElementById('det-audit').innerHTML = inv.audit_trail.map(e => {
     const cls = e.type.includes('ABGELEHNT')||e.type.includes('ZURUECK')?'error':e.type.includes('FREIGABE')||e.type.includes('EXPORT')?'done':'pending';
-    return `<li><span class="dot ${cls}"></span><div><div style="font-weight:500">${e.type.replace(/_/g,' ')}</div><div class="meta">${e.timestamp?.substring(0,16)} · ${e.user} ${e.comment?'· "'+e.comment+'"':''}</div></div></li>`;
+    return `<li><span class="dot ${cls}"></span><div><div style="font-weight:500">${esc(verlaufText(e.type))}</div><div class="meta">${e.timestamp?.substring(0,16)} · ${e.user} ${e.comment?'· "'+e.comment+'"':''}</div></div></li>`;
   }).join('');
 
   const v = inv.validation;
@@ -2839,7 +2946,19 @@ async function openDetail(id) {
     </div>
     ${inv.direction === 'EINGANG' ? '<button onclick="matchOrder(\''+inv.id+'\')" style="margin-top:8px;font-size:11px;padding:3px 10px">&#128279; Bestellung suchen</button>' : ''}
     <div id="det-match-result" style="margin-top:6px;font-size:12px"></div>`;
-  loadKontierung(id);
+  loadKontierung(id).then(() => kontierungGespeichertZeigen(inv));
+}
+
+// Gespeicherte Kontierung der Rechnung anzeigen (25.11.2026) — das Sachkonto geht als Gegenkonto in den DATEV-Export
+function kontierungGespeichertZeigen(inv) {
+  const el = document.getElementById('det-kontierung');
+  const k = inv && inv.kontierung;
+  const alt = document.getElementById('det-kontierung-gespeichert');
+  if (alt) alt.remove();
+  if (!el || !k || !k.account) return;
+  document.getElementById('k-account').value = k.account;
+  document.getElementById('k-costcenter').value = k.cost_center || '';
+  el.insertAdjacentHTML('afterbegin', '<div id="det-kontierung-gespeichert" style="font-size:12px;margin-bottom:6px;padding:6px 8px;background:var(--success-bg);color:var(--success);border-radius:var(--radius)">Gespeichert: Sachkonto <strong>' + esc(k.account) + '</strong>' + (k.cost_center ? ' · Kostenstelle ' + esc(k.cost_center) : '') + ' — das Sachkonto wird im DATEV-Export als Gegenkonto verwendet.</div>');
 }
 
 // Rechnung (Eingangsrechnung ODER Forderung) manuell auf BEZAHLT/erledigt setzen.
@@ -2862,6 +2981,30 @@ async function markInvoicePaid(id, ev) {
   }
 }
 
+// „Als bezahlt markieren“ zurücknehmen (25.11.2026) — nur für von Hand markierte Rechnungen
+async function markInvoicePaidUndo(id) {
+  if (!id) return;
+  if (!confirm('Bezahlt-Markierung zurücknehmen?\n\nDie Rechnung erhält wieder den Status von vorher und steht dann wieder unter den offenen Rechnungen.')) return;
+  const res = await fetch(API+'/api/invoices/'+id+'/mark-paid/undo', {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'
+  }).then(r=>r.json()).catch(()=>({error:'Netzwerkfehler'}));
+  if (res.error) { toast(res.error, 'error'); return; }
+  toast('Bezahlt-Markierung zurückgenommen');
+  if (typeof loadInvoices === 'function') loadInvoices();
+  if (typeof loadDashboard === 'function') loadDashboard();
+  if (currentInvoiceId === id && document.getElementById('page-detail')?.classList.contains('active')) openDetail(id);
+}
+
+// Datei aus Text an den Browser geben (DATEV-Export als Download, 25.11.2026)
+function dateiHerunterladen(name, inhalt, typ) {
+  const blob = new Blob([inhalt], {type: typ || 'text/plain;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name || 'export.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+
 // ── Workflow-Aktionen ──
 async function approveInvoice() {
   const comment = prompt('Kommentar zur Freigabe:', 'Geprüft und freigegeben');
@@ -2877,7 +3020,11 @@ async function rejectInvoice() {
 }
 async function exportInvoice() {
   const res = await fetch(API+`/api/invoices/${currentInvoiceId}/export`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({format:'DATEV'})}).then(r=>r.json());
-  if (res.success) { toast('DATEV-Export: ' + res.filename); openDetail(currentInvoiceId); }
+  if (res.success) {
+    if (res.content) { dateiHerunterladen(res.filename, res.content, 'text/csv;charset=utf-8'); toast('DATEV-Export heruntergeladen: ' + res.filename); }
+    else toast('DATEV-Export: ' + res.filename);
+    openDetail(currentInvoiceId);
+  }
   else toast(res.error, 'error');
 }
 
@@ -3488,6 +3635,7 @@ function addLine(name, qty, price, tax, artNr) {
     <td><input id="cl-tax-${lc}" type="number" value="${_satz(tax)}" style="text-align:right"></td>
     <td><button onclick="document.getElementById('line-${lc}').remove()" style="color:var(--danger);border:0;background:0">&#10007;</button></td>`;
   document.getElementById('c-lines').appendChild(row);
+  if (typeof steuerfallAnwenden === 'function') steuerfallAnwenden();
   if (artNr) {
     const _p = (typeof _products !== 'undefined') ? _products.find(x => x.art_nr === artNr) : null;
     const _sel = document.getElementById('cl-prodsel-' + lc); if (_sel) _sel.value = artNr;
@@ -3728,7 +3876,65 @@ async function generateInvoice(download=false) {
   }
 }
 
+// ── Steuerfall (25.11.2026): Kategorie und Befreiungsgrund je Rechnung ──
+const STEUERFALL_TEXTE = {
+  regel: ['', '', 'Umsatzsteuer nach den Sätzen der Positionen (19 % oder 7 %).'],
+  kleinunternehmer: ['Hinweis auf der Rechnung (optional ändern)', 'Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.',
+    'Kleinunternehmer nach § 19 UStG: Es wird keine Umsatzsteuer berechnet, alle Positionen stehen auf 0 %. Auf der Rechnung steht der Hinweis auf § 19 UStG. Ihre Steuernummer genügt, eine USt-ID ist nicht nötig.'],
+  reverse_charge: ['Zusatz zum Pflichthinweis (optional)', 'z. B. Bauleistung nach § 13b Abs. 2 Nr. 4 UStG',
+    'Steuerschuldnerschaft des Leistungsempfängers (§ 13b UStG), z. B. Bauleistungen an Bauunternehmen: Ihr Kunde schuldet die Umsatzsteuer, die Rechnung weist keine aus. Ihre USt-ID und die USt-ID des Kunden sind Pflicht. Auf der Rechnung steht „Steuerschuldnerschaft des Leistungsempfängers“.'],
+  steuerfrei: ['Grund der Steuerbefreiung (Pflicht)', 'z. B. Steuerfrei nach § 4 Nr. 21 UStG',
+    'Steuerfreier Umsatz: Bitte geben Sie den Grund mit der Vorschrift an. Er steht auf der Rechnung und in der E-Rechnung.'],
+  nullsatz: ['Hinweis auf der Rechnung (optional)', 'z. B. Nullsteuersatz nach § 12 Abs. 3 UStG',
+    'Nullsteuersatz (0 %), z. B. Lieferung und Installation bestimmter Photovoltaikanlagen nach § 12 Abs. 3 UStG. Die Rechnung weist 0 % Umsatzsteuer aus.'],
+};
+function _steuerfall() { const s = document.getElementById('c-steuerfall'); return (s && s.value) || 'regel'; }
+function steuerfallAnwenden() {
+  const sf = _steuerfall(), ohneUst = sf !== 'regel', t = STEUERFALL_TEXTE[sf] || STEUERFALL_TEXTE.regel;
+  const h = document.getElementById('c-steuerfall-hinweis'); if (h) h.textContent = t[2];
+  const zeile = document.getElementById('c-steuergrund-row'); if (zeile) zeile.style.display = ohneUst ? '' : 'none';
+  const lbl = document.getElementById('c-steuergrund-label'); if (lbl) lbl.textContent = t[0] || 'Grund der Steuerbefreiung';
+  const g = document.getElementById('c-steuergrund'); if (g) g.placeholder = t[1];
+  // Steuersatz der Positionen: außerhalb der Regelbesteuerung fest 0 %, das Feld ist gesperrt
+  document.querySelectorAll('#c-lines input[id^="cl-tax-"]').forEach(i => {
+    if (ohneUst) {
+      if (!i.readOnly) i.dataset.vorher = i.value;
+      i.value = 0; i.readOnly = true; i.style.background = 'var(--bg3)'; i.title = 'Der gewählte Steuerfall rechnet ohne Umsatzsteuer';
+    } else if (i.readOnly) {
+      i.readOnly = false; i.style.background = ''; i.title = '';
+      i.value = (i.dataset.vorher !== undefined && i.dataset.vorher !== '') ? i.dataset.vorher : 19;
+    }
+  });
+  const st = document.getElementById('c-sonder-tax');
+  if (st) { if (ohneUst) st.value = '0'; else if (st.disabled) st.value = '19'; st.disabled = ohneUst; }
+}
+// Produktwahl in einer Zeile setzt den Satz des Produkts — danach gilt wieder der Steuerfall
+document.addEventListener('change', e => { if (e.target && e.target.closest && e.target.closest('#c-lines')) steuerfallAnwenden(); });
+
+// ── Leitweg-ID: Grobadressierung-Feinadressierung-Prüfziffer (Prüfziffer ISO 7064 Mod 97-10) ──
+function leitwegPruefen(text) {
+  const t = String(text || '').trim();
+  const m = /^(\d{2,12})-(?:([A-Za-z0-9]{0,30})-)?([A-Za-z0-9]{1,3})$/.exec(t);
+  if (!m) return {aehnlich: false, fehler: ''};
+  const grob = m[1], fein = m[2] || '', pz = m[3];
+  if ([2, 3, 5, 8, 12].indexOf(grob.length) < 0) return {aehnlich: true, fehler: 'die Grobadressierung muss 2, 3, 5, 8 oder 12 Ziffern haben'};
+  if (!/^\d{2}$/.test(pz)) return {aehnlich: true, fehler: 'die Prüfziffer muss aus genau zwei Ziffern bestehen'};
+  let rest = 0;
+  for (const c of (grob + fein).toUpperCase() + '00') { for (const z of String(parseInt(c, 36))) rest = (rest * 10 + Number(z)) % 97; }
+  const soll = String(98 - rest).padStart(2, '0');
+  if (pz !== soll) return {aehnlich: true, fehler: 'die Prüfziffer passt nicht – bitte auf Tippfehler prüfen'};
+  return {aehnlich: true, fehler: ''};
+}
+function leitwegHinweis() {
+  const el = document.getElementById('c-leitweg-hinweis'); if (!el) return;
+  const r = leitwegPruefen((document.getElementById('c-buyer-ref') || {}).value);
+  if (!r.aehnlich) { el.textContent = ''; return; }
+  el.style.color = r.fehler ? 'var(--warning)' : 'var(--success)';
+  el.textContent = r.fehler ? 'Sieht wie eine Leitweg-ID aus, aber ' + r.fehler + '.' : 'Leitweg-ID formal richtig.';
+}
+
 async function _generateInvoiceInner(download=false) {
+  steuerfallAnwenden();      // Steuersätze der Positionen passend zum Steuerfall, bevor sie gelesen werden
   const lines = [];
   document.querySelectorAll('#c-lines tr').forEach(tr => {
     const id = tr.id.split('-')[1];
@@ -3765,6 +3971,11 @@ async function _generateInvoiceInner(download=false) {
     buyer_contact_salutation: _buyerAnredeZuordnung().contact_salutation || '',
     buyer_contact_name: document.getElementById('c-buyer-contact').value,
     buyer_vat: document.getElementById('c-buyer-vat').value,
+    steuerfall: _steuerfall(),
+    steuerbefreiung_grund: ((document.getElementById('c-steuergrund') || {}).value || '').trim(),
+    order_reference: ((document.getElementById('c-order-ref') || {}).value || '').trim(),
+    contract_reference: ((document.getElementById('c-contract-ref') || {}).value || '').trim(),
+    project_reference: ((document.getElementById('c-project-ref') || {}).value || '').trim(),
     date: document.getElementById('c-date').value,
     delivery_date: document.getElementById('c-delivery-date').value,
     iban: document.getElementById('c-seller-iban').value,
@@ -3777,13 +3988,27 @@ async function _generateInvoiceInner(download=false) {
     type: _docType(),
     preceding_invoice: _docType() === '381' ? ((document.getElementById('c-preceding')||{}).value || '').trim() : '',
     nur_pruefen: !download,   // „Validieren" prüft nur — angelegt wird erst mit „XRechnung erzeugen" (09.10.2026)
+    fehler_sperren: true,     // bei Fehlern der Prüfung wird nichts angelegt und keine Nummer vergeben (25.11.2026)
   };
   const res = await fetch(API+'/api/generate', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
   const el = document.getElementById('c-result');
+  // Meldungen der Prüfung als Liste (25.11.2026) — vorher stand hier nur „3 Fehler“
+  const _pruefListe = (titel, arr, stil) => (arr && arr.length)
+    ? `<div style="margin-top:8px;${stil}"><strong>${titel}</strong><ul style="margin:4px 0 0 18px;padding:0">${arr.map(t => '<li>'+esc(t)+'</li>').join('')}</ul></div>` : '';
+  const _dezent = 'font-size:12px;color:var(--text2)';
+  const _nebenMeldungen = _pruefListe('Warnungen', res.warnungen, _dezent) + _pruefListe('Hinweise', res.hinweise, _dezent);
+  if (res.error && res.nicht_angelegt) {
+    el.innerHTML = `<div style="padding:12px;background:var(--danger-bg);border-radius:var(--radius);color:var(--danger)">&#10007; <strong>Die Rechnung wurde nicht angelegt.</strong> Die Prüfung meldet ${res.errors} Fehler – bitte beheben Sie diese und erzeugen Sie die Rechnung dann erneut. Es wurde keine Rechnungsnummer vergeben.
+      ${_pruefListe('Fehler', res.fehler, 'font-size:13px')}</div>${_nebenMeldungen}`;
+    el.scrollIntoView({behavior:'smooth', block:'nearest'});
+    toast('Rechnung nicht angelegt: ' + res.errors + ' Fehler', 'error');
+    return;
+  }
   if (res.error) { el.innerHTML = `<div style="padding:12px;background:var(--danger-bg);border-radius:var(--radius);color:var(--danger)">&#10007; ${res.error}</div>`; return; }
 
   el.innerHTML = `<div style="padding:12px;background:${res.valid?'var(--success-bg)':'var(--warning-bg)'};border-radius:var(--radius);color:${res.valid?'var(--success)':'var(--warning)'}">
-    ${res.valid?'&#10003;':'&#9888;'} <strong>${res.number}</strong> · Brutto: ${fmt(res.gross)} EUR · ${res.errors} Fehler · ${res.xml_size} Bytes XML</div>`;
+    ${res.valid?'&#10003;':'&#9888;'} <strong>${res.number}</strong> · Brutto: ${fmt(res.gross)} EUR · ${res.errors} Fehler · ${res.xml_size} Bytes XML
+    ${res.valid ? '' : _pruefListe('Fehler', res.fehler || res.meldungen, 'font-size:13px')}</div>${_nebenMeldungen}`;
 
   el.scrollIntoView({behavior:'smooth', block:'nearest'});
   toast((download ? 'Rechnung erstellt: ' : 'Geprüft: ') + res.number);
@@ -4448,6 +4673,23 @@ document.addEventListener('click', function (e) {
 });
 
 /* ── Rechnungen aus CSV einlesen (24.11.2026) ── */
+/* Verlauf: lesbare Texte statt der internen Kennungen (25.11.2026) */
+const VERLAUF_TEXTE = {ALTBESTAND_ERFASST:'Altbestand erfasst', BESTELLUNG_VERKNUEPFT:'Bestellung verknüpft', BEZAHLT:'Bezahlt', BULK_EXPORT:'Sammelexport',
+  DAUERZAHLUNG:'Dauerzahlung', EMAIL_VERSENDET:'E-Mail versendet', EMAIL_VERSANDT:'E-Mail versendet', ERSTELLT:'Erstellt', EXPORTIERT:'Exportiert',
+  FREIGABE_ERTEILT:'Freigabe erteilt', FREIGEGEBEN:'Freigegeben', GUTSCHRIFT_ERHALTEN:'Gutschrift erhalten', GUTSCHRIFT_ERSTELLT:'Gutschrift erstellt', GUTSCHRIFTVERFAHREN_ERSTELLT:'Gutschrift im Gutschriftverfahren erstellt',
+  KAUFMAENNISCHE_FREIGABE:'Kaufmännische Freigabe', KAUFMAENNISCHE_FREIGABE_ABGELEHNT:'Kaufmännische Freigabe abgelehnt', KONTIERUNG:'Kontierung',
+  RUECKFRAGE:'Rückfrage', SACHLICHE_PRUEFUNG_OK:'Sachliche Prüfung in Ordnung', SACHLICHE_PRUEFUNG_ABGELEHNT:'Sachliche Prüfung abgelehnt',
+  SKONTO_ABGEZOGEN:'Skonto abgezogen', SKONTO_ANERKANNT:'Skonto anerkannt', SKONTO_VERSPAETET:'Skonto verspätet', STORNIERT:'Storniert',
+  STORNO_ERSTELLT:'Storno erstellt', WIEDERVORLAGE:'Wiedervorlage', WORKFLOW_GESTARTET:'Prüfung gestartet', ZAHLKONTO_GEAENDERT:'Zahlkonto geändert',
+  ZAHLUNGSDANK_VERSENDET:'Zahlungsdank versendet', ZAHLUNGSDIFFERENZ:'Zahlungsdifferenz', ZURUECKGEWIESEN:'Zurückgewiesen',
+  MAHNUNG_ERZEUGT:'Mahnschreiben erzeugt', BEZAHLT_MARKIERT:'Von Hand als bezahlt markiert', BEZAHLT_ZURUECKGENOMMEN:'Bezahlt-Markierung zurückgenommen',
+  EXPORT_ERSTELLT:'Export erstellt'};
+function verlaufText(t) {
+  t = String(t || '');
+  if (VERLAUF_TEXTE[t]) return VERLAUF_TEXTE[t];
+  const w = t.replace(/_/g, ' ').toLowerCase();
+  return w.charAt(0).toUpperCase() + w.slice(1);
+}
 function csvZuruecksetzen() { document.getElementById('csv-einlesen').disabled = true; document.getElementById('csv-ergebnis').innerHTML = ''; document.getElementById('csv-stand').textContent = ''; }
 async function csvSenden(anlegen) {
   var d = document.getElementById('csv-datei').files[0], stand = document.getElementById('csv-stand');
@@ -4472,6 +4714,167 @@ async function csvSenden(anlegen) {
 }
 (function () { function nach() { fetch(API + '/api/invoices/csv').then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { if (j && j.verfuegbar) { var k = document.getElementById('csv-karte'); if (k) k.style.display = ''; } }).catch(function () {}); }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', nach); else nach(); })();
+
+/* ── Gutschriftverfahren (Selbstfakturierung, Belegart 389) ──
+ * EINBAU: im großen <script>-Block von static/index.html, direkt VOR der Zeile
+ *     /* ── Gestaltung der Belege (24.11.2026) ── * /
+ * (= direkt nach dem Block der CSV-Karte, der mit  fetch(API + '/api/invoices/csv')  beginnt).
+ * Benutzt aus der Seite: API, esc(), toast(), openDetail(). Alle Namen beginnen mit gv. */
+var gv_Info = null, gv_Lieferanten = [], gv_Geprueft = false, gv_Uhr = null;
+function gv_El(id) { return document.getElementById(id); }
+function gv_Geld(x) { return x == null ? '–' : Number(x).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; }
+function gv_Zahl(t) { t = String(t == null ? '' : t).trim().replace(/\s/g, ''); if (t.indexOf(',') >= 0) t = t.replace(/\./g, '').replace(',', '.'); var n = parseFloat(t); return isNaN(n) ? 0 : n; }
+function gv_Heute() { var d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+function gv_Anzeigen(j) {
+  gv_Info = j;
+  var box = gv_El('gv-schalter-box'), h = gv_El('gv-schalter'), k = gv_El('gv-karte');
+  if (box) box.style.display = 'flex';
+  if (h) h.checked = !!j.aktiv;
+  if (k) k.style.display = j.aktiv ? '' : 'none';
+  var a = j.aussteller || {};
+  if (gv_El('gv-aussteller')) gv_El('gv-aussteller').textContent = [a.name, [a.plz, a.ort].filter(Boolean).join(' ')].filter(Boolean).join(', ') || 'Stammdaten fehlen';
+  if (gv_El('gv-nummer')) gv_El('gv-nummer').textContent = j.naechste_nummer || '–';
+}
+function gvLaden() {
+  return fetch(API + '/api/mandant/gutschriftverfahren').then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) { if (j && j.verfuegbar) gv_Anzeigen(j); return j; }).catch(function () { return null; });
+}
+async function gvSchalter(an) {
+  var st = gv_El('gv-schalter-status');
+  try {
+    var r = await fetch(API + '/api/mandant/gutschriftverfahren', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ aktiv: !!an }) });
+    var j = await r.json();
+    if (!r.ok) throw new Error(j.error || j.message || 'Nicht gespeichert');
+    gv_Anzeigen(j);
+    if (st) { st.textContent = an ? 'Eingeschaltet.' : 'Ausgeschaltet.'; st.style.color = 'var(--success)'; }
+  } catch (e) {
+    if (gv_El('gv-schalter')) gv_El('gv-schalter').checked = !an;
+    if (st) { st.textContent = e.message || 'Nicht gespeichert.'; st.style.color = 'var(--danger)'; }
+  }
+}
+function gvOeffnen() {
+  if (!gv_El('gv-datum').value) gv_El('gv-datum').value = gv_Heute();
+  if (!gv_El('gv-positionen').children.length) gvZeileNeu();
+  gvLaden();
+  fetch(API + '/api/suppliers').then(function (r) { return r.ok ? r.json() : []; }).then(function (l) {
+    gv_Lieferanten = Array.isArray(l) ? l : [];
+    var w = gv_El('gv-l-wahl'), alt = w.value;
+    w.innerHTML = '<option value="">– von Hand eingeben –</option>' + gv_Lieferanten.slice().sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || ''), 'de'); })
+      .map(function (s) { return '<option value="' + esc(s.id) + '">' + esc(s.name) + (s.city ? ' (' + esc(s.city) + ')' : '') + '</option>'; }).join('');
+    w.value = alt;
+  }).catch(function () {});
+}
+function gvLieferantWahl() {
+  var id = gv_El('gv-l-wahl').value, s = gv_Lieferanten.find(function (x) { return String(x.id) === String(id); });
+  if (!s) return;
+  var setze = function (feld, wert) { gv_El(feld).value = wert || ''; };
+  // Der Lieferantenstamm führt Straße und Hausnummer in EINEM Feld und keine Steuernummer
+  setze('gv-l-name', s.name); setze('gv-l-strasse', s.street); setze('gv-l-hausnummer', s.house_number); setze('gv-l-plz', s.post_code); setze('gv-l-ort', s.city);
+  setze('gv-l-ust', s.vat_id); setze('gv-l-steuernummer', s.tax_registration_id); setze('gv-l-email', s.email); setze('gv-l-telefon', s.phone);
+  setze('gv-l-ansprechpartner', s.contact_name); setze('gv-l-iban', s.iban); setze('gv-l-bic', s.bic);
+  gvGeaendert();
+}
+function gvZeileNeu() {
+  var einheiten = (gv_Info && gv_Info.einheiten) || { C62: 'Stk', LS: 'Pauschal', HUR: 'Std', KGM: 'kg', TNE: 't', MTR: 'm', MTK: 'm²', MTQ: 'm³', LTR: 'l', KWH: 'kWh' };
+  var gesehen = {}, opt = Object.keys(einheiten).filter(function (c) { var n = einheiten[c]; if (gesehen[n]) return false; gesehen[n] = 1; return true; })
+    .map(function (c) { return '<option value="' + esc(c) + '">' + esc(einheiten[c]) + '</option>'; }).join('');
+  var tr = document.createElement('tr');
+  tr.innerHTML = '<td><input class="gv-p-bez" placeholder="Bezeichnung der Lieferung oder Leistung"></td>'
+    + '<td><input class="gv-p-menge" value="1" inputmode="decimal" style="text-align:right"></td>'
+    + '<td><select class="gv-p-einheit">' + opt + '</select></td>'
+    + '<td><input class="gv-p-preis" inputmode="decimal" placeholder="0,00" style="text-align:right"></td>'
+    + '<td><input class="gv-p-satz" value="19" inputmode="decimal" style="text-align:right"></td>'
+    + '<td class="gv-p-netto" style="text-align:right;white-space:nowrap">–</td>'
+    + '<td><button onclick="gvZeileWeg(this)" title="Position entfernen" style="font-size:12px;padding:2px 8px">&#10005;</button></td>';
+  gv_El('gv-positionen').appendChild(tr);
+  gvGeaendert();
+}
+function gvZeileWeg(knopf) { var tr = knopf.closest('tr'); if (tr) tr.remove(); if (!gv_El('gv-positionen').children.length) gvZeileNeu(); gvGeaendert(); }
+function gvGeaendert() {
+  // jede Änderung nach dem Prüfen verlangt ein neues Prüfen
+  gv_Geprueft = false;
+  if (gv_El('gv-ausstellen')) gv_El('gv-ausstellen').disabled = true;
+  var netto = 0, steuer = 0;
+  Array.prototype.forEach.call(gv_El('gv-positionen').children, function (tr) {
+    var n = Math.round(gv_Zahl(tr.querySelector('.gv-p-menge').value) * gv_Zahl(tr.querySelector('.gv-p-preis').value) * 100) / 100;
+    tr.querySelector('.gv-p-netto').textContent = gv_Geld(n);
+    netto += n; steuer += n * gv_Zahl(tr.querySelector('.gv-p-satz').value) / 100;
+  });
+  gv_El('gv-summe').innerHTML = 'Netto ' + gv_Geld(netto) + ' · Umsatzsteuer ' + gv_Geld(steuer) + ' · <b>Gutschriftsbetrag ' + gv_Geld(netto + steuer) + '</b>';
+}
+function gv_Daten() {
+  var w = function (id) { return gv_El(id).value.trim(); };
+  return {
+    lieferant: { lieferant_id: w('gv-l-wahl'), name: w('gv-l-name'), strasse: w('gv-l-strasse'), hausnummer: w('gv-l-hausnummer'), plz: w('gv-l-plz'), ort: w('gv-l-ort'),
+      ust_id: w('gv-l-ust'), steuernummer: w('gv-l-steuernummer'), email: w('gv-l-email'), telefon: w('gv-l-telefon'), ansprechpartner: w('gv-l-ansprechpartner'),
+      iban: w('gv-l-iban'), bic: w('gv-l-bic') },
+    datum: w('gv-datum'), leistungsdatum: w('gv-leistungsdatum'), zahlungsziel_tage: w('gv-ziel'), zahlungsbedingung: w('gv-bedingung'), notiz: w('gv-notiz'),
+    positionen: Array.prototype.map.call(gv_El('gv-positionen').children, function (tr) {
+      return { bezeichnung: tr.querySelector('.gv-p-bez').value.trim(), menge: tr.querySelector('.gv-p-menge').value.trim() || '1', einheit: tr.querySelector('.gv-p-einheit').value,
+        einzelpreis: tr.querySelector('.gv-p-preis').value.trim() || '0', steuersatz: tr.querySelector('.gv-p-satz').value.trim() || '0' };
+    })
+  };
+}
+function gv_KositText(k) {
+  if (!k) return '';
+  if (k.ausstehend) return '<span style="color:var(--text2)">Amtliche Prüfung (KoSIT) läuft …</span>';
+  if (!k.verfuegbar) return '<span style="color:var(--text2)">Amtliche Prüfung (KoSIT) auf diesem Rechner nicht verfügbar' + (k.grund ? ': ' + esc(k.grund) : '') + '</span>';
+  if (k.gueltig) return '<span style="color:var(--success)">&#10003; Amtliche Prüfung (KoSIT): gültig' + (k.warnungen ? ', ' + k.warnungen + ' Hinweis(e)' : '') + '</span>';
+  return '<span style="color:var(--danger)">&#10007; Amtliche Prüfung (KoSIT): ' + (k.fehler || 0) + ' Fehler</span>'
+    + (k.details || []).map(function (t) { return '<div style="font-size:12px;color:var(--danger);margin-left:16px">' + esc(t) + '</div>'; }).join('');
+}
+function gv_Liste(eintraege, farbe, zeichen) {
+  return (eintraege || []).map(function (f) { return '<div style="font-size:13px;color:var(--' + farbe + ');margin-bottom:4px">' + zeichen + ' ' + esc(f.meldung || String(f)) + (f.regel ? ' <span style="color:var(--text2);font-size:11px">[' + esc(f.regel) + ']</span>' : '') + '</div>'; }).join('');
+}
+async function gvSenden(ausstellen) {
+  var stand = gv_El('gv-stand'), erg = gv_El('gv-ergebnis'), d = gv_Daten();
+  if (ausstellen && !gv_Geprueft) { stand.textContent = 'Bitte zuerst prüfen.'; return false; }
+  if (ausstellen && !confirm('Gutschrift jetzt ausstellen?\n\nLieferant: ' + d.lieferant.name + '\nKonto: ' + d.lieferant.iban + '\n\nDer Beleg erhält eine Nummer aus dem Kreis GV-… und erscheint in der Rechnungsliste als Eingang.')) return false;
+  if (ausstellen) gv_El('gv-ausstellen').disabled = true;
+  stand.textContent = ausstellen ? 'Gutschrift wird ausgestellt …' : 'Wird geprüft (mit amtlicher Prüfung, das dauert einige Sekunden) …';
+  if (!ausstellen) { d.nur_pruefen = true; d.kosit = true; }
+  var r, j;
+  try { r = await fetch(API + '/api/gutschriftverfahren', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(d) }); j = await r.json(); }
+  catch (e) { stand.textContent = 'Keine Verbindung zum Server.'; return false; }
+  var html = gv_Liste(j.fehler, 'danger', '&#10007;') + gv_Liste(j.warnungen, 'warning', '&#9888;');
+  if (j.dublette_von) html += '<div style="font-size:13px;margin-top:6px"><a href="#" onclick="openDetail(\'' + esc(j.id) + '\');return false" style="color:var(--accent)">' + esc(j.dublette_von) + ' öffnen</a></div>';
+  if (!ausstellen) {
+    if (!r.ok) { stand.textContent = j.error || j.message || 'Nicht möglich.'; erg.innerHTML = html; return false; }
+    gv_Geprueft = !!j.gueltig;
+    gv_El('gv-ausstellen').disabled = !gv_Geprueft;
+    stand.textContent = j.gueltig ? 'In Ordnung – Sie können ausstellen.' : (j.fehler || []).length + ' Fehler – bitte berichtigen.';
+    erg.innerHTML = (j.gueltig ? '<div style="font-size:13px;color:var(--success);margin-bottom:4px">&#10003; Eingebaute Prüfung ohne Fehler · vorgesehene Nummer ' + esc(j.nummer_vorschau) + ' · Gutschriftsbetrag ' + gv_Geld(j.brutto) + '</div>' : '')
+      + html + (j.kosit ? '<div style="font-size:13px;margin-top:4px">' + gv_KositText(j.kosit) + '</div>' : '');
+    return !!j.gueltig;
+  }
+  if (!r.ok || !j.angelegt) { stand.textContent = j.error || j.message || 'Nicht ausgestellt.'; erg.innerHTML = html; gv_Geprueft = false; return false; }
+  gv_Geprueft = false;
+  stand.textContent = 'Ausgestellt: ' + j.nummer;
+  erg.innerHTML = '<div style="font-size:14px;color:var(--success);font-weight:600;margin-bottom:6px">&#10003; Gutschrift ' + esc(j.nummer) + ' ausgestellt · ' + gv_Geld(j.brutto) + '</div>'
+    + '<div style="font-size:13px;display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">'
+    + '<a href="' + API + esc(j.pdf_url) + '" target="_blank" style="color:var(--accent)">PDF ansehen</a>'
+    + '<a href="' + API + esc(j.pdf_url) + '?download=1" style="color:var(--accent)">PDF herunterladen</a>'
+    + '<a href="' + API + esc(j.xml_url) + '" style="color:var(--accent)">E-Rechnung (XML) herunterladen</a>'
+    + '<a href="#" onclick="openDetail(\'' + esc(j.id) + '\');return false" style="color:var(--accent)">In der Rechnungsliste öffnen</a></div>'
+    + '<div id="gv-kosit-stand" style="font-size:13px">' + gv_KositText(j.kosit) + '</div>'
+    + '<div style="font-size:12px;color:var(--text2);margin-top:6px">Bitte übermitteln Sie dem Lieferanten die E-Rechnung (XML) zusammen mit dem PDF. Widerspricht er, gilt die Gutschrift nicht mehr als Rechnung.</div>' + html;
+  if (typeof toast === 'function') toast('Gutschrift ' + j.nummer + ' ausgestellt');
+  gvLaden();
+  gv_KositNachsehen(j.id, 0);
+  return true;
+}
+function gv_KositNachsehen(id, versuch) {
+  clearTimeout(gv_Uhr);
+  if (versuch > 40) return;
+  gv_Uhr = setTimeout(function () {
+    fetch(API + '/api/gutschriftverfahren/' + encodeURIComponent(id)).then(function (r) { return r.ok ? r.json() : null; }).then(function (j) {
+      var z = gv_El('gv-kosit-stand'); if (!j || !z) return;
+      z.innerHTML = gv_KositText(j.kosit);
+      if (j.kosit && j.kosit.ausstehend) gv_KositNachsehen(id, versuch + 1);
+    }).catch(function () {});
+  }, 3000);
+}
+(function () { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', gvLaden); else gvLaden(); })();
 
 /* ── Gestaltung der Belege (24.11.2026) ── */
 var _dsFelder = ['farbe_haupt', 'farbe_akzent', 'logo_position', 'logo_groesse_mm', 'tabellenkopf', 'titel_groesse', 'firmenblock', 'zebra', 'fusszeile_zusatz'];
@@ -4531,7 +4934,7 @@ async function ladeBenutzer() {
   var n = d.benutzer.length;
   document.getElementById('benutzer-zahl').textContent = n + (n === 1 ? ' Benutzer' : ' Benutzer') + (d.grenze ? ' von höchstens ' + d.grenze : '');
   var h = 'Jeder Mitarbeiter meldet sich mit eigenem Benutzernamen oder seiner E-Mail-Adresse an. Alle arbeiten im selben Bestand; im Verlauf steht, wer was geändert hat.';
-  if (d.preis) h += ' Jeder Benutzer wird mit ' + d.preis + ' € im Monat berechnet.';
+  if (d.preis) h += ' Jeder Benutzer wird mit ' + d.preis + ' € zzgl. MwSt. im Monat berechnet.';
   document.getElementById('benutzer-hinweis').textContent = h;
   document.getElementById('benutzer-neu').style.display = d.admin ? '' : 'none';
   var z = d.benutzer.map(function (b) {
@@ -4610,6 +5013,9 @@ async function loadMandantSettings() {
     document.getElementById('s-mandant-name').value = m.name || '';
     document.getElementById('s-mandant-vat').value = m.vat_id || '';
     document.getElementById('s-mandant-taxreg').value = m.tax_registration_id || '';
+    { const ku = document.getElementById('s-mandant-kleinunternehmer'); if (ku) ku.checked = !!m.kleinunternehmer;
+      const ci = document.getElementById('s-mandant-companyid'); if (ci) ci.value = m.company_id || '';
+      const si = document.getElementById('s-mandant-sellerid'); if (si) si.value = m.seller_id || ''; }
     document.getElementById('s-mandant-street').value = m.street || '';
     document.getElementById('s-mandant-plz').value = m.post_code || '';
     document.getElementById('s-mandant-city').value = m.city || '';
@@ -4619,6 +5025,7 @@ async function loadMandantSettings() {
     document.getElementById('s-mandant-iban').value = m.iban_standard || m.iban || '';
     document.getElementById('s-mandant-bic').value = m.bic_standard || m.bic || '';
     const za = m.zahlkonto_alt_info || {};
+    document.getElementById('s-zahlkonto-box').style.display = za.iban ? 'flex' : 'none';   // ohne zweites Konto kein Kasten
     if (za.iban) document.getElementById('s-zahlkonto-alt-iban').textContent = formatIban(za.iban);
     if (za.bank) document.getElementById('s-zahlkonto-alt-bank').textContent = za.bank;
     document.getElementById('s-zahlkonto-alt').checked = !!m.zahlkonto_alt_aktiv;
@@ -4628,7 +5035,7 @@ async function loadMandantSettings() {
   } catch(e) {}
 }
 async function resetAllData() {
-  if (!confirm('Alle Rechnungsdaten wirklich loeschen?\n\nDieser Vorgang kann nicht rueckgaengig gemacht werden.\nStammdaten, Lizenz und E-Mail-Einstellungen bleiben erhalten.')) return;
+  if (!confirm('Alle Rechnungsdaten wirklich löschen?\n\nDieser Vorgang kann nicht rückgängig gemacht werden.\nStammdaten, Lizenz und E-Mail-Einstellungen bleiben erhalten.')) return;
   const res = await fetch(API+'/api/reset-data', {method:'POST'}).then(r=>r.json());
   if (res.success) {
     document.getElementById('reset-result').innerHTML = '<span style="color:var(--success)">&#10003; Alle Daten geloescht</span>';
@@ -4660,6 +5067,9 @@ async function saveMandantSettings() {
     name: document.getElementById('s-mandant-name').value,
     vat_id: document.getElementById('s-mandant-vat').value,
     tax_registration_id: document.getElementById('s-mandant-taxreg').value,
+    kleinunternehmer: !!(document.getElementById('s-mandant-kleinunternehmer') || {}).checked,
+    company_id: (document.getElementById('s-mandant-companyid') || {}).value || '',
+    seller_id: (document.getElementById('s-mandant-sellerid') || {}).value || '',
     street: document.getElementById('s-mandant-street').value,
     post_code: document.getElementById('s-mandant-plz').value,
     city: document.getElementById('s-mandant-city').value,
@@ -4682,6 +5092,7 @@ async function fillSellerFromMandant() {
     const m = await fetch(API+'/api/mandant/settings').then(r=>r.json());
     window._ms2 = {name: m.name || '', v2: m.verkaeufer2_name || '', skonto: !!m.skonto_feld};
     { const sz = document.getElementById('c-skonto-zeile'); if (sz) sz.style.display = m.skonto_feld ? '' : 'none'; }
+    { const sf = document.getElementById('c-steuerfall'); if (sf && !sf.dataset.manuell) { sf.value = m.kleinunternehmer ? 'kleinunternehmer' : 'regel'; } steuerfallAnwenden(); }
     if (m.name) document.getElementById('c-seller-name').value = m.name;
     // Zweiter Verkäufer: gleiche Stammdaten, nur der Name trägt den Zusatz. Jede neue Rechnung beginnt mit Verkäufer 1.
     { const z = document.getElementById('c-seller-wahl-zeile'), w = document.getElementById('c-seller-wahl');
@@ -4716,7 +5127,7 @@ async function loadBuyers() {
     const res = await fetch(API+'/api/buyers').then(r=>r.json());
     _buyers = res.buyers || [];
     const sel = document.getElementById('c-buyer-select');
-    sel.innerHTML = '<option value="">— Empfaenger waehlen (' + _buyers.length + ') —</option>';
+    sel.innerHTML = '<option value="">— Empfänger wählen (' + _buyers.length + ') —</option>';
     _buyers.forEach((b,i) => {
       const salut = b.salutation || '';
       const contact = b.contact_name || '';
@@ -4743,7 +5154,7 @@ function renderBuyerTable() {
   const tbody = document.getElementById('buyer-table-body');
   if (!tbody) return;
   if (_buyers.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2);text-align:center">Keine Empfaenger gespeichert</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="color:var(--text2);text-align:center">Keine Empfänger gespeichert</td></tr>';
     return;
   }
   tbody.innerHTML = _buyers.map(b => {
@@ -4977,7 +5388,7 @@ async function deleteBuyer(id, name) {
   loadBuyers();
 }
 function exportBuyersCsv() {
-  if (!_buyers.length) { toast('Keine Empfaenger vorhanden', 'error'); return; }
+  if (!_buyers.length) { toast('Keine Empfänger vorhanden', 'error'); return; }
   let csv = 'Firma;Strasse;PLZ;Ort;E-Mail;Referenz;USt-ID;Anrede;Ansprechpartner\n';
   _buyers.forEach(b => {
     csv += [b.name, b.street||'', b.post_code||'', b.city||'', b.email||'', b.reference||'', b.vat_id||'', b.salutation||'', b.contact_name||''].join(';') + '\n';
@@ -5071,7 +5482,7 @@ function _buyerFormPayload() {
   };
 }
 async function updateSelectedBuyer() {
-  if (!_selectedBuyerId) { toast('Kein Empfaenger ausgewaehlt', 'error'); return; }
+  if (!_selectedBuyerId) { toast('Kein Empfänger ausgewählt', 'error'); return; }
   // Hat jemand anders (Kundendaten-Formular, PM, zweiter Tab) den Datensatz seit dem Öffnen geändert?
   const frisch = await _buyerFrisch(_selectedBuyerId);
   if (frisch && _buyerFormBasis && _buyerVergleich(frisch) !== _buyerFormBasis) {
@@ -6386,6 +6797,7 @@ function renderStepPositions(key) {
   if (key === 'invoice') {
     pdfBtn = '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button onclick="generateInvoiceFromTxn()" class="btn-primary" style="font-size:12px;padding:4px 12px">&#9889; XRechnung erzeugen</button><button onclick="generatePdf(\'invoice\')" style="font-size:12px;padding:4px 12px">&#128196; PDF-Vorschau</button>'+(step._registriert?'<span style="font-size:11px;color:var(--success);align-self:center" title="Im Rechnungsregister und Archiv">&#10003; Im System</span>':'<span style="font-size:11px;color:var(--warning);align-self:center" title="Nur PDF erzeugt \u2014 noch nicht im Rechnungsregister/Archiv">&#9888; noch nicht im Rechnungsregister</span>')+'</div>';
   } else if (key === 'dunning') {
+    setTimeout(mahnMaskeVorbelegen, 0);    // Vorgabe: offener Betrag + nächste Stufe (25.11.2026)
     pdfBtn = '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center"><select id="dunning-level" style="font-size:12px;padding:2px 6px"><option value="1">Zahlungserinnerung</option><option value="2">1. Mahnung</option><option value="3">2. Mahnung</option></select><input id="dunning-inv-ref" placeholder="Rechnungsnr." style="font-size:12px;width:120px"><input id="dunning-inv-amount" type="number" step="0.01" placeholder="Betrag" style="font-size:12px;width:90px"><input id="dunning-fee" type="number" step="0.01" placeholder="Geb." style="font-size:12px;width:70px" value="0"><button onclick="generateDunningPdf()" style="font-size:12px;padding:4px 12px">&#128196; Mahnung</button></div>';
   } else {
     pdfBtn = '<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"><button onclick="generatePdf(\''+key+'\')" style="font-size:12px;padding:4px 12px">&#128196; PDF erzeugen</button>'+(step.document_id?'<a href="'+API+'/api/documents/'+(step.reference||key)+'.pdf" target="_blank" style="font-size:12px;padding:4px 12px;text-decoration:none;border:1px solid var(--border);border-radius:var(--radius);color:var(--accent)">&#128229; PDF</a>':'')+'</div>';
@@ -7496,11 +7908,21 @@ function renderDunningTable(items) {
   tbody.innerHTML = items.map(o => {
     const urgency = o.days_overdue > 42 ? 'color:var(--danger);font-weight:500' :
                     o.days_overdue > 28 ? 'color:var(--warning)' : '';
+    // 25.11.2026: Rechnungen ohne Vorgang (o.invoice_id) bekommen ihr Mahnschreiben direkt aus der Rechnung
+    const ohneVorgang = !o.transaction_id && o.invoice_id;
+    const wartet = o.wartet_bis ? 'wartend bis ' + o.wartet_bis.substring(0,10).split('-').reverse().join('.') : 'wartend';
     const actionBtn = o.needs_action
-      ? `<button onclick="openTxnForDunning('${o.transaction_id}')" style="font-size:11px;padding:2px 8px">Mahnung erzeugen</button>`
-      : '<span style="color:var(--text2);font-size:11px">wartend</span>';
+      ? (ohneVorgang
+          ? `<button onclick="mahnungDirekt('${o.invoice_id}', ${Number(o.next_dunning_level)||1})" style="font-size:11px;padding:2px 8px">Mahnung erzeugen</button>`
+          : `<button onclick="openTxnForDunning('${o.transaction_id}')" style="font-size:11px;padding:2px 8px">Mahnung erzeugen</button>`)
+      : `<span style="color:var(--text2);font-size:11px">${wartet}</span>`;
+    const ersteZelle = ohneVorgang
+      ? `<td style="font-size:12px;color:var(--text2);cursor:pointer" title="Rechnung ohne Vorgang – Rechnung öffnen" onclick="openDetail('${o.invoice_id}')">ohne Vorgang</td>`
+      : `<td style="font-family:var(--mono);font-size:12px;cursor:pointer" onclick="openTxnDetail('${o.transaction_id}')">${o.transaction_id}</td>`;
+    window._mahnListe = window._mahnListe || {};
+    if (ohneVorgang) window._mahnListe[o.invoice_id] = o;
     return `<tr>
-      <td style="font-family:var(--mono);font-size:12px;cursor:pointer" onclick="openTxnDetail('${o.transaction_id}')">${o.transaction_id}</td>
+      ${ersteZelle}
       <td>${esc(o.buyer_name||'–')}</td>
       <td style="font-family:var(--mono);font-size:12px">${esc(o.invoice_reference||'–')}</td>
       <td style="text-align:right">${fmt(o.amount)} €</td>
@@ -7515,6 +7937,55 @@ function renderDunningTable(items) {
 
 function openTxnForDunning(tid) {
   openTxnDetail(tid).then(() => selectStep('dunning'));
+}
+
+// Mahnschreiben zu einer Rechnung OHNE Vorgang erzeugen (25.11.2026): Rückfrage mit Stufe, offenem Betrag und Gebühr,
+// dann PDF öffnen. Die Stufe wird an der Rechnung vermerkt; versendet wird hier nichts.
+async function mahnungDirekt(invId, stufe) {
+  const o = (window._mahnListe || {})[invId] || {};
+  const name = o.next_subject || ('Mahnung Stufe ' + stufe);
+  const gebuehr = Number(o.next_fee || 0);
+  const frage = name + ' zur Rechnung ' + (o.invoice_reference || '') + (o.buyer_name ? ' (' + o.buyer_name + ')' : '') + ' erzeugen?\n\n'
+    + 'Offener Betrag: ' + fmt(o.amount || 0) + ' EUR' + (gebuehr ? '\nMahngebühr: ' + fmt(gebuehr) + ' EUR\nGesamtforderung: ' + fmt(Number(o.amount || 0) + gebuehr) + ' EUR' : '')
+    + '\n\nDas Mahnschreiben wird als PDF geöffnet und an der Rechnung vermerkt. Versendet wird es dabei nicht.';
+  if (!confirm(frage)) return;
+  toast('Mahnung wird erzeugt...', 'info');
+  try {
+    const res = await fetch(API+'/api/dunning/invoice/'+invId+'/generate', {
+      method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({level: stufe})
+    }).then(r=>r.json());
+    if (res.error) { toast(res.error, 'error'); return; }
+    toast((res.subject || 'Mahnung') + ' erzeugt: ' + res.document.filename);
+    window.open(API + res.download_url, '_blank');
+    runDunningCheck();
+  } catch(e) { toast('Fehler: '+e, 'error'); }
+}
+
+// Mahn-Maske des Vorgangs vorbelegen (25.11.2026): Rechnungsnummer, OFFENER Betrag (nach Zahlungen und Gutschriften),
+// nächste Stufe nach der zuletzt erzeugten und deren Gebühr. Alle Felder bleiben änderbar.
+async function mahnMaskeVorbelegen() {
+  if (!_currentTxn) return;
+  const tid = _currentTxn.id;
+  try {
+    const r = await fetch(API+'/api/dunning/vorgabe/'+tid);
+    if (!r.ok) return;
+    const v = await r.json();
+    if (!_currentTxn || _currentTxn.id !== tid) return;
+    const stufe = document.getElementById('dunning-level'), ref = document.getElementById('dunning-inv-ref'),
+          betrag = document.getElementById('dunning-inv-amount'), geb = document.getElementById('dunning-fee');
+    if (!stufe || !ref || !betrag || !geb) return;
+    if (!ref.value && v.reference) ref.value = v.reference;
+    if (!betrag.value && v.amount != null) betrag.value = Number(v.amount).toFixed(2);
+    if (v.level) { stufe.value = String(v.level); geb.value = Number(v.fee || 0).toFixed(2); }
+    const alt = document.getElementById('dunning-vorgabe-hinweis');
+    if (alt) alt.remove();
+    const de = x => Number(x || 0).toLocaleString('de-DE', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+    let text = v.erledigt
+      ? 'Die Rechnung ' + esc(v.reference) + ' ist erledigt (bezahlt, gutgeschrieben oder storniert) – eine Mahnung ist nicht mehr nötig.'
+      : 'Vorgabe: offener Betrag ' + de(v.amount) + ' EUR' + (v.registriert ? ' (nach Zahlungen und Gutschriften)' : '')
+        + (v.last_level ? ' · zuletzt erzeugt: Stufe ' + v.last_level : ' · bisher keine Mahnung erzeugt') + '.';
+    betrag.closest('div').insertAdjacentHTML('afterend', '<div id="dunning-vorgabe-hinweis" style="font-size:11px;color:var(--text2);margin-top:4px">' + text + '</div>');
+  } catch(e) { /* ohne Vorgabe bleibt die Maske wie bisher leer */ }
 }
 
 // Mahnung-Button aus der Rechnungsliste (überfällige Ausgangsrechnung): zur Mahnungen-Seite
@@ -7861,7 +8332,7 @@ async function bankInitConnection() {
 
 async function bankEntsperren(id) {
   if (!confirm('Sperre aufheben?\n\nDie Sperre wurde gesetzt, weil die Bank einen PIN-Fehler gemeldet hat.\n'
-    + 'Bitte ZUERST im Online-Banking der Bank anmelden und pruefen, dass die PIN stimmt und der\n'
+    + 'Bitte ZUERST im Online-Banking der Bank anmelden und prüfen, dass die PIN stimmt und der\n'
     + 'Zugang nicht bankseitig gesperrt ist — nach mehreren Fehlversuchen sperrt die Bank den Zugang.')) return;
   try {
     const r = await fetch(API + '/api/bank/connection/' + encodeURIComponent(id) + '/entsperren', { method: 'POST' })
@@ -8377,7 +8848,8 @@ async function bankPruefBestaetigen() {
   bankPruefSchliessen();
   if (!r.ok) return toast('Zuordnung fehlgeschlagen: ' + (r.error || ''), 'error');
   if (p.ausSuche) hideBankMatchModal();
-  toast('Buchung verlinkt');
+  if (r.teilzahlung) toast('Teilzahlung zugeordnet – Rechnung ' + (r.invoice_number || '') + ' bleibt offen, Restbetrag ' + Number(r.open_amount || 0).toLocaleString('de-DE', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' EUR', 'warn');
+  else toast('Buchung verlinkt');
   loadBankTxns();
 }
 
@@ -10633,7 +11105,13 @@ async function bulkWorkflow() {
 async function bulkExport() {
   const res = await fetch(API+'/api/bulk/export', {method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({invoice_ids:Array.from(bulkSelected), format:'DATEV'})}).then(r=>r.json());
-  toast(`${res.success} exportiert, ${res.skipped} übersprungen, ${res.failed} fehlgeschlagen`);
+  if (res.content) {
+    // 25.11.2026: die Auswahl kommt als EINE Datei an den Browser (freigegebene, exportierte und bezahlte Rechnungen)
+    dateiHerunterladen(res.filename, res.content, 'text/csv;charset=utf-8');
+    toast(`DATEV-Export heruntergeladen: ${res.download_count} Rechnung(en) in ${res.filename}`);
+  } else {
+    toast(`${res.success} exportiert, ${res.skipped} übersprungen, ${res.failed} fehlgeschlagen`);
+  }
   clearBulkSelection(); loadInvoices();
 }
 
@@ -10668,7 +11146,12 @@ async function saveKontierung() {
   if (!account) { toast('Sachkonto eingeben', 'error'); return; }
   const res = await fetch(API+`/api/invoices/${currentInvoiceId}/accounting`, {method:'POST',
     headers:{'Content-Type':'application/json'}, body:JSON.stringify({account, cost_center:costcenter})}).then(r=>r.json());
-  if (res.saved) { toast(`Kontierung gespeichert: ${account}`); loadKontierung(currentInvoiceId); }
+  if (res.saved) {
+    toast(`Kontierung gespeichert: ${account}`);
+    const _inv = window._currentInvoiceData;
+    if (_inv && _inv.id === currentInvoiceId) _inv.kontierung = {account: account, cost_center: costcenter};
+    loadKontierung(currentInvoiceId).then(() => kontierungGespeichertZeigen(_inv && _inv.id === currentInvoiceId ? _inv : null));
+  }
 }
 
 // ── Stellvertretung ──
@@ -10786,14 +11269,14 @@ async function loadLicense() {
         <div><strong>Gueltig bis:</strong> ${lic.valid_until}</div>
         <div><strong>Lizenz:</strong> ${esc(lic.license_key_short)}</div>
         <div><strong>Verbleibend:</strong> ${lic.days_remaining} Tage</div>
-      </div>` + (lic.days_remaining <= 30 ? `<div style="margin-top:8px;padding:8px 12px;background:var(--warning-bg);border-radius:var(--radius);font-size:12px;color:var(--warning)">&#9888; Lizenz laeuft in ${lic.days_remaining} Tagen ab. Bitte rechtzeitig verlaengern.</div>` : '');
+      </div>` + (lic.days_remaining <= 30 ? `<div style="margin-top:8px;padding:8px 12px;background:var(--warning-bg);border-radius:var(--radius);font-size:12px;color:var(--warning)">&#9888; Lizenz läuft in ${lic.days_remaining} Tagen ab. Bitte rechtzeitig verlaengern.</div>` : '');
       form.style.display = 'none';
       banner.style.display = 'none';
     } else if (lic.status === 'TRIAL') {
       badge.innerHTML = `<span class="badge" style="background:var(--info-bg);color:var(--info)">Testversion</span>`;
       info.innerHTML = `<div style="padding:10px 14px;background:var(--info-bg);border-radius:var(--radius);font-size:13px;color:var(--info)">
         <strong>Testversion:</strong> noch ${lic.trial_days_left} Tage verbleibend.
-        <br>Nach Ablauf ist ein Lizenzschluessel erforderlich.</div>`;
+        <br>Nach Ablauf ist ein Lizenzschlüssel erforderlich.</div>`;
       form.style.display = 'block';
       banner.style.display = 'block';
       banner.style.background = 'var(--info-bg)';
@@ -10802,18 +11285,18 @@ async function loadLicense() {
     } else if (lic.status === 'WRONG_DEVICE') {
       badge.innerHTML = `<span class="badge invalid">Falscher Rechner</span>`;
       info.innerHTML = `<div style="padding:10px 14px;background:var(--danger-bg);border-radius:var(--radius);font-size:13px;color:var(--danger)">
-        <strong>Dieser Lizenzschluessel gehoert zu einem anderen Rechner.</strong><br>
-        Bitte fordern Sie einen neuen Schluessel fuer diese Geraete-ID an.</div>`;
+        <strong>Dieser Lizenzschlüssel gehört zu einem anderen Rechner.</strong><br>
+        Bitte fordern Sie einen neuen Schlüssel für diese Geräte-ID an.</div>`;
       form.style.display = 'block';
       banner.style.display = 'block';
       banner.style.background = 'var(--danger-bg)';
       banner.style.color = 'var(--danger)';
-      banner.innerHTML = `&#9888; Lizenz gehoert zu anderem Rechner &ndash; Nur Lesezugriff.`;
+      banner.innerHTML = `&#9888; Lizenz gehört zu anderem Rechner &ndash; Nur Lesezugriff.`;
     } else {
       badge.innerHTML = `<span class="badge invalid">Abgelaufen</span>`;
       info.innerHTML = `<div style="padding:10px 14px;background:var(--danger-bg);border-radius:var(--radius);font-size:13px;color:var(--danger)">
         <strong>${esc(lic.status_text)}</strong><br>Schreibende Funktionen (Erstellen, Freigeben, Export, Storno) sind gesperrt.
-        Bitte geben Sie einen gueltigen Lizenzschluessel ein.</div>`;
+        Bitte geben Sie einen gültigen Lizenzschlüssel ein.</div>`;
       form.style.display = 'block';
       banner.style.display = 'block';
       banner.style.background = 'var(--danger-bg)';
