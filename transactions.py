@@ -171,6 +171,20 @@ def _empty_delivery_step() -> dict:
     return step
 
 
+def _abschlag_skonto_setzen(p: dict, data: dict) -> None:
+    """Skonto an der Abschlagsrechnung (24.11.2026): Prozent und Frist in Tagen; leer oder ungültig = kein Skonto."""
+    if "skonto_percent" not in data and "skonto_days" not in data:
+        return
+    try:
+        proz = float(str(data.get("skonto_percent", p.get("skonto_percent")) or 0).replace(",", "."))
+        tage = int(float(str(data.get("skonto_days", p.get("skonto_days")) or 0).replace(",", ".")))
+    except (TypeError, ValueError):
+        proz, tage = 0.0, 0
+    if not (0 < proz < 100 and tage > 0):
+        proz, tage = 0.0, 0
+    p["skonto_percent"], p["skonto_days"] = proz, tage
+
+
 def _empty_payment_invoice(position: int, ref: str) -> dict:
     """Eine Abschlagsrechnung (Anzahlung / Teilrechnung) im Vorgang."""
     return {
@@ -1032,6 +1046,7 @@ class TransactionManager:
                 p["tax_rate"] = _satz(data.get("tax_rate"))
             if "description" in data:
                 p["description"] = str(data.get("description") or "")
+            _abschlag_skonto_setzen(p, data)
             _recalc_payment_invoice_gross(p)
             payments.append(p)
             t["updated_at"] = _ts()
@@ -1065,6 +1080,7 @@ class TransactionManager:
                         p[key] = str(data[key]).strip() if isinstance(data[key], str) else data[key]
                 if "amount_net" in data:
                     p["amount_net"] = float(data.get("amount_net") or 0)
+                _abschlag_skonto_setzen(p, data)
                 if "tax_rate" in data:
                     p["tax_rate"] = _satz(data.get("tax_rate"))
                 _recalc_payment_invoice_gross(p)

@@ -245,6 +245,7 @@ def parse_cii(xml_bytes: bytes, source_file: str = "") -> Invoice:
             inv.allowances_charges.append(_nachlass(ac))
         inv.prepaid_amount = _d(st, "ram:SpecifiedTradeSettlementHeaderMonetarySummation/ram:TotalPrepaidAmount")
         inv.preceding_invoice = _t(st, "ram:InvoiceReferencedDocument/ram:IssuerAssignedID")
+        inv.preceding_invoice_date = _datum(st, "ram:InvoiceReferencedDocument/ram:FormattedIssueDateTime")  # BT-26
         # Befreiungsgrund je Steuerkategorie (Anzeige / Pruefung)
     inv.payment = pay
 

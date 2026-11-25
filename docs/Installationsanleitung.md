@@ -1,6 +1,6 @@
 # Installationsanleitung
 
-**E-Rechnungssystem** — Version 4.0
+**E-Rechnungssystem** — Version 5.0
 
 ---
 
@@ -213,4 +213,4 @@ E-Mail: beratung@rolfkrause.com
 
 ---
 
-*E-Rechnungssystem v4.0 — XRechnung | ZUGFeRD | EN 16931*
+*E-Rechnungssystem v5.0 — XRechnung | ZUGFeRD | EN 16931*

@@ -271,6 +271,7 @@ def parse_xrechnung(xml_bytes: bytes, source_file: str = "") -> Invoice:
     inv.contract_reference = _find(root, "cac:ContractDocumentReference/cbc:ID")
     inv.project_reference = _find(root, "cac:ProjectReference/cbc:ID")
     inv.preceding_invoice = _find(root, "cac:BillingReference/cac:InvoiceDocumentReference/cbc:ID")
+    inv.preceding_invoice_date = _find_date(root, "cac:BillingReference/cac:InvoiceDocumentReference/cbc:IssueDate")  # BT-26
 
     # Dokument-Nachlässe/Zuschläge
     for ac_el in root.findall("cac:AllowanceCharge", NS):

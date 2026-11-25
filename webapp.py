@@ -119,9 +119,14 @@ def _anm_erfolg():
     _ANM_FEHL.pop(_anm_ip(), None)
 
 
+def _ist_benutzer(u, name):
+    """Trifft der eingegebene Name dieses Konto? Benutzername genau, E-Mail-Adresse ohne Groß/Klein."""
+    n = (name or "").strip()
+    return bool(n) and (u.get("username") == n or ((u.get("email") or "").lower() == n.lower() and "@" in n))
+
 def _check_login(username, password):
     for u in _load_users():
-        if u["username"] == username and check_password_hash(u["password_hash"], password):
+        if _ist_benutzer(u, username) and check_password_hash(u["password_hash"], password):
             return True
     return False
 
@@ -208,7 +213,7 @@ def login():
             session.clear()
             session.permanent = True
             session["logged_in"] = True
-            session["username"] = username
+            session["username"] = next((u["username"] for u in _load_users() if _ist_benutzer(u, username)), username)
             return redirect("/")
         else:
             _anm_fehlversuch()
@@ -265,7 +270,7 @@ def change_password():
         return jsonify({"ok": False, "error": f"Zu viele Fehlversuche. Bitte in {_sperre} Minuten erneut."}), 429
     users = _load_users()
     for u in users:
-        if u["username"] == username and check_password_hash(u["password_hash"], old_pw):
+        if _ist_benutzer(u, username) and check_password_hash(u["password_hash"], old_pw):
             u["password_hash"] = generate_password_hash(new_pw)
             _save_users(users)
             _anm_erfolg()
@@ -273,6 +278,260 @@ def change_password():
             return jsonify({"ok": True})
     _anm_fehlversuch()
     return jsonify({"ok": False, "error": "Benutzername oder aktuelles Passwort falsch"}), 401
+
+
+# ── Benutzerkonten je Firma (24.11.2026) ────────────────────────────────────────────────────────────────────────────
+# Eine Installation = eine Firma. Darunter eigene Konten je Mitarbeiter (Benutzername + E-Mail-Adresse + Passwort).
+# Das erste Konto verwaltet die anderen; weitere Verwalter sind möglich. Alle Konten sehen denselben Bestand.
+# Im Einzelplatzbetrieb ohne Anmeldung (keine auth.json) gibt es keine Konten und keine Verwaltung.
+import threading as _thr
+import time as _zeit
+
+# Schalter: Benutzerkonten, Schutz bei gleichzeitigem Bearbeiten und das Gestaltungswerkzeug gehören nur zur
+# Kundenversion. Das Bauskript der Kundenversion setzt den Wert auf True; in der Quelle bleibt er aus.
+_KUNDENFUNKTIONEN = True
+
+def _benutzer_admin(users, u):
+    """Verwalter ist, wer so markiert ist — in Altbeständen ohne Markierung das erste Konto."""
+    if any(x.get("admin") for x in users):
+        return bool(u.get("admin"))
+    return bool(users) and users[0] is u
+
+def _akt_benutzer():
+    try:
+        return (session.get("username") or "").strip()
+    except Exception:
+        return ""
+
+def _wer(data, standard="web-user"):
+    """Wer hat die Aktion ausgelöst? Der angemeldete Benutzer — nicht, was die Oberfläche mitschickt."""
+    n = _akt_benutzer() if _KUNDENFUNKTIONEN else ""
+    if n and n != "lokal":
+        return n
+    d = data if isinstance(data, dict) else {}
+    return d.get("user") or d.get("_user") or standard
+
+def _demo_modus():
+    return _KUNDENFUNKTIONEN and os.environ.get("ERECHNUNG_DEMO", "") == "1"
+
+def _benutzer_grenze():
+    try:
+        return max(0, int(os.environ.get("ERECHNUNG_MAX_BENUTZER", "") or 0))
+    except ValueError:
+        return 0
+
+def _benutzer_ich(users):
+    n = _akt_benutzer()
+    return next((u for u in users if u.get("username") == n), None)
+
+@app.route("/api/benutzer", methods=["GET"])
+def api_benutzer_liste():
+    if not _KUNDENFUNKTIONEN:
+        return _json({"verwaltbar": False, "benutzer": []})
+    users = _load_users()
+    ich = _benutzer_ich(users)
+    admin = bool(ich) and _benutzer_admin(users, ich)
+    return _json({
+        "verwaltbar": bool(users), "ich": _akt_benutzer(), "admin": admin, "grenze": _benutzer_grenze(),
+        "preis": (os.environ.get("ERECHNUNG_BENUTZER_PREIS", "") or "").strip(),
+        "benutzer": [{"username": u.get("username", ""), "email": u.get("email", "") if (admin or u is ich) else "",
+                      "admin": _benutzer_admin(users, u), "angelegt": u.get("angelegt", "")} for u in users],
+    })
+
+@app.route("/api/benutzer", methods=["POST"])
+def api_benutzer_neu():
+    if not _KUNDENFUNKTIONEN:
+        return _json({"error": "Endpoint nicht gefunden"}, 404)
+    users = _load_users()
+    ich = _benutzer_ich(users)
+    if not users or not ich or not _benutzer_admin(users, ich):
+        return _json({"error": "Benutzer anlegen darf nur ein Verwalter."}, 403)
+    data = request.get_json(silent=True) or {}
+    name = (data.get("username") or "").strip()
+    mail = (data.get("email") or "").strip()
+    pw = data.get("password") or ""
+    if not re.fullmatch(r"[A-Za-z0-9._-]{3,40}", name):
+        return _json({"error": "Benutzername: 3 bis 40 Zeichen, nur Buchstaben, Ziffern, Punkt, Binde- und Unterstrich."}, 400)
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]{2,}", mail):
+        return _json({"error": "Bitte eine gültige E-Mail-Adresse angeben."}, 400)
+    if len(pw) < 12:
+        return _json({"error": "Das Passwort muss mindestens 12 Zeichen haben."}, 400)
+    if any(u.get("username", "").lower() == name.lower() for u in users):
+        return _json({"error": "Diesen Benutzernamen gibt es schon."}, 409)
+    if any((u.get("email") or "").lower() == mail.lower() for u in users):
+        return _json({"error": "Zu dieser E-Mail-Adresse gibt es schon ein Konto."}, 409)
+    grenze = _benutzer_grenze()
+    if grenze and len(users) >= grenze:
+        return _json({"error": f"Für diese Installation sind höchstens {grenze} Benutzer vorgesehen."}, 403)
+    if not any(u.get("admin") for u in users):
+        users[0]["admin"] = True          # Altbestand: bisheriges erstes Konto bleibt ausdrücklich Verwalter
+    users.append({"username": name, "email": mail, "password_hash": generate_password_hash(pw),
+                  "admin": bool(data.get("admin")), "angelegt": datetime.now().isoformat(timespec="seconds"),
+                  "angelegt_von": ich.get("username", "")})
+    _save_users(users)
+    print(f"[benutzer] angelegt: {name} durch {ich.get('username')}", flush=True)
+    return _json({"ok": True, "anzahl": len(users)})
+
+@app.route("/api/benutzer/<name>", methods=["PUT"])
+def api_benutzer_aendern(name):
+    """E-Mail-Adresse, Verwalter-Recht oder Passwort ändern. Eigene E-Mail und eigenes Passwort darf jeder ändern."""
+    if not _KUNDENFUNKTIONEN:
+        return _json({"error": "Endpoint nicht gefunden"}, 404)
+    users = _load_users()
+    ich = _benutzer_ich(users)
+    ziel = next((u for u in users if u.get("username") == name), None)
+    if not ich or not ziel:
+        return _json({"error": "Benutzer nicht gefunden."}, 404)
+    admin = _benutzer_admin(users, ich)
+    if not admin and ziel is not ich:
+        return _json({"error": "Das darf nur ein Verwalter."}, 403)
+    data = request.get_json(silent=True) or {}
+    if "email" in data:
+        mail = (data.get("email") or "").strip()
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]{2,}", mail):
+            return _json({"error": "Bitte eine gültige E-Mail-Adresse angeben."}, 400)
+        if any(u is not ziel and (u.get("email") or "").lower() == mail.lower() for u in users):
+            return _json({"error": "Zu dieser E-Mail-Adresse gibt es schon ein Konto."}, 409)
+        ziel["email"] = mail
+    if data.get("password"):
+        if len(data["password"]) < 12:
+            return _json({"error": "Das Passwort muss mindestens 12 Zeichen haben."}, 400)
+        ziel["password_hash"] = generate_password_hash(data["password"])
+    if "admin" in data and admin:
+        war = _benutzer_admin(users, ziel)
+        if not any(u.get("admin") for u in users):
+            users[0]["admin"] = True
+        if war and not data["admin"] and sum(1 for u in users if u.get("admin")) <= 1:
+            return _json({"error": "Mindestens ein Verwalter muss bleiben."}, 400)
+        ziel["admin"] = bool(data["admin"])
+    _save_users(users)
+    print(f"[benutzer] geändert: {name} durch {ich.get('username')}", flush=True)
+    return _json({"ok": True})
+
+@app.route("/api/benutzer/<name>", methods=["DELETE"])
+def api_benutzer_loeschen(name):
+    if not _KUNDENFUNKTIONEN:
+        return _json({"error": "Endpoint nicht gefunden"}, 404)
+    users = _load_users()
+    ich = _benutzer_ich(users)
+    ziel = next((u for u in users if u.get("username") == name), None)
+    if not ich or not _benutzer_admin(users, ich):
+        return _json({"error": "Benutzer löschen darf nur ein Verwalter."}, 403)
+    if not ziel:
+        return _json({"error": "Benutzer nicht gefunden."}, 404)
+    if ziel is ich:
+        return _json({"error": "Das eigene Konto lässt sich nicht löschen."}, 400)
+    if not any(u.get("admin") for u in users):
+        users[0]["admin"] = True
+    if ziel.get("admin") and sum(1 for u in users if u.get("admin")) <= 1:
+        return _json({"error": "Mindestens ein Verwalter muss bleiben."}, 400)
+    users.remove(ziel)
+    _save_users(users)
+    print(f"[benutzer] gelöscht: {name} durch {ich.get('username')}", flush=True)
+    return _json({"ok": True, "anzahl": len(users)})
+
+
+# ── Schutz bei gleichzeitigem Bearbeiten (24.11.2026) ───────────────────────────────────────────────────────────────
+# Jede Änderung an einem Kunden, Lieferanten, Produkt, Vorgang oder einer Rechnung bekommt eine laufende Nummer.
+# Die Oberfläche merkt sich, bei welchem Stand sie ein Objekt zuletzt geladen hat, und schickt ihn beim Speichern mit
+# (X-Stand-Gesehen). Hat inzwischen ein ANDERES Browserfenster dasselbe Objekt geändert, antwortet der Server mit 409
+# und nennt, wer es war — gespeichert wird erst nach ausdrücklicher Bestätigung (X-Stand-Erzwingen).
+# Zusätzlich: Wer einen Vorgang öffnet oder ein Objekt ändert, das ein anderes Fenster in den letzten Minuten ebenfalls
+# offen hatte, bekommt einen Hinweis (X-Auch-Dabei). Der Zustand liegt im Arbeitsspeicher und beginnt beim Start neu.
+_GLZ_SPERRE = _thr.Lock()
+_GLZ = {"seq": int(_zeit.time()), "obj": {}, "tab": {}}
+_GLZ_MUSTER = re.compile(r"^/api/(buyers|suppliers|products|transactions|invoices)/([^/]+)(/.*)?$")
+_GLZ_KEINE_ID = {"all", "csv", "stats", "step-labels", "categories", "demo"}
+_GLZ_ART = {"buyers": "Dieser Kunde", "suppliers": "Dieser Lieferant", "products": "Dieses Produkt",
+            "transactions": "Dieser Vorgang", "invoices": "Diese Rechnung"}
+_GLZ_DABEI_SEK = 600
+
+def _glz_schluessel():
+    m = _GLZ_MUSTER.match(request.path or "")
+    if not m or m.group(2) in _GLZ_KEINE_ID:
+        return None, None
+    return (m.group(1), m.group(2)), (m.group(3) or "")
+
+@app.before_request
+def _mehrbenutzer_vor():
+    path = request.path or ""
+    if not _KUNDENFUNKTIONEN:
+        return
+    if not _KOSIT_NACHHOLEN["gestartet"]:
+        _KOSIT_NACHHOLEN["gestartet"] = True
+        _thr.Thread(target=_kosit_nachholen, daemon=True).start()
+    # Demo-Zugang (ERECHNUNG_DEMO=1): alles ansehen, nichts ändern. Die Lizenzsperre allein reicht dafür nicht —
+    # sie prüft nur POST und lässt ganze Bereiche durch. Hier wird jede schreibende Anfrage abgewiesen.
+    if _demo_modus() and request.method not in ("GET", "HEAD", "OPTIONS") \
+            and path not in ("/login", "/logout", "/api/design/vorschau", "/api/dunning/check"):      # die beiden letzten lesen nur
+        return jsonify({"demo": True, "error": "Demo-Zugang: Sie können alles ansehen, Änderungen werden nicht gespeichert."}), 403
+    if not path.startswith("/api/") or any(path.startswith(p) for p in _API_KEY_PATHS):
+        return
+    # Gelöschtes Konto: die Sitzung endet mit dem Konto
+    n = _akt_benutzer()
+    if n and n != "lokal" and session.get("logged_in") and _AUTH_FILE.exists() and path != "/api/auth/change-password":
+        try:
+            if not any(u.get("username") == n for u in _load_users()):
+                session.clear()
+                return jsonify({"error": "Dieses Benutzerkonto gibt es nicht mehr.", "login_required": True}), 401
+        except Exception:
+            pass
+    key, _rest = _glz_schluessel()
+    with _GLZ_SPERRE:
+        request.environ["glz.start"] = _GLZ["seq"]
+        if not key or request.method in ("GET", "HEAD", "OPTIONS"):
+            return
+        gesehen = request.headers.get("X-Stand-Gesehen", "")
+        if not gesehen.isdigit() or request.headers.get("X-Stand-Erzwingen") == "1":
+            return
+        e = _GLZ["obj"].get(key)
+        tab = request.headers.get("X-Tab", "")
+        if e and e["seq"] > int(gesehen) and e["tab"] != tab:
+            wer = e["wer"] if e["wer"] != n else "Sie selbst in einem anderen Fenster"
+            um = datetime.fromtimestamp(e["zeit"]).strftime("%H:%M")
+            return jsonify({"konflikt": True, "von": wer, "um": um,
+                            "error": f"{_GLZ_ART.get(key[0], 'Dieser Eintrag')} wurde um {um} Uhr geändert ({wer}), "
+                                     f"nachdem Sie ihn geladen haben. Nicht gespeichert."}), 409
+
+@app.after_request
+def _mehrbenutzer_nach(resp):
+    try:
+        if _demo_modus():
+            resp.headers["X-Demo"] = "1"
+        start = request.environ.get("glz.start")
+        if start is None:
+            return resp
+        key, rest = _glz_schluessel()
+        tab = request.headers.get("X-Tab", "")
+        n = _akt_benutzer() or "unbekannt"
+        aendernd = request.method not in ("GET", "HEAD", "OPTIONS")
+        jetzt = _zeit.time()
+        with _GLZ_SPERRE:
+            stand = start
+            if key and aendernd and resp.status_code < 400:
+                _GLZ["seq"] += 1
+                stand = _GLZ["seq"]
+                _GLZ["obj"][key] = {"seq": stand, "wer": n, "tab": tab, "zeit": jetzt}
+                if len(_GLZ["obj"]) > 20000:
+                    for k in sorted(_GLZ["obj"], key=lambda k: _GLZ["obj"][k]["seq"])[:5000]:
+                        _GLZ["obj"].pop(k, None)
+            resp.headers["X-Stand"] = str(stand)
+            # Anwesenheit: Vorgang geöffnet (genauer Abruf) oder irgendein Objekt geändert
+            if key and tab and resp.status_code < 400 and (aendernd or (key[0] == "transactions" and rest == "")):
+                andere = sorted({("ein weiteres Fenster von Ihnen" if t["wer"] == n else t["wer"])
+                                 for tid, t in _GLZ["tab"].items()
+                                 if tid != tab and t["key"] == key and jetzt - t["zeit"] < _GLZ_DABEI_SEK})
+                if andere:
+                    from urllib.parse import quote as _q
+                    resp.headers["X-Auch-Dabei"] = _q(", ".join(andere))
+                    resp.headers["X-Auch-Dabei-Art"] = _q(_GLZ_ART.get(key[0], "Dieser Eintrag"))
+                _GLZ["tab"][tab] = {"key": key, "wer": n, "zeit": jetzt}
+                if len(_GLZ["tab"]) > 2000:
+                    for tid in [tid for tid, t in _GLZ["tab"].items() if jetzt - t["zeit"] > _GLZ_DABEI_SEK]:
+                        _GLZ["tab"].pop(tid, None)
+    except Exception as ex:
+        print(f"[mehrbenutzer] {ex}", flush=True)
+    return resp
 
 
 # JSON-Fehlerseiten statt HTML für API-Routen
@@ -343,6 +602,52 @@ def auto_save():
         print(f"[db_pg] auto_save dual-write übersprungen: {e}", flush=True)
 
 
+# ── Amtliche Prüfung (KoSIT) automatisch (24.11.2026, nur Kundenversion) ─────────────────────────────────────────────
+# Jede Ausgangsrechnung — auch Gutschrift, Storno, Abschlag — wird beim Anlegen mit dem amtlichen KoSIT-Prüfer geprüft.
+# Das läuft im Hintergrund (der Java-Start dauert einige Sekunden), das Ergebnis steht danach an der Rechnung.
+# Eine Rechnung, die dort durchfällt, wird nicht per E-Mail versendet.
+_KOSIT_SPERRE = _thr.Lock()          # ein Prüflauf zur Zeit
+_KOSIT_NACHHOLEN = {"gestartet": False}
+
+def _kosit_pruefen(inv, xml_bytes=None, speichern=True):
+    try:
+        if xml_bytes is None:
+            xml_bytes = generate_and_serialize(inv)
+        ms = _load_mandant_settings()
+        with _KOSIT_SPERRE:
+            r = validate_with_kosit(xml_bytes, validator_path=(ms or {}).get("kosit_validator_path"))
+        def _text(x):
+            return (x if isinstance(x, str) else (x.get("message") or str(x)) if isinstance(x, dict) else str(x))[:300]
+        e = {"verfuegbar": bool(r.available), "gueltig": (bool(r.valid) if r.available else None),
+             "fehler": int(r.error_count or 0), "warnungen": int(r.warning_count or 0),
+             "details": [_text(x) for x in (r.errors or [])[:10]], "version": r.validator_version or "",
+             "grund": r.unavailable_reason or "", "am": datetime.now().isoformat(timespec="seconds")}
+        inv._kosit = e
+        if speichern:
+            auto_save()
+        return e
+    except Exception as ex:
+        print(f"[kosit] Prüfung {getattr(inv, 'invoice_number', '?')} nicht möglich: {ex}", flush=True)
+        return None
+
+def _kosit_im_hintergrund(inv, xml_bytes=None):
+    if _KUNDENFUNKTIONEN:
+        _thr.Thread(target=_kosit_pruefen, args=(inv, xml_bytes), daemon=True).start()
+
+def _kosit_nachholen():
+    """Einmal je Programmstart: Ausgangsrechnungen ohne Prüfergebnis nachträglich prüfen (nacheinander, im Hintergrund)."""
+    try:
+        offen = [i for i in list(invoices.values())
+                 if (getattr(i, "_direction", "") or "AUSGANG") != "EINGANG" and not getattr(i, "_kosit", None)
+                 and not getattr(i, "_altbestand", None)]
+        for n, inv in enumerate(offen, 1):
+            _kosit_pruefen(inv, speichern=(n % 10 == 0 or n == len(offen)))
+        if offen:
+            print(f"[kosit] {len(offen)} Rechnung(en) nachträglich geprüft", flush=True)
+    except Exception as ex:
+        print(f"[kosit] Nachholen abgebrochen: {ex}", flush=True)
+
+
 def _archive_ausgang(inv, xml_bytes, report, pdf_bytes=None):
     """Ausgangsrechnung archivieren — IMMER mit PDF.
 
@@ -351,6 +656,7 @@ def _archive_ausgang(inv, xml_bytes, report, pdf_bytes=None):
     erzeugte PDF mit ins Archiv (31.07.2026). Schlägt die PDF-Erzeugung fehl,
     wird trotzdem archiviert — die XML darf nie verloren gehen.
     """
+    _kosit_im_hintergrund(inv, xml_bytes)
     if pdf_bytes is None:
         try:
             pdf_bytes = _build_invoice_pdf(inv)[1]
@@ -1655,7 +1961,7 @@ def api_suppliers_delete_all():
 @app.route("/api/suppliers/<sid>/approve", methods=["POST"])
 def api_suppliers_approve(sid):
     data = request.json or {}
-    result = supplier_mgr.approve(sid, data.get("user", "system"), data.get("comment", ""))
+    result = supplier_mgr.approve(sid, _wer(data, "system"), data.get("comment", ""))
     if result:
         return _json({"approved": True, "supplier": result})
     return _json({"error": "Lieferant nicht gefunden"}, 404)
@@ -2663,7 +2969,7 @@ def api_txn_delete(tid):
 def api_txn_step_update(tid, step_key):
     data = request.json or {}
     try:
-        txn = txn_mgr.update_step(tid, step_key, data, data.get("_user", "system"))
+        txn = txn_mgr.update_step(tid, step_key, data, _wer(data, "system"))
         return _json({"saved": True, "transaction": txn})
     except ValueError as e:
         return _json({"error": str(e)}, 400)
@@ -2674,7 +2980,7 @@ def api_txn_step_approve(tid, step_key):
     data = request.json or {}
     try:
         txn = txn_mgr.approve_step(tid, step_key,
-                                    data.get("user", "system"),
+                                    _wer(data, "system"),
                                     data.get("comment", ""))
         return _json({"approved": True, "transaction": txn})
     except ValueError as e:
@@ -2685,7 +2991,7 @@ def api_txn_step_approve(tid, step_key):
 def api_txn_step_unapprove(tid, step_key):
     data = request.json or {}
     try:
-        txn = txn_mgr.unapprove_step(tid, step_key, data.get("user", "system"))
+        txn = txn_mgr.unapprove_step(tid, step_key, _wer(data, "system"))
         return _json({"unapproved": True, "transaction": txn})
     except ValueError as e:
         return _json({"error": str(e)}, 400)
@@ -2696,7 +3002,7 @@ def api_txn_step_skip(tid, step_key):
     data = request.json or {}
     try:
         txn = txn_mgr.skip_step(tid, step_key,
-                                 data.get("user", "system"),
+                                 _wer(data, "system"),
                                  data.get("reason", ""))
         return _json({"skipped": True, "transaction": txn})
     except ValueError as e:
@@ -2709,7 +3015,7 @@ def api_txn_step_revise(tid, step_key):
     data = request.json or {}
     try:
         txn = txn_mgr.revise_step(tid, step_key,
-                                  data.get("user", "system"),
+                                  _wer(data, "system"),
                                   data.get("reason", ""),
                                   bool(data.get("erzwingen")))
         step = (txn.get("steps") or {}).get(step_key, {})
@@ -2731,7 +3037,7 @@ def api_txn_step_cancel(tid, step_key):
     schliessen = data.get("close_transaction")
     try:
         txn = txn_mgr.cancel_step(tid, step_key,
-                                  data.get("user", "system"),
+                                  _wer(data, "system"),
                                   data.get("reason", ""),
                                   True if schliessen is None else bool(schliessen))
         return _json({"cancelled": True, "transaction_status": txn.get("status"),
@@ -2745,7 +3051,7 @@ def api_txn_step_sync_positions(tid, step_key):
     """Positionen der Vorstufe ausdrücklich übernehmen (z. B. nach einer Angebotsänderung)."""
     data = request.json or {}
     try:
-        txn = txn_mgr.sync_positions(tid, step_key, data.get("user", "system"))
+        txn = txn_mgr.sync_positions(tid, step_key, _wer(data, "system"))
         step = (txn.get("steps") or {}).get(step_key, {})
         return _json({"synced": True, "amount": step.get("amount"), "transaction": txn})
     except ValueError as e:
@@ -2757,7 +3063,7 @@ def api_txn_reopen(tid):
     """Storno aufheben — der Vorgang läuft wieder mit."""
     data = request.json or {}
     try:
-        txn = txn_mgr.reopen_transaction(tid, data.get("user", "system"),
+        txn = txn_mgr.reopen_transaction(tid, _wer(data, "system"),
                                          data.get("reason", ""))
         return _json({"reopened": True, "transaction": txn})
     except ValueError as e:
@@ -2768,7 +3074,7 @@ def api_txn_reopen(tid):
 def api_txn_add_delivery(tid):
     data = request.json or {}
     try:
-        txn = txn_mgr.add_delivery(tid, data, data.get("_user", "system"))
+        txn = txn_mgr.add_delivery(tid, data, _wer(data, "system"))
         return _json({"added": True, "transaction": txn})
     except ValueError as e:
         return _json({"error": str(e)}, 400)
@@ -2778,7 +3084,7 @@ def api_txn_add_delivery(tid):
 def api_txn_approve_delivery(tid, did):
     data = request.json or {}
     try:
-        txn = txn_mgr.approve_delivery(tid, did, data.get("user", "system"))
+        txn = txn_mgr.approve_delivery(tid, did, _wer(data, "system"))
         return _json({"approved": True, "transaction": txn})
     except ValueError as e:
         return _json({"error": str(e)}, 400)
@@ -2795,7 +3101,7 @@ def api_txn_payment_invoices_list(tid):
 def api_txn_payment_invoices_create(tid):
     data = request.get_json(force=True) or {}
     try:
-        p = txn_mgr.add_payment_invoice(tid, data, user=data.get("_user", "web-user"))
+        p = txn_mgr.add_payment_invoice(tid, data, user=_wer(data, "web-user"))
         return _json({"saved": True, "payment_invoice": p})
     except ValueError as e:
         return _json({"error": str(e)}, 400)
@@ -2805,7 +3111,7 @@ def api_txn_payment_invoices_create(tid):
 def api_txn_payment_invoices_update(tid, pid):
     data = request.get_json(force=True) or {}
     try:
-        p = txn_mgr.update_payment_invoice(tid, pid, data, user=data.get("_user", "web-user"))
+        p = txn_mgr.update_payment_invoice(tid, pid, data, user=_wer(data, "web-user"))
         return _json({"saved": True, "payment_invoice": p})
     except ValueError as e:
         return _json({"error": str(e)}, 400)
@@ -2838,7 +3144,7 @@ def api_txn_payment_invoices_mark_sent(tid, pid):
                                "Zum wirklichen Versand den Weg /send benutzen."}, 400)
     try:
         p = txn_mgr.mark_payment_invoice_sent(tid, pid,
-                                               user=data.get("_user", "web-user"),
+                                               user=_wer(data, "web-user"),
                                                document_id=data.get("document_id", ""),
                                                to=empfaenger, channel="manuell",
                                                note=hinweis)
@@ -2955,9 +3261,13 @@ def _abschlag_bedingungen(txn, p) -> dict:
                 stufe = text
                 break
     kal = "Kalendertagen" if v else "Tagen"
+    # Skonto an der Abschlagsrechnung (24.11.2026): dann steht im Zahlungsziel kein „ohne Abzug" — den Skontosatz
+    # setzen PDF (eigener Absatz) und E-Rechnung (Skonto-Zeile der Zahlungsbedingungen) selbst dazu.
+    sk_p, sk_t = __import__("doc_generator")._skonto_von(p)
     return {
         "vertrag": v.get("name", ""), "bezug": v.get("bezug", ""), "tage": tage,
-        "zahlungsziel": f"Zahlbar innerhalb von {tage} {kal} ab Rechnungsdatum ohne Abzug",
+        "skonto_percent": sk_p, "skonto_days": sk_t,
+        "zahlungsziel": f"Zahlbar innerhalb von {tage} {kal} ab Rechnungsdatum" + ("" if sk_p else " ohne Abzug"),
         "faellig": datum + timedelta(days=tage), "datum": datum,
         "stufe": stufe, "anteil": anteil, "auftrag_netto": auftrag_netto,
         "auftrag_ref": auftrag_ref, "auftrag_datum": auftrag_datum,
@@ -3067,7 +3377,8 @@ def _abschlag_pdf_bauen(tid, txn, p) -> dict:
         "discount_percent": 0,
     }]
     fake_step = {"positions": pos, "intro_text": "", "closing_text": "",
-                 "doc_discount_amount": 0, "doc_surcharge_amount": 0}
+                 "doc_discount_amount": 0, "doc_surcharge_amount": 0,
+                 "skonto_percent": bed["skonto_percent"], "skonto_days": bed["skonto_days"]}
     templates = _load_mandant_settings().get("doc_templates", {})
     intro = templates.get("payment_invoice_intro", "") or _abschlag_einleitung(txn, p)
     closing = templates.get("payment_invoice_closing", "")
@@ -3229,7 +3540,8 @@ def _abschlag_registrieren(tid, txn, p):
             vat_id=buyer_data.get("vat_id", ""),
         ),
         payment=PaymentInfo(means_code="58", iban=ms.get("iban", ""),
-                            payment_terms=zahlungsziel, due_date=faellig),
+                            payment_terms=zahlungsziel, due_date=faellig,
+                            skonto_percent=_bed["skonto_percent"], skonto_days=_bed["skonto_days"]),
     )
     inv.lines.append(InvoiceLine(
         line_id="1", quantity=Decimal("1"),
@@ -3386,7 +3698,7 @@ def api_txn_payment_invoice_send(tid, pid):
     auto_save()
 
     pi = txn_mgr.mark_payment_invoice_sent(
-        tid, pid, user=data.get("_user", "web-user"),
+        tid, pid, user=_wer(data, "web-user"),
         document_id=p.get("document_id", ""), to=recipient, channel="email",
         message_id=send_log.message_id, invoice_id=inv._id,
         invoice_number=inv.invoice_number)
@@ -3423,7 +3735,7 @@ def api_txn_payment_invoices_mark_paid(tid, pid):
 
     try:
         p = txn_mgr.mark_payment_invoice_paid(tid, pid,
-                                                user=data.get("_user", "web-user"),
+                                                user=_wer(data, "web-user"),
                                                 paid_at=data.get("paid_at", ""),
                                                 paid_amount=betrag,
                                                 booking_id=booking_id)
@@ -3443,7 +3755,7 @@ def api_txn_payment_invoices_mark_paid(tid, pid):
             inv.status = "BEZAHLT"
         except Exception:
             pass
-        inv.add_audit("BEZAHLT", user=data.get("_user", "web-user"),
+        inv.add_audit("BEZAHLT", user=_wer(data, "web-user"),
                       comment=(f"Abschlag bezahlt am {p.get('paid_at')}"
                                + (f", Bankbuchung {booking_id}" if booking_id
                                   else " — ohne Bankbuchung als Nachweis")))
@@ -3478,12 +3790,16 @@ def _abschlag_buchung_suchen(p, paid_at=""):
         return "", []
     liste = roh if isinstance(roh, list) else list(roh.values())
     bezug = (paid_at or p.get("paid_at") or p.get("date") or "")[:10]
+    # Abschlag mit Skonto: auch die Zahlung abzüglich Skonto ist ein Treffer
+    _skp = __import__("doc_generator")._skonto_von(p)[0]
+    _mit_skonto = round(brutto * (1 - _skp / 100), 2) if _skp else None
     treffer = []
     for b in liste:
         if not isinstance(b, dict) or b.get("matched_invoice_id"):
             continue
         try:
-            if round(float(b.get("amount") or 0), 2) != brutto:
+            _betrag = round(float(b.get("amount") or 0), 2)
+            if _betrag != brutto and (_mit_skonto is None or abs(_betrag - _mit_skonto) > 0.01):
                 continue
         except Exception:
             continue
@@ -4456,7 +4772,7 @@ def api_txn_approve_and_send(tid, step_key):
     # 1. Freigeben
     try:
         txn = txn_mgr.approve_step(tid, step_key,
-                                    data.get("user", "system"),
+                                    _wer(data, "system"),
                                     data.get("comment", ""))
     except ValueError as e:
         return _json({"error": str(e)}, 400)
@@ -5801,6 +6117,7 @@ def api_invoice_detail(inv_id):
         "tax_breakdown": tax_breakdown,
         "status": inv.status,
         "assigned_to": inv.assigned_to,
+        "kosit": ((getattr(inv, "_kosit", None) or {"ausstehend": True}) if (_KUNDENFUNKTIONEN and (inv._direction or "AUSGANG") != "EINGANG") else None),
         "validation": {"valid": report.is_valid, "errors": report.error_count,
                         "hard_error": _hard_validation_error(report),
                         "warnings": report.warning_count,
@@ -6461,6 +6778,8 @@ def _ingest_bank_records(records, source_label):
     except Exception as e:
         print(f"[bank-ingest] Regel-Zuordnung übersprungen: {e}")
     _save_bank_txns(existing)
+    # Aeltere offene Eingaenge nachpruefen: die Rechnung kann erst NACH der Zahlung entstanden sein.
+    auto_matched_high += _bank_vorauszahlung_zuordnen()
 
     return {
         "imported": len(new_items),
@@ -7134,6 +7453,42 @@ def api_bank_gegenbuchungen():
     return _json({"ok": True, "ausgebucht": n, "erkannt": len(treffer), "typen": typen,
                   "buchhaltung_stillgelegt": nachgezogen,
                   "offen": len([t for t in txns if t.get("match_status") == "open"])})
+
+
+def _bank_vorauszahlung_zuordnen(inv_id=None, tage=30):
+    """Vorauszahlungen (17.11.2026): prueft OFFENE Bankeingaenge der letzten `tage` Tage erneut gegen
+    die Rechnungen und ordnet nur bei sicherem Treffer zu (gleiche Regeln wie der Bankabruf).
+    Mit inv_id nur Treffer auf genau diese (neu angelegte) Rechnung. Gibt die Zahl der Zuordnungen zurueck."""
+    if inv_id and inv_id not in invoices:
+        return 0
+    n = 0
+    try:
+        ab = (date.today() - timedelta(days=tage)).isoformat()
+        txns = _load_bank_txns()
+        for t in txns:
+            if t.get("match_status") != "open" or t.get("direction") != "credit":
+                continue
+            if str(t.get("booking_date") or "") < ab:
+                continue
+            mr = _bank.auto_match(t, invoices.values())
+            ziel = mr.get("invoice_id")
+            if not ziel or mr.get("confidence") != "high" or (inv_id and ziel != inv_id):
+                continue
+            t["match_suggestion"] = mr
+            t["match_status"] = "matched"
+            t["matched_invoice_id"] = ziel
+            t["matched_at"] = datetime.now().isoformat(timespec="seconds")
+            t["match_confidence"] = "high"
+            _apply_invoice_paid(ziel, t)
+            n += 1
+            print(f"[vorauszahlung] {getattr(invoices[ziel], 'invoice_number', ziel)} mit offenem Bankeingang verknuepft")
+            if inv_id:
+                break
+        if n:
+            _save_bank_txns(txns)
+    except Exception as e:
+        print(f"[vorauszahlung] Fehler: {e}")
+    return n
 
 
 @app.route("/api/bank/rematch", methods=["POST"])
@@ -9249,6 +9604,13 @@ def api_validate_kosit(inv_id):
     ms = _load_mandant_settings()
     kosit_path = ms.get("kosit_validator_path") if ms else None
     result = validate_with_kosit(xml_bytes, validator_path=kosit_path)
+    if _KUNDENFUNKTIONEN and (inv._direction or "AUSGANG") != "EINGANG":      # Ergebnis an der Rechnung festhalten
+        inv._kosit = {"verfuegbar": bool(result.available), "gueltig": (bool(result.valid) if result.available else None),
+                      "fehler": int(result.error_count or 0), "warnungen": int(result.warning_count or 0),
+                      "details": [(x if isinstance(x, str) else str(x.get("message") if isinstance(x, dict) else x))[:300] for x in (result.errors or [])[:10]],
+                      "version": result.validator_version or "", "grund": result.unavailable_reason or "",
+                      "am": datetime.now().isoformat(timespec="seconds")}
+        auto_save()
     return _json({
         "available": result.available,
         "valid": result.valid,
@@ -9261,6 +9623,260 @@ def api_validate_kosit(inv_id):
         "reason": result.unavailable_reason,
         "report_xml": (result.report_xml[:5000] if result.report_xml else ""),  # Erste 5000 Zeichen zum Debug
     })
+
+
+# ── Rechnungen aus CSV einlesen (24.11.2026, nur Kundenversion) ──────────────────────────────────────────────────────
+# Für Firmen, die ihre Rechnungen in einem eigenen Programm schreiben: eine CSV-Datei mit einer Zeile je Position;
+# Zeilen mit derselben Rechnungsnummer bilden eine Rechnung. Jede Rechnung läuft durch dieselbe Erstellung wie in der
+# Maske (Prüfung, XRechnung, Archiv, amtliche Prüfung). Erst prüfen, dann einlesen — nichts wird stillschweigend angelegt.
+# Formatbeschreibung: docs/CSV-Import-Rechnungen.md und /api/invoices/csv/muster.
+_CSV_FELDER = {
+    "rechnungsnummer": ("rechnungsnummer", "rechnungsnr", "rechnung", "nummer", "belegnummer", "invoice_number"),
+    "rechnungsdatum": ("rechnungsdatum", "datum", "belegdatum", "invoice_date"),
+    "leistungsdatum": ("leistungsdatum", "lieferdatum", "delivery_date"),
+    "zahlungsziel_tage": ("zahlungsziel_tage", "zahlungsziel", "tage"),
+    "faellig_am": ("faellig_am", "fällig_am", "faelligkeit", "fälligkeit", "due_date"),
+    "zahlungsbedingungen": ("zahlungsbedingungen", "zahlungsbedingung", "payment_terms"),
+    "belegart": ("belegart", "typ", "type"),
+    "bezug_rechnung": ("bezug_rechnung", "bezug", "preceding_invoice"),
+    "kunde_name": ("kunde_name", "kunde", "firma", "kundenname", "buyer_name"),
+    "kunde_strasse": ("kunde_strasse", "kunde_straße", "strasse", "straße"),
+    "kunde_hausnummer": ("kunde_hausnummer", "hausnummer", "hausnr"),
+    "kunde_plz": ("kunde_plz", "plz"),
+    "kunde_ort": ("kunde_ort", "ort"),
+    "kunde_email": ("kunde_email", "email", "e-mail", "e_mail"),
+    "kunde_referenz": ("kunde_referenz", "kundennummer", "leitweg_id", "leitweg-id", "referenz", "buyer_reference"),
+    "kunde_ustid": ("kunde_ustid", "ustid", "ust_id", "ust-id", "ust-idnr"),
+    "ansprechpartner": ("ansprechpartner", "kontakt"),
+    "bezeichnung": ("bezeichnung", "leistung", "artikel", "position_text", "text", "name"),
+    "beschreibung": ("beschreibung", "zusatztext", "description"),
+    "artikelnummer": ("artikelnummer", "artikelnr", "art_nr", "artnr"),
+    "menge": ("menge", "anzahl", "quantity"),
+    "einheit": ("einheit", "unit"),
+    "einzelpreis": ("einzelpreis", "preis", "einzelpreis_netto", "netto_einzelpreis", "price"),
+    "steuersatz": ("steuersatz", "ust", "mwst", "ust_satz", "tax_rate"),
+    "skonto_prozent": ("skonto_prozent", "skonto"),
+    "skonto_tage": ("skonto_tage",),
+    "notiz": ("notiz", "bemerkung", "note"),
+}
+_CSV_PFLICHT = ("rechnungsnummer", "rechnungsdatum", "kunde_name", "kunde_plz", "kunde_ort", "kunde_email", "bezeichnung", "menge", "einzelpreis")
+_CSV_EINHEIT = {"": "C62", "stk": "C62", "stk.": "C62", "st": "C62", "stück": "C62", "stueck": "C62", "c62": "C62",
+                "std": "HUR", "std.": "HUR", "h": "HUR", "stunde": "HUR", "stunden": "HUR", "hur": "HUR",
+                "tag": "DAY", "tage": "DAY", "day": "DAY", "monat": "MON", "monate": "MON", "mon": "MON",
+                "psch": "LS", "pauschal": "LS", "pauschale": "LS", "ls": "LS", "m": "MTR", "mtr": "MTR",
+                "m2": "MTK", "m²": "MTK", "qm": "MTK", "mtk": "MTK", "km": "KMT", "kmt": "KMT",
+                "kg": "KGM", "kgm": "KGM", "l": "LTR", "ltr": "LTR"}
+_CSV_MUSTER = (
+    "rechnungsnummer;rechnungsdatum;leistungsdatum;zahlungsziel_tage;kunde_name;kunde_strasse;kunde_hausnummer;kunde_plz;kunde_ort;"
+    "kunde_email;kunde_referenz;bezeichnung;menge;einheit;einzelpreis;steuersatz;notiz\r\n"
+    "2026-0815;02.11.2026;31.10.2026;14;Beispiel Wohnbau AG;Beispielallee;20;54321;Beispielstadt;eingang@beispiel-wohnbau.example;"
+    "K-0001;Beratung vor Ort;12;Std;95,00;19;Leistungszeitraum Oktober 2026\r\n"
+    "2026-0815;02.11.2026;31.10.2026;14;Beispiel Wohnbau AG;Beispielallee;20;54321;Beispielstadt;eingang@beispiel-wohnbau.example;"
+    "K-0001;Dokumentation und Bericht;1;Stk;650,00;19;\r\n"
+    "2026-0816;03.11.2026;;30;Hausverwaltung Sonnenhof GmbH;Sonnenweg;12;23456;Sonnenstadt;buchhaltung@sonnenhof.example;"
+    "K-0003;Wartung Heizungsanlage, pauschal;1;psch;1.280,00;19;\r\n")
+
+
+def _csv_zahl(t):
+    t = str(t or "").strip().replace("€", "").replace("EUR", "").replace(" ", "").replace(" ", "")
+    if not t:
+        return None
+    if "," in t:
+        t = t.replace(".", "").replace(",", ".")
+    return Decimal(t)
+
+
+def _csv_datum(t):
+    t = str(t or "").strip()
+    if not t:
+        return None
+    m = re.fullmatch(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", t)
+    if m:
+        return date(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    return date.fromisoformat(t[:10])
+
+
+def _csv_rechnungen_lesen(roh: bytes):
+    """CSV → (Liste von Rechnungen {nummer, kunde, body}, Liste von Fehlertexten). Legt nichts an."""
+    import csv as _csv
+    import io as _io
+    try:
+        text = roh.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = roh.decode("cp1252", errors="replace")
+    kopf = text.split("\n", 1)[0]
+    trenner = max((";", "\t", ","), key=lambda c: kopf.count(c))
+    zeilen = list(_csv.reader(_io.StringIO(text), delimiter=trenner))
+    zeilen = [z for z in zeilen if any((c or "").strip() for c in z)]
+    if len(zeilen) < 2:
+        return [], ["Die Datei enthält keine Datenzeilen."]
+    alias = {a: feld for feld, namen in _CSV_FELDER.items() for a in namen}
+    spalten, unbekannt = {}, []
+    for i, k in enumerate(zeilen[0]):
+        n = re.sub(r"\s+", "_", (k or "").strip().lower())
+        if n in alias:
+            spalten.setdefault(alias[n], i)
+        elif n:
+            unbekannt.append((k or "").strip())
+    fehlend = [f for f in _CSV_PFLICHT if f not in spalten]
+    if fehlend:
+        return [], ["Pflichtspalten fehlen: " + ", ".join(fehlend) + ". Erkannt wurde das Trennzeichen „"
+                    + ("Tabulator" if trenner == "\t" else trenner) + "“."]
+    ms = _load_mandant_settings() or {}
+    fehler, gruppen, reihenfolge = [], {}, []
+    if unbekannt:
+        fehler.append("Hinweis: nicht verwendete Spalten: " + ", ".join(unbekannt[:12]))
+    def wert(z, f):
+        i = spalten.get(f)
+        return (z[i] if i is not None and i < len(z) else "").strip()
+    for nr, z in enumerate(zeilen[1:], 2):
+        rn = wert(z, "rechnungsnummer")
+        if not rn:
+            fehler.append(f"Zeile {nr}: Rechnungsnummer fehlt — Zeile übersprungen.")
+            continue
+        if rn not in gruppen:
+            gruppen[rn] = []
+            reihenfolge.append(rn)
+        gruppen[rn].append((nr, z))
+    if len(reihenfolge) > 300:
+        return [], [f"Die Datei enthält {len(reihenfolge)} Rechnungen — höchstens 300 je Datei."]
+    aus = []
+    for rn in reihenfolge:
+        nr0, z0 = gruppen[rn][0]
+        probleme = []
+        try:
+            rdat = _csv_datum(wert(z0, "rechnungsdatum"))
+            ldat = _csv_datum(wert(z0, "leistungsdatum"))
+            fdat = _csv_datum(wert(z0, "faellig_am"))
+        except ValueError:
+            rdat = ldat = fdat = None
+            probleme.append("Datum nicht lesbar (TT.MM.JJJJ oder JJJJ-MM-TT)")
+        if not rdat and not probleme:
+            probleme.append("Rechnungsdatum fehlt")
+        for f in ("kunde_name", "kunde_plz", "kunde_ort"):
+            if not wert(z0, f):
+                probleme.append(f"{f} fehlt")
+        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]{2,}", wert(z0, "kunde_email")):
+            probleme.append("kunde_email fehlt oder ist ungültig (die E-Rechnung verlangt eine elektronische Adresse des Kunden)")
+        if any(wert(z, "kunde_name") and wert(z, "kunde_name") != wert(z0, "kunde_name") for _, z in gruppen[rn]):
+            probleme.append("verschiedene Kunden unter derselben Rechnungsnummer")
+        tage = wert(z0, "zahlungsziel_tage")
+        bed = wert(z0, "zahlungsbedingungen")
+        if not bed:
+            if tage.isdigit():
+                bed = "Zahlbar sofort ohne Abzug." if int(tage) == 0 else f"Zahlbar innerhalb von {int(tage)} Tagen ohne Abzug."
+            elif fdat and rdat and fdat >= rdat:
+                bed = f"Zahlbar innerhalb von {(fdat - rdat).days} Tagen ohne Abzug." if fdat > rdat else "Zahlbar sofort ohne Abzug."
+            else:
+                bed = "Zahlbar innerhalb von 14 Tagen ohne Abzug."
+        art = wert(z0, "belegart") or "380"
+        art = {"rechnung": "380", "gutschrift": "381"}.get(art.lower(), art)
+        if art not in ("380", "381"):
+            probleme.append(f"Belegart „{art}“ wird nicht eingelesen (380 Rechnung oder 381 Gutschrift)")
+        lines = []
+        for nr, z in gruppen[rn]:
+            try:
+                menge, preis = _csv_zahl(wert(z, "menge")), _csv_zahl(wert(z, "einzelpreis"))
+                satz = _csv_zahl(wert(z, "steuersatz").replace("%", ""))
+            except Exception:
+                probleme.append(f"Zeile {nr}: Menge, Einzelpreis oder Steuersatz ist keine Zahl")
+                continue
+            if not wert(z, "bezeichnung"):
+                probleme.append(f"Zeile {nr}: Bezeichnung fehlt")
+            if menge is None or menge <= 0 or preis is None or preis < 0:
+                probleme.append(f"Zeile {nr}: Menge muss größer 0 und der Einzelpreis darf nicht negativ sein")
+                continue
+            einheit = wert(z, "einheit").lower()
+            if einheit not in _CSV_EINHEIT:
+                probleme.append(f"Zeile {nr}: Einheit „{wert(z, 'einheit')}“ unbekannt")
+            lines.append({"name": wert(z, "bezeichnung"), "description": wert(z, "beschreibung"), "quantity": str(menge), "price": str(preis),
+                          "net": str((menge * preis).quantize(Decimal("0.01"))), "tax_rate": str(satz if satz is not None else Decimal("19")),
+                          "unit": _CSV_EINHEIT.get(einheit, "C62"), "item_id": wert(z, "artikelnummer")})
+        body = {
+            "number": rn, "date": rdat.isoformat() if rdat else "", "delivery_date": ldat.isoformat() if ldat else "",
+            "type": art, "preceding_invoice": wert(z0, "bezug_rechnung") if art == "381" else "",
+            "seller_name": " ".join(str(ms.get("name", "")).split()), "seller_street": ms.get("street", ""),
+            "seller_house_number": ms.get("house_number", ""), "seller_city": ms.get("city", ""), "seller_postcode": ms.get("post_code", ""),
+            "seller_vat": ms.get("vat_id", ""), "seller_email": ms.get("email", ""), "seller_contact": ms.get("contact_name", ""),
+            "seller_phone": ms.get("contact_phone", ""), "seller_contact_email": ms.get("email", ""),
+            "seller_iban": ms.get("iban", ""), "seller_bic": ms.get("bic", ""), "iban": ms.get("iban", ""), "bic": ms.get("bic", ""),
+            "buyer_name": wert(z0, "kunde_name"), "buyer_street": wert(z0, "kunde_strasse"), "buyer_house_number": wert(z0, "kunde_hausnummer"),
+            "buyer_city": wert(z0, "kunde_ort"), "buyer_postcode": wert(z0, "kunde_plz"), "buyer_email": wert(z0, "kunde_email"),
+            "buyer_reference": wert(z0, "kunde_referenz") or wert(z0, "kunde_name"), "buyer_vat": wert(z0, "kunde_ustid"),
+            "buyer_contact_name": wert(z0, "ansprechpartner"), "payment_terms": bed, "note": wert(z0, "notiz"),
+            "skonto_percent": wert(z0, "skonto_prozent").replace(",", "."), "skonto_days": wert(z0, "skonto_tage"),
+            "lines": lines, "user": _akt_benutzer() or "csv-import",
+        }
+        if not lines and not probleme:
+            probleme.append("keine Positionen")
+        aus.append({"nummer": rn, "zeile": nr0, "kunde": wert(z0, "kunde_name"), "datum": body["date"], "positionen": len(lines),
+                    "probleme": probleme, "body": body})
+    return aus, fehler
+
+
+def _csv_rechnung_ausfuehren(body: dict, nur_pruefen: bool):
+    """Eine Rechnung über denselben Weg wie die Maske prüfen oder anlegen."""
+    with app.test_request_context("/api/generate", method="POST", json=dict(body, nur_pruefen=nur_pruefen)):
+        antwort = api_generate()
+    if isinstance(antwort, tuple):
+        antwort = antwort[0]
+    try:
+        return antwort.status_code, json.loads(antwort.get_data(as_text=True))
+    except Exception:
+        return 500, {"error": "unerwartete Antwort"}
+
+
+@app.route("/api/invoices/csv", methods=["GET"])
+def api_rechnungen_csv_info():
+    return _json({"verfuegbar": bool(_KUNDENFUNKTIONEN), "pflicht": list(_CSV_PFLICHT), "spalten": list(_CSV_FELDER.keys())})
+
+
+@app.route("/api/invoices/csv/muster")
+def api_rechnungen_csv_muster():
+    if not _KUNDENFUNKTIONEN:
+        return _json({"error": "Endpoint nicht gefunden"}, 404)
+    return Response("﻿" + _CSV_MUSTER, mimetype="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename=rechnungen-muster.csv"})
+
+
+@app.route("/api/invoices/csv", methods=["POST"])
+def api_rechnungen_csv():
+    """Rechnungen aus einer CSV-Datei prüfen (Standard) oder einlesen (anlegen=1). Nur fehlerfreie werden angelegt."""
+    if not _KUNDENFUNKTIONEN:
+        return _json({"error": "Endpoint nicht gefunden"}, 404)
+    f = request.files.get("file")
+    if not f:
+        return _json({"error": "Keine Datei übergeben"}, 400)
+    roh = f.read(2 * 1024 * 1024 + 1)
+    if len(roh) > 2 * 1024 * 1024:
+        return _json({"error": "Die Datei ist größer als 2 MB."}, 400)
+    anlegen = str(request.form.get("anlegen", "")).lower() in ("1", "true", "ja")
+    rechnungen, hinweise = _csv_rechnungen_lesen(roh)
+    ergebnis, angelegt = [], 0
+    for r in rechnungen:
+        e = {"nummer": r["nummer"], "zeile": r["zeile"], "kunde": r["kunde"], "datum": r["datum"], "positionen": r["positionen"],
+             "brutto": None, "ok": False, "angelegt": False, "meldung": "; ".join(r["probleme"])}
+        if not r["probleme"]:
+            st, j = _csv_rechnung_ausfuehren(r["body"], True)
+            if st != 200:
+                e["meldung"] = j.get("error") or f"Fehler {st}"
+            elif not j.get("valid"):
+                e["brutto"] = j.get("gross")
+                e["meldung"] = (f"{j.get('errors')} Prüffehler: " + "; ".join(j.get("meldungen") or [])).strip(": ")
+            else:
+                e["brutto"], e["ok"] = j.get("gross"), True
+                if anlegen:
+                    st, j = _csv_rechnung_ausfuehren(r["body"], False)
+                    if st == 200 and j.get("id"):
+                        e["angelegt"], e["id"] = True, j["id"]
+                        angelegt += 1
+                    else:
+                        e["ok"], e["meldung"] = False, j.get("error") or f"Fehler {st}"
+        ergebnis.append(e)
+    if anlegen:
+        print(f"[csv-import] {angelegt} von {len(ergebnis)} Rechnungen angelegt durch {_akt_benutzer() or 'lokal'}", flush=True)
+    return _json({"ok": True, "anlegen": anlegen, "rechnungen": ergebnis, "hinweise": hinweise,
+                  "gesamt": len(ergebnis), "fehlerfrei": sum(1 for e in ergebnis if e["ok"]), "angelegt": angelegt})
 
 
 @app.route("/api/datev-bulk-export", methods=["GET"])
@@ -9490,7 +10106,7 @@ def api_invoice_zahlkonto(inv_id):
         inv.payment.bank_name = ziel.get("bank", "") if data.get("alt") else ""
     except Exception:
         pass
-    inv.add_audit("ZAHLKONTO_GEAENDERT", user=data.get("user", "web-user"),
+    inv.add_audit("ZAHLKONTO_GEAENDERT", user=_wer(data, "web-user"),
                   comment=("Zweitkonto " + (ziel.get("bank") or "")) if data.get("alt") else "Standardkonto",
                   old_value=alt_iban or "", new_value=neu)
     auto_save()
@@ -9506,7 +10122,7 @@ def api_approve(inv_id):
         return _json({"error": "Nicht gefunden"}, 404)
 
     data = request.get_json(silent=True) or {}
-    user = data.get("user", "web-user")
+    user = _wer(data, "web-user")
     comment = data.get("comment", "")
 
     if inv.status == "NEU":
@@ -9550,7 +10166,7 @@ def api_invoice_mark_paid(inv_id):
     if data.get("comment"):
         setattr(inv, "_paid_note", str(data["comment"])[:300])
     _skonto_zahlung_setzen(inv, getattr(inv, "_paid_amount", None), getattr(inv, "_paid_at", None),
-                           user=data.get("_user", "web-user"))
+                           user=_wer(data, "web-user"))
     war_bezahlt = getattr(inv, "status", "") == "BEZAHLT"
     try:
         inv.status = "BEZAHLT"
@@ -9575,7 +10191,7 @@ def api_invoice_skonto(inv_id):
     if bool(sz.get("anerkannt")) != ja:
         sz["anerkannt"] = ja
         inv._skonto_zahlung = sz
-        inv.add_audit("SKONTO_ANERKANNT" if ja else "SKONTO_ZURUECKGENOMMEN", user=data.get("_user", "web-user"),
+        inv.add_audit("SKONTO_ANERKANNT" if ja else "SKONTO_ZURUECKGENOMMEN", user=_wer(data, "web-user"),
                       comment=f"{float(sz.get('abzug') or 0):.2f} EUR Skonto, Frist war {sz.get('frist_bis')}")
         auto_save()
     return _json({"ok": True, "skonto_zahlung": sz, "open_amount": _offener_betrag(inv, _collect_storno_targets(list(invoices.values())))})
@@ -9588,7 +10204,7 @@ def api_reject(inv_id):
         return _json({"error": "Nicht gefunden"}, 404)
 
     data = request.get_json(silent=True) or {}
-    user = data.get("user", "web-user")
+    user = _wer(data, "web-user")
     comment = data.get("comment", "Zurückgewiesen via Web")
     msg = wf_engine.zurueckweisen(inv, user, comment)
     notifier.notify_rejected(inv, user, comment)
@@ -9729,6 +10345,9 @@ def api_generate():
             period_end=date.fromisoformat(data["delivery_date"]) if data.get("delivery_date") else None,
             invoice_type_code=_type_code,
             preceding_invoice=_preceding if _ist_gutschrift else "",
+            preceding_invoice_date=(next((v.invoice_date for v in invoices.values()
+                                          if v.invoice_number == _preceding), None)
+                                    if (_ist_gutschrift and _preceding) else None),   # BT-26
             currency_code=data.get("currency", "EUR"),
             buyer_reference=data.get("buyer_reference", "").strip() or "PRIV-" + (data.get("buyer_id", "") or "00000"),
             note=data.get("note", ""),
@@ -9778,6 +10397,8 @@ def api_generate():
                 unit_price=Decimal(str(line_data.get("price", 0))),
                 line_net_amount=Decimal(str(line_data.get("net", 0))),
                 tax_rate=Decimal(str(_steuersatz(line_data.get("tax_rate")))),
+                unit_code=str(line_data.get("unit") or "C62"),                 # Einheit und Zusatztext kommen aus dem CSV-Import;
+                item_description=str(line_data.get("description") or ""),      # die Maske schickt sie nicht mit
             ))
 
         # Dubletten-Check: Rechnungsnummer bereits vergeben?
@@ -9790,6 +10411,7 @@ def api_generate():
         if _nur_pruefen:
             return _json({"geprueft": True, "number": inv.invoice_number, "valid": report.is_valid,
                           "errors": report.error_count, "xml_size": len(xml_bytes),
+                          "meldungen": [f"[{i.rule_id}] {i.message}" for i in report.issues if i.severity.value == "ERROR"][:6],
                           "gross": float(inv.tax_inclusive_amount())})
 
         # Inhaltsgleiche Rechnung liegt schon unversendet vor? Dann nicht noch einmal anlegen (09.10.2026).
@@ -9835,6 +10457,8 @@ def api_generate():
             reference=data.get("buyer_reference", ""),
             salutation=data.get("buyer_salutation", ""),
             contact_name=data.get("buyer_contact_name", ""),
+            # Anrede des Ansprechpartners getrennt von der Kundenanrede (20.11.2026)
+            contact_salutation=data.get("buyer_contact_salutation", ""),
         )
 
         return _json({
@@ -9872,6 +10496,7 @@ def _storno_anlegen(inv, user, reason, storno_number=None):
         currency_code=inv.currency_code,
         buyer_reference=inv.buyer_reference or inv.buyer.buyer_reference,
         preceding_invoice=inv.invoice_number,  # Bezug auf Original
+        preceding_invoice_date=inv.invoice_date,   # BT-26
         note=f"Storno zu {inv.invoice_number}: {reason}",
         seller=copy.deepcopy(inv.seller),
         buyer=copy.deepcopy(inv.buyer),
@@ -9969,7 +10594,7 @@ def api_storno(inv_id):
         return _json({"error": f"Stornierung nur bei freigegebenen oder exportierten Rechnungen möglich (aktuell: {inv.status})."}, 400)
 
     data = request.get_json(silent=True) or {}
-    user = data.get("user", "web-user")
+    user = _wer(data, "web-user")
     reason = data.get("reason", "Stornierung")
     storno, xml_bytes, report = _storno_anlegen(inv, user, reason, data.get("storno_number"))
 
@@ -10020,7 +10645,7 @@ def api_gutschrift(inv_id):
                                f"(aktuell: {inv.status})."}, 400)
 
     data = request.get_json(silent=True) or {}
-    user = data.get("user", "web-user")
+    user = _wer(data, "web-user")
     reason = (data.get("reason", "") or "").strip()
     if not reason:
         return _json({"error": "Bitte einen Grund fuer die Gutschrift angeben."}, 400)
@@ -10047,6 +10672,7 @@ def api_gutschrift(inv_id):
         currency_code=inv.currency_code,
         buyer_reference=inv.buyer_reference or inv.buyer.buyer_reference,
         preceding_invoice=inv.invoice_number,
+        preceding_invoice_date=inv.invoice_date,   # BT-26
         note=(data.get("note") or "").strip() or f"Gutschrift zu Rechnung {inv.invoice_number}: {reason}",
         seller=copy.deepcopy(inv.seller),
         buyer=copy.deepcopy(inv.buyer),
@@ -10238,6 +10864,11 @@ def api_send_invoice(inv_id):
     inv = invoices.get(inv_id)
     if not inv:
         return _json({"error": "Rechnung nicht gefunden"}, 404)
+    _k = getattr(inv, "_kosit", None) or {}
+    if _KUNDENFUNKTIONEN and _k.get("gueltig") is False:
+        return _json({"error": f"Nicht versendet: Die amtliche Prüfung (KoSIT) meldet {_k.get('fehler', 0)} Fehler in dieser Rechnung. "
+                               f"Der Empfänger könnte sie zurückweisen. Bitte die Fehler in der Rechnungsansicht ansehen.",
+                      "kosit": _k}, 409)
 
     data = request.get_json(silent=True) or {}
     recipient = data.get("recipient", "")
@@ -10559,7 +11190,7 @@ def api_set_accounting(inv_id):
     cost_center = data.get("cost_center", "")
     project = data.get("project", "")
     accounting.learn_from_invoice(inv, account, cost_center, project)
-    inv.add_audit("KONTIERUNG", data.get("user", "web"), f"Konto: {account}, KSt: {cost_center}")
+    inv.add_audit("KONTIERUNG", _wer(data, "web"), f"Konto: {account}, KSt: {cost_center}")
     return _json({"saved": True, "account": account, "cost_center": cost_center})
 
 @app.route("/api/accounting/stats")
@@ -10603,7 +11234,7 @@ def api_bulk_assign():
     if not ids or not assigned_to:
         return _json({"error": "invoice_ids und assigned_to erforderlich"}, 400)
     inv_list = [invoices[i] for i in ids if i in invoices]
-    result = bulk.bulk_assign(inv_list, assigned_to, data.get("user", "web"))
+    result = bulk.bulk_assign(inv_list, assigned_to, _wer(data, "web"))
     return _json({"action": result.action, "total": result.total,
                    "success": result.success, "failed": result.failed, "details": result.details})
 
@@ -10612,7 +11243,7 @@ def api_bulk_workflow():
     data = request.get_json(silent=True) or {}
     ids = data.get("invoice_ids", [])
     inv_list = [invoices[i] for i in ids if i in invoices]
-    result = bulk.bulk_start_workflow(inv_list, data.get("user", "web"))
+    result = bulk.bulk_start_workflow(inv_list, _wer(data, "web"))
     return _json({"action": result.action, "total": result.total,
                    "success": result.success, "skipped": result.skipped, "details": result.details})
 
@@ -10725,6 +11356,75 @@ def get_logo_data_uri() -> str:
     mime = mime_map.get(p.suffix.lower(), "image/png")
     data = base64.b64encode(p.read_bytes()).decode()
     return f"data:{mime};base64,{data}"
+
+
+# ── Gestaltung der Belege (24.11.2026): eine Gestaltung für alle Formulare, mit Vorschau ─────────────────────────────
+_DESIGN_VORSCHAU_ARTEN = {"invoice": "RE-2026-00123", "customer_quote": "ANG-K-2026-0045", "order_confirmation": "AB-2026-0045",
+                          "delivery_note": "LIEF-2026-0045", "payment_invoice": "AR-2026-0007", "gutschrift": "GS-2026-00011",
+                          "storno": "ST-RE-2026-00123", "dunning": "MAH-2026-0003"}
+
+def _design_darf_aendern():
+    users = _load_users()
+    if not users:
+        return True
+    ich = _benutzer_ich(users)
+    return bool(ich) and _benutzer_admin(users, ich)
+
+@app.route("/api/design", methods=["GET"])
+def api_design_get():
+    if not _KUNDENFUNKTIONEN:
+        return _json({"error": "Endpoint nicht gefunden"}, 404)
+    import doc_generator as _dg
+    return _json({"design": _dg.design_laden(_DATA / "data"), "standard": dict(_dg.DESIGN_STANDARD),
+                  "darf_aendern": _design_darf_aendern()})
+
+@app.route("/api/design", methods=["PUT"])
+def api_design_put():
+    if not _KUNDENFUNKTIONEN:
+        return _json({"error": "Endpoint nicht gefunden"}, 404)
+    import doc_generator as _dg
+    if not _design_darf_aendern():
+        return _json({"error": "Die Gestaltung ändern darf nur ein Verwalter."}, 403)
+    data = request.get_json(silent=True) or {}
+    d = _dg.design_speichern(_DATA / "data", dict(_dg.DESIGN_STANDARD) if data.get("standard") else data.get("design"))
+    print(f"[design] gespeichert von {_akt_benutzer() or 'lokal'}", flush=True)
+    return _json({"ok": True, "design": d})
+
+@app.route("/api/design/vorschau", methods=["POST"])
+def api_design_vorschau():
+    """Musterbeleg in der übergebenen (noch nicht gespeicherten) Gestaltung — wird nirgends abgelegt."""
+    if not _KUNDENFUNKTIONEN:
+        return _json({"error": "Endpoint nicht gefunden"}, 404)
+    import doc_generator as _dg
+    data = request.get_json(silent=True) or {}
+    art = data.get("art") if data.get("art") in _DESIGN_VORSCHAU_ARTEN else "invoice"
+    heute = date.today()
+    try:
+        seller = doc_gen._load_seller()
+        if not (seller or {}).get("name"):
+            seller = dict(seller or {}, name="Ihre Firma GmbH", street="Musterstraße", house_number="1", post_code="12345",
+                          city="Musterstadt", email="info@ihre-firma.example", contact_phone="+49 30 1234567",
+                          vat_id="DE123456789", iban="DE89370400440532013000", bic="COBADEFFXXX")
+        pdf = _dg.generate_document(
+            design=data.get("design") or {},
+            doc_type=art, seller=seller,
+            recipient={"name": "Beispiel Wohnbau AG", "street": "Beispielallee", "house_number": "20",
+                       "post_code": "54321", "city": "Beispielstadt"},
+            positions=[{"pos_nr": 1, "description": "Beratung vor Ort", "quantity": 12.0, "unit": "Std.", "unit_price": 95.0,
+                        "net_amount": 1140.0, "tax_rate": 19.0, "discount_percent": 0, "discount_amount": 0},
+                       {"pos_nr": 2, "description": "Dokumentation und Bericht", "quantity": 1.0, "unit": "Stk.", "unit_price": 650.0,
+                        "net_amount": 650.0, "tax_rate": 19.0, "discount_percent": 0, "discount_amount": 0},
+                       {"pos_nr": 3, "description": "Fahrtkosten pauschal", "quantity": 2.0, "unit": "Stk.", "unit_price": 45.0,
+                        "net_amount": 90.0, "tax_rate": 19.0, "discount_percent": 0, "discount_amount": 0}],
+            step={"date": heute.isoformat()}, reference=_DESIGN_VORSCHAU_ARTEN[art], doc_date=heute.isoformat(),
+            due_date=(heute + timedelta(days=14)).isoformat() if art in ("invoice", "payment_invoice", "dunning") else "",
+            logo_path=doc_gen._logo(), dunning_level=1 if art == "dunning" else 0,
+            original_invoice_ref="RE-2026-00123" if art in ("gutschrift", "storno", "dunning") else "",
+            original_invoice_amount=2237.20 if art == "dunning" else 0)
+    except Exception as e:
+        return _json({"error": f"Vorschau nicht möglich: {e}"}, 500)
+    return Response(pdf, mimetype="application/pdf", headers={"Cache-Control": "no-store",
+                                                              "Content-Disposition": "inline; filename=vorschau.pdf"})
 
 
 @app.route("/api/logo", methods=["GET"])
@@ -11040,6 +11740,18 @@ def api_external_create_from_epbd():
         "lines": inv_lines,
     }
 
+    # Vorauszahlung (21.11.2026: "wenn die Rechnung schon bezahlt wurde, sollte das in der Mail an den
+    # Kunden stehen"): die Ausweis-App vermerkt den Bankeingang am Ausweis (bezahltAm/bezahltBetrag). Deckt er
+    # den Rechnungsbetrag, steht statt "Zahlbar sofort" der Zahlungseingang auf Rechnung und in der Mail.
+    try:
+        _vz_am = str(cert.get("bezahltAm") or "").strip()
+        _vz_betrag = float(str(cert.get("bezahltBetrag") or 0).replace(",", "."))
+        _vz_brutto = round(float(total_net) * (1 + float(tax) / 100), 2)
+        if _vz_am and _vz_betrag + 0.005 >= _vz_brutto > 0:
+            inv_payload["payment_terms"] = f"Bereits bezahlt am {_vz_am} - vielen Dank. Es ist keine Zahlung mehr nötig."
+    except Exception as _e:
+        print(f"[create-from-epbd] Vorauszahlung nicht auswertbar: {_e}", flush=True)
+
     # Über internen Test-Client an /api/generate weiterleiten — gleiche Logik wie UI-Aufruf.
     # Wichtig: Session als logged_in markieren, sonst greift @before_request require_login.
     send_result = None
@@ -11063,8 +11775,13 @@ def api_external_create_from_epbd():
     inv_number = inv_resp.get("number")
     gross = float(inv_resp.get("gross") or 0)
 
+    # Vorauszahlung (17.11.2026): Kunde hat schon ueberwiesen, bevor es die Rechnung gab —
+    # offene Bankeingaenge sofort gegen die neue Rechnung pruefen.
+    vorab = _bank_vorauszahlung_zuordnen(inv_id)
+
     resp = {
         "ok": True,
+        "paid_in_advance": bool(vorab),
         "invoice_id": inv_id,
         "invoice_number": inv_number,
         "buyer_existed": bool(existing_buyer),

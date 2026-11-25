@@ -219,6 +219,8 @@ def generate_xrechnung(inv: Invoice) -> etree._Element:
     if inv.preceding_invoice:
         br = etree.SubElement(root, _cac("BillingReference"))
         ir = etree.SubElement(br, _cac("InvoiceDocumentReference")); _txt(ir, "ID", inv.preceding_invoice)
+        if getattr(inv, "preceding_invoice_date", None):      # BT-26
+            _dt(ir, "IssueDate", inv.preceding_invoice_date)
     if inv.contract_reference:
         cr = etree.SubElement(root, _cac("ContractDocumentReference")); _txt(cr, "ID", inv.contract_reference)
     if inv.project_reference:

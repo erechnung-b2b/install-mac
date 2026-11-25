@@ -298,7 +298,12 @@ def generate_cii(inv: Invoice) -> etree._Element:
     _el(summ, "DuePayableAmount", _betrag(inv.amount_due()))
 
     if inv.preceding_invoice:
-        _el(_el(st, "InvoiceReferencedDocument"), "IssuerAssignedID", inv.preceding_invoice)
+        _ird = _el(st, "InvoiceReferencedDocument")
+        _el(_ird, "IssuerAssignedID", inv.preceding_invoice)
+        if getattr(inv, "preceding_invoice_date", None):      # BT-26 (hier qdt, nicht udt)
+            _fd = etree.SubElement(_el(_ird, "FormattedIssueDateTime"), "{%s}DateTimeString" % NS_QDT)
+            _fd.set("format", "102")
+            _fd.text = inv.preceding_invoice_date.strftime("%Y%m%d")
 
     return root
 

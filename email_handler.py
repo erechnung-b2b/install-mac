@@ -620,6 +620,22 @@ class EmailSender:
             "" if is_storno
             else f"  Zahlungsziel:     {inv.payment.payment_terms or 'siehe Rechnung'}\n"
         )
+        # Schon bezahlt (Vorauszahlung beim Energieausweis oder erneuter Versand einer bezahlten Rechnung):
+        # der Kunde soll nicht noch einmal zahlen (21.11.2026).
+        _terms = str(inv.payment.payment_terms or "")
+        _paid_at = getattr(inv, "_paid_at", None)
+        if not is_storno and (_terms.startswith("Bereits bezahlt") or _paid_at or inv.status == "BEZAHLT"):
+            if _terms.startswith("Bereits bezahlt"):
+                _zeile = _terms
+            else:
+                _am = ""
+                try:
+                    _am = " am " + datetime.strptime(str(_paid_at)[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+                except Exception:
+                    pass
+                _zeile = f"Bereits bezahlt{_am} - vielen Dank. Es ist keine Zahlung mehr nötig."
+            zahlungsziel = f"  Zahlung:          {_zeile}\n"
+            opening += " Den Rechnungsbetrag haben wir bereits erhalten - Sie müssen nichts mehr überweisen."
         # Schlussrechnung mit Abschlaegen: der Kunde zahlt den Rest, nicht den
         # Bruttobetrag — die Mail nannte bisher nur den vollen Betrag.
         try:

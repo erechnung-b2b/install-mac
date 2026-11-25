@@ -189,7 +189,11 @@ def build(inv, doc_gen, buyers, mandant_settings):
             closing_tpl = (closing_tpl or "").rstrip() + "\n" + _zus      # Grußformel: Zusatz unter dem Namen
         closing_tpl = (closing_tpl or "").replace(" ".join(_v2n.split()), _v2n)   # einzeilig gesetzter Name → zwei Zeilen
     doc_gen._seller_override = {"name": _v2n} if _ist_v2 else None
-    pdf_entry = doc_gen.generate(
+    import doc_generator as _dg
+    _terms = str((inv.payment.payment_terms if inv.payment else "") or "")
+    _dg._BEZAHLT_HINWEIS = _terms if (_terms.startswith("Bereits bezahlt") and not is_credit) else None
+    try:
+      pdf_entry = doc_gen.generate(
         doc_type=doc_type_for_pdf,
         recipient=buyer_data,
         positions=positions,
@@ -204,7 +208,9 @@ def build(inv, doc_gen, buyers, mandant_settings):
         intro_text=intro_tpl,
         closing_text=closing_tpl,
         original_invoice_ref=(inv.preceding_invoice or "") if is_credit else "",
-    )
+      )
+    finally:
+        _dg._BEZAHLT_HINWEIS = None
     doc_gen._prepaid_invoices = _vorher      # Zustand nicht am Generator zuruecklassen
     doc_gen._zahlung_override = None
     doc_gen._seller_override = None

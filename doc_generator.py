@@ -40,6 +40,67 @@ LIGHT_GRAY = colors.HexColor("#F5F7FA")
 BORDER_GRAY = colors.HexColor("#D1D5DB")
 WHITE = colors.white
 
+# ── Gestaltung der Belege (24.11.2026) ───────────────────────────────────────────────────────────────────────────────
+# Eine Gestaltung je Installation, sie gilt für ALLE Belege (Angebot bis Mahnung). Gespeichert in data/design.json;
+# ohne Datei gilt der Standard = das bisherige Aussehen. generate_document() setzt die Werte für die Dauer EINES
+# Dokuments (unter einer Sperre, damit eine Vorschau mit ungespeicherten Werten kein anderes Dokument einfärbt).
+import re as _re_design
+import threading as _threading_design
+_DESIGN_SPERRE = _threading_design.RLock()
+_DESIGN_ORT = Path(__file__).resolve().parent / "data"
+DESIGN_STANDARD = {
+    "farbe_haupt": "#1B4B82",       # Titel, Tabellenkopf, Summenlinie
+    "farbe_akzent": "#00A0D2",      # Linie unter dem Briefkopf
+    "logo_position": "links",       # links | rechts
+    "logo_groesse_mm": 22,          # 12 … 45
+    "firmenblock": True,            # Name und Anschrift neben dem Logo zeigen
+    "tabellenkopf": "gefuellt",     # gefuellt | linie
+    "zebra": True,                  # jede zweite Tabellenzeile hinterlegt
+    "titel_groesse": 16,            # 12 … 22
+    "fusszeile_zusatz": "",         # zweite Fußzeile, z. B. Geschäftsführung · Registergericht
+}
+_D = dict(DESIGN_STANDARD)
+
+
+def design_pruefen(d) -> dict:
+    """Nur bekannte Felder mit gültigen Werten übernehmen; alles andere fällt auf den Standard zurück."""
+    aus = dict(DESIGN_STANDARD)
+    d = d if isinstance(d, dict) else {}
+    for k in ("farbe_haupt", "farbe_akzent"):
+        v = str(d.get(k, "")).strip()
+        if _re_design.fullmatch(r"#[0-9A-Fa-f]{6}", v):
+            aus[k] = v.upper()
+    if d.get("logo_position") in ("links", "rechts"):
+        aus["logo_position"] = d["logo_position"]
+    if d.get("tabellenkopf") in ("gefuellt", "linie"):
+        aus["tabellenkopf"] = d["tabellenkopf"]
+    for k, lo, hi in (("logo_groesse_mm", 12, 45), ("titel_groesse", 12, 22)):
+        try:
+            aus[k] = min(hi, max(lo, int(float(d.get(k, aus[k])))))
+        except (TypeError, ValueError):
+            pass
+    for k in ("firmenblock", "zebra"):
+        if k in d:
+            aus[k] = bool(d[k])
+    aus["fusszeile_zusatz"] = " ".join(str(d.get("fusszeile_zusatz", "") or "").split())[:160]
+    return aus
+
+
+def design_laden(data_dir=None) -> dict:
+    try:
+        return design_pruefen(json.loads((Path(data_dir or _DESIGN_ORT) / "design.json").read_text(encoding="utf-8")))
+    except Exception:
+        return dict(DESIGN_STANDARD)
+
+
+def design_speichern(data_dir, d) -> dict:
+    d = design_pruefen(d)
+    ziel = Path(data_dir) / "design.json"
+    tmp = ziel.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, ziel)
+    return d
+
 DOC_TYPE_TITLES = {
     "supplier_quote":     "Anfrage",
     "purchase_order":     "Bestellung",
@@ -82,7 +143,7 @@ def _build_styles():
 
     styles["doc_title"] = ParagraphStyle(
         "doc_title", parent=ss["Normal"],
-        fontSize=16, textColor=DEEP_BLUE, leading=20, fontName="Helvetica-Bold",
+        fontSize=_D["titel_groesse"], textColor=DEEP_BLUE, leading=_D["titel_groesse"] + 4, fontName="Helvetica-Bold",
         spaceAfter=2*mm)
 
     styles["doc_meta"] = ParagraphStyle(
@@ -107,7 +168,7 @@ def _build_styles():
 
     styles["table_header"] = ParagraphStyle(
         "table_header", parent=ss["Normal"],
-        fontSize=8, textColor=WHITE, leading=10, fontName="Helvetica-Bold")
+        fontSize=8, textColor=(WHITE if _D["tabellenkopf"] == "gefuellt" else DEEP_BLUE), leading=10, fontName="Helvetica-Bold")
 
     styles["table_cell"] = ParagraphStyle(
         "table_cell", parent=ss["Normal"],
@@ -222,7 +283,7 @@ def _build_header(story, styles, seller: dict, logo_path: Optional[str]):
     logo_cell = ""
     if logo_path and os.path.exists(logo_path):
         try:
-            logo_cell = Image(logo_path, width=22*mm, height=22*mm,
+            logo_cell = Image(logo_path, width=_D["logo_groesse_mm"]*mm, height=_D["logo_groesse_mm"]*mm,
                               kind="proportional")
         except Exception:
             logo_cell = ""
@@ -257,18 +318,22 @@ def _build_header(story, styles, seller: dict, logo_path: Optional[str]):
     _hs = styles["header_sub"]
     if len(_nz) > 1:      # zwei Namenszeilen in 11 pt brauchen mehr Zeilenabstand, sonst laufen sie ineinander
         _hs = ParagraphStyle("header_sub_zusatz", parent=_hs, leading=12.5)
-    info_para = Paragraph("<br/>".join(info_lines), _hs)
+    info_para = Paragraph("<br/>".join(info_lines) if _D["firmenblock"] else "", _hs)
 
+    # Gestaltung: Logo links oder rechts, Größe frei; die Logospalte wächst mit
+    _lb = (_D["logo_groesse_mm"] + 6) * mm
+    _rest = PAGE_W - MARGIN_L - MARGIN_R - _lb
+    _rechts = _D["logo_position"] == "rechts"
     header_table = Table(
-        [[logo_cell, info_para]],
-        colWidths=[28*mm, PAGE_W - MARGIN_L - MARGIN_R - 28*mm],
-        rowHeights=[28*mm]
+        [[info_para, logo_cell]] if _rechts else [[logo_cell, info_para]],
+        colWidths=[_rest, _lb] if _rechts else [_lb, _rest],
+        rowHeights=[max(28*mm, _lb)]
     )
     header_table.setStyle(TableStyle([
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-    ]))
+    ] + ([("ALIGN", (1, 0), (1, 0), "RIGHT")] if _rechts else [])))
     story.append(header_table)
 
     # Trennlinie
@@ -321,7 +386,16 @@ def _build_address_block(story, styles, seller: dict, recipient: dict):
             # Mit Ansprechpartner: Anrede vor die Person ("Herr Max Mustermann").
             # Steht die Person schon in der Namenszeile (Kunden ohne Firma tragen
             # "Frau Ingrida Kasparovaite" als Namen), waere das eine Dopplung.
-            kontaktzeile = f"{salut} {contact}".strip()
+            # Vor die Person gehoert die Anrede des ANSPRECHPARTNERS ("Herr"), nicht die
+            # der Firma — sonst stand "Firma Dominic Schaefer" unter der GmbH
+            # (20.11.2026, RE-2026-00161). Ohne eigene Anrede des Ansprechpartners
+            # gilt die Kundenanrede weiter, ausser sie lautet "Firma".
+            k_anrede = (recipient.get("contact_salutation") or "").strip()
+            if not k_anrede and salut.lower() != "firma":
+                k_anrede = salut
+            if k_anrede and contact.lower().startswith(k_anrede.lower()):
+                k_anrede = ""
+            kontaktzeile = f"{k_anrede} {contact}".strip()
             namensblock = " ".join(r_name.split()).lower()
             if contact.strip().lower() not in namensblock:
                 lines.append(kontaktzeile)
@@ -418,9 +492,10 @@ def _build_positions_table(story, styles, positions: list, show_prices: bool = T
 
     tbl = Table(data, colWidths=col_widths, repeatRows=1)
     tbl_style = [
-        # Header
-        ("BACKGROUND", (0, 0), (-1, 0), DEEP_BLUE),
-        ("TEXTCOLOR", (0, 0), (-1, 0), WHITE),
+        # Header (Gestaltung: gefüllt in der Hauptfarbe oder nur mit Linie)
+        (("BACKGROUND", (0, 0), (-1, 0), DEEP_BLUE) if _D["tabellenkopf"] == "gefuellt"
+         else ("LINEBELOW", (0, 0), (-1, 0), 1.2, DEEP_BLUE)),
+        ("TEXTCOLOR", (0, 0), (-1, 0), WHITE if _D["tabellenkopf"] == "gefuellt" else DEEP_BLUE),
         ("FONTSIZE", (0, 0), (-1, 0), 8),
         ("BOTTOMPADDING", (0, 0), (-1, 0), 4),
         ("TOPPADDING", (0, 0), (-1, 0), 4),
@@ -433,8 +508,10 @@ def _build_positions_table(story, styles, positions: list, show_prices: bool = T
     ]
     # Zebra
     for i in range(1, len(data)):
-        if i % 2 == 0:
+        if i % 2 == 0 and _D["zebra"]:
             tbl_style.append(("BACKGROUND", (0, i), (-1, i), LIGHT_GRAY))
+    if _D["tabellenkopf"] != "gefuellt":      # Linie des Kopfs nach der dünnen Zeilenlinie setzen, sonst überdeckt diese sie
+        tbl_style.append(("LINEBELOW", (0, 0), (-1, 0), 1.2, DEEP_BLUE))
 
     tbl.setStyle(TableStyle(tbl_style))
     story.append(tbl)
@@ -651,7 +728,7 @@ def _skonto_von(step) -> tuple:
 
 def _skonto_text(doc_type: str, prozent: float, tage: int, offen: float, doc_date: str = "") -> str:
     p = f"{prozent:.2f}".rstrip("0").rstrip(".").replace(".", ",")
-    if doc_type != "invoice":
+    if doc_type not in ("invoice", "payment_invoice"):
         return (f"<b>Skonto:</b> Bei Zahlung innerhalb von {tage} Tagen nach Rechnungsdatum gewähren wir "
                 f"{p} % Skonto auf den Rechnungsbetrag.")
     betrag = round(offen * prozent / 100, 2)
@@ -665,11 +742,20 @@ def _skonto_text(doc_type: str, prozent: float, tage: int, offen: float, doc_dat
             f"Zu zahlen sind dann {_fmt(offen - betrag)} EUR.")
 
 
+# Rechnung, deren Betrag schon vor der Rechnungsstellung einging (Vorauszahlung Energieausweis, 21.11.2026):
+# invoice_pdf setzt den Hinweis fuer die Dauer eines PDF-Laufs; dann steht er statt Konto, "Zahlbar sofort" und GiroCode.
+_BEZAHLT_HINWEIS = None
+
+
 def _build_payment_info(story, styles, seller: dict, gross: float = 0,
                         due_date: str = "", reference: str = "",
                         show_qr: bool = False, doc_date: str = ""):
     """IBAN, BIC, Zahlungsziel. Optional mit GiroCode-QR (für Rechnung + Mahnung)."""
     story.append(Spacer(1, 6*mm))
+
+    if _BEZAHLT_HINWEIS:
+        story.append(Paragraph(f"<b>{_BEZAHLT_HINWEIS}</b>", styles["body"]))
+        return
 
     parts = []
     iban = seller.get("iban", "")
@@ -765,6 +851,15 @@ def _footer_func(canvas, doc, seller: dict):
     canvas.drawRightString(PAGE_W - MARGIN_R, y, _fr)
     canvas.setFont("Helvetica", 6.5)
 
+    # Zweiter Verkäufer (Gesellschaft): Geschäftsführer und Registergericht, links unter der Fußzeile
+    _zusatz = " · ".join(x for x in (str(seller.get("recht") or ""), _D.get("fusszeile_zusatz") or "") if x)
+    if _zusatz:      # Gestaltung: eigene zweite Fußzeile (Geschäftsführung, Registergericht …), links unter der Fußzeile
+        _zb = canvas.stringWidth(_zusatz, "Helvetica", 6.5)
+        _zp = (PAGE_W - MARGIN_L - MARGIN_R) / 2 - 22
+        if _zb > _zp:
+            canvas.setFont("Helvetica", max(4.5, 6.5 * _zp / _zb))
+        canvas.drawString(MARGIN_L, y - 8, _zusatz)
+        canvas.setFont("Helvetica", 6.5)
     # Seitenzahl
     canvas.drawCentredString(PAGE_W / 2, y - 8, f"Seite {doc.page}")
     canvas.restoreState()
@@ -1024,7 +1119,21 @@ def _build_order_signature_block(story, styles, offer_settings: Optional[dict] =
     ]))
 
 
-def generate_document(
+def generate_document(*args, design: Optional[dict] = None, **kw) -> bytes:
+    """Erzeugt ein PDF-Dokument in der Gestaltung der Installation (data/design.json) oder — für die Vorschau —
+    in der übergebenen Gestaltung. Gibt die PDF-Bytes zurück."""
+    global DEEP_BLUE, CYAN, _D
+    with _DESIGN_SPERRE:
+        d = design_pruefen(design) if design is not None else design_laden()
+        vorher = (DEEP_BLUE, CYAN, _D)
+        DEEP_BLUE, CYAN, _D = colors.HexColor(d["farbe_haupt"]), colors.HexColor(d["farbe_akzent"]), d
+        try:
+            return _generate_document_roh(*args, **kw)
+        finally:
+            DEEP_BLUE, CYAN, _D = vorher
+
+
+def _generate_document_roh(
     doc_type: str,
     seller: dict,
     recipient: dict,
@@ -1130,7 +1239,7 @@ def generate_document(
 
     # ── Skonto (16.11.2026): eigener Absatz unter den Summen; der Schlusstext darf dem nicht widersprechen ──
     _sk_p, _sk_t = _skonto_von(step)
-    if _sk_p and doc_type in ("customer_quote", "order_confirmation", "invoice"):
+    if _sk_p and doc_type in ("customer_quote", "order_confirmation", "invoice", "payment_invoice"):
         _offen = max(0.0, float(totals.get("gross", 0) or 0) - float(prepaid_total or 0))
         story.append(Spacer(1, 4*mm))
         story.append(Paragraph(_skonto_text(doc_type, _sk_p, _sk_t, _offen, doc_date), styles["body"]))
@@ -1559,6 +1668,16 @@ class DocumentGenerator:
         self._seller_override = None          # gilt nur für dieses eine Dokument
         if _so.get("name"):
             seller = dict(seller, kontoinhaber=seller.get("name", ""), name=_so["name"])
+            # Pflichtangaben der Gesellschaft (Geschäftsführer, Registergericht) in die Fußzeile — 19.11.2026
+            try:
+                import json as _json2
+                _v2 = _json2.loads((self.data_dir / "mandant_settings.json").read_text("utf-8")).get("verkaeufer2") or {}
+                _recht = " · ".join(x for x in [("Geschäftsführer: " + str(_v2.get("gf")).strip()) if _v2.get("gf") else "",
+                                                str(_v2.get("register") or "").strip()] if x)
+                if _recht:
+                    seller["recht"] = _recht
+            except Exception:
+                pass
         # Abweichendes Zahlungskonto + Verwendungszweck fuer EIN Dokument (Dauerrechnung Online-Zugang, 11.10.2026):
         # Die Abo-Zahlungen laufen auf ein eigenes Konto und werden am Nutzercode erkannt — stuende hier das
         # Standardkonto mit der Rechnungsnummer, kaeme die Zahlung an und wuerde nicht zugeordnet.
@@ -1598,6 +1717,7 @@ class DocumentGenerator:
                 offer_settings = None
 
         pdf_bytes = generate_document(
+            design=design_laden(self.data_dir),
             doc_type=doc_type,
             seller=seller,
             recipient=recipient,

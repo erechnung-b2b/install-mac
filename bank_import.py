@@ -499,6 +499,11 @@ def auto_match(transaction, invoices_iter):
         # damit der Match auch greift, wenn buyer_reference eine Vorgangsnummer ist.
         ea_refs.extend(re.findall(r'EA-[0-9A-Z]+(?:-[0-9A-Z]+)*', _note_up))
         ea_hit = next((r for r in ea_refs if r and len(r) >= 6 and r in purpose_upper), None)
+        if not ea_hit:
+            # Kunden lassen Bindestriche/Leerzeichen weg ("E1794915362237-1cd2F02064")
+            _pz = re.sub(r'[^0-9A-Z]', '', purpose_upper)
+            ea_hit = next((r for r in ea_refs if r and len(re.sub(r'[^0-9A-Z]', '', r)) >= 10
+                           and re.sub(r'[^0-9A-Z]', '', r) in _pz), None)
         if ea_hit:
             score += 60
             reasons.append(f"Energieausweisnummer im Verwendungszweck ({ea_hit})")

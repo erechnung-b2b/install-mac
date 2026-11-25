@@ -72,6 +72,8 @@ class InvoiceStore:
             "contract_reference": inv.contract_reference,
             "project_reference": inv.project_reference,
             "preceding_invoice": inv.preceding_invoice,
+            "preceding_invoice_date": (inv.preceding_invoice_date.isoformat()
+                                       if getattr(inv, "preceding_invoice_date", None) else None),
             "note": inv.note,
             "tax_point_date": inv.tax_point_date.isoformat() if inv.tax_point_date else None,
             "period_start": inv.period_start.isoformat() if inv.period_start else None,
@@ -84,6 +86,7 @@ class InvoiceStore:
             "_skonto_zahlung": getattr(inv, '_skonto_zahlung', None),
             # Dauerrechnung Online-Zugang (11.10.2026): Bezug zum Abo der Haupt-App + die Monatszahlungen nach der ersten
             "_nutzerabo": getattr(inv, '_nutzerabo', None),
+            "_kosit": getattr(inv, '_kosit', None),      # Ergebnis der amtlichen Prüfung (KoSIT), 24.11.2026
             "_dauer_zahlungen": getattr(inv, '_dauer_zahlungen', None),
             "seller": {
                 "name": inv.seller.name,
@@ -178,6 +181,8 @@ class InvoiceStore:
             contract_reference=d.get("contract_reference", ""),
             project_reference=d.get("project_reference", ""),
             preceding_invoice=d.get("preceding_invoice", ""),
+            preceding_invoice_date=(date.fromisoformat(d["preceding_invoice_date"])
+                                    if d.get("preceding_invoice_date") else None),
             # Anzahlungen (BT-113) — fehlt bei Altbestaenden, dann 0,00
             prepaid_amount=Decimal(str(d.get("prepaid_amount") or "0.00")),
             prepaid_details=list(d.get("prepaid_details") or []),
@@ -292,6 +297,8 @@ class InvoiceStore:
             inv._paid_amount = d["_paid_amount"]
         if d.get("_nutzerabo"):
             inv._nutzerabo = d["_nutzerabo"]
+        if d.get("_kosit"):
+            inv._kosit = dict(d["_kosit"])
         if d.get("_dauer_zahlungen"):
             inv._dauer_zahlungen = list(d["_dauer_zahlungen"])
         if d.get("_paid_via_booking"):

@@ -185,6 +185,8 @@ class Invoice:
     contract_reference: str = ""
     project_reference: str = ""
     preceding_invoice: str = ""
+    # BT-26: Ausstellungsdatum der Bezugsrechnung (zu BT-25), 24.11.2026
+    preceding_invoice_date: Optional[date] = None
 
     # Bereits geleistete Anzahlungen (BT-113). Die Schlussrechnung zog sie bisher
     # NUR im PDF ab, die XRechnung trug PrepaidAmount fest 0,00 und forderte den

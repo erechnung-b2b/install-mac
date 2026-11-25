@@ -83,6 +83,14 @@ class ValidationReport:
 IBAN_RE = re.compile(r"^[A-Z]{2}\d{2}[A-Z0-9]{4,30}$")
 
 
+# BT-3 Belegart: erlaubte Codes nach EN 16931 (Regel BR-CL-01, aus den amtlichen KoSIT-Prüfregeln übernommen)
+# und die engere Auswahl der XRechnung (BR-DE-17). 24.11.2026.
+_BT3_RECHNUNG = set("71 80 81 82 84 102 130 202 203 204 211 218 219 295 325 326 331 380 382 383 384 385 386 387 388 389 "
+                    "390 393 394 395 456 457 471 472 473 500 501 502 503 527 553 575 623 633 751 780 817 870 875 876 877 935".split())
+_BT3_GUTSCHRIFT = set("81 83 261 262 296 308 381 396 420 458 532".split())
+_BT3_XRECHNUNG = {"326", "380", "384", "389", "381", "875", "876", "877"}
+
+
 def validate_invoice(inv: Invoice) -> ValidationReport:
     report = ValidationReport(invoice_number=inv.invoice_number, timestamp=datetime.now().isoformat())
     iss = report.issues
@@ -105,6 +113,19 @@ def validate_invoice(inv: Invoice) -> ValidationReport:
     if not inv.invoice_number: err("BR-01", "Rechnungsnummer (BT-1) fehlt.", "BT-1")
     if not inv.invoice_date: err("BR-02", "Rechnungsdatum (BT-2) fehlt.", "BT-2")
     if not inv.invoice_type_code: err("BR-03", "Rechnungstyp (BT-3) fehlt.", "BT-3")
+    _tc = str(inv.invoice_type_code or "").strip()
+    if _tc and _tc not in _BT3_RECHNUNG and _tc not in _BT3_GUTSCHRIFT:
+        err("BR-CL-01", f"Rechnungstyp (BT-3) „{_tc}“ steht nicht in der Codeliste UNTDID 1001 der EN 16931.", "BT-3")
+    elif _tc and _tc not in _BT3_XRECHNUNG:
+        warn("BR-DE-17", f"Rechnungstyp (BT-3) „{_tc}“: die XRechnung sieht nur 326, 380, 381, 384, 389, 875, 876, 877 vor.", "BT-3")
+    _vor = (getattr(inv, "preceding_invoice", "") or "").strip()
+    _vor_datum = getattr(inv, "preceding_invoice_date", None)
+    if _tc == "384" and not _vor:
+        warn("BG-3", "Rechnungskorrektur (384) ohne Bezug auf die Ursprungsrechnung (BT-25).", "BT-25")
+    if _vor_datum and not _vor:
+        err("BR-55", "Datum der Bezugsrechnung (BT-26) ohne deren Nummer (BT-25).", "BT-25")
+    if _vor_datum and inv.invoice_date and _vor_datum > inv.invoice_date:
+        warn("BT-26", "Das Datum der Bezugsrechnung (BT-26) liegt nach dem Datum dieses Belegs.", "BT-26")
     if not inv.currency_code: err("BR-04", "Währungscode (BT-5) fehlt.", "BT-5")
 
     ref = inv.buyer_reference or inv.buyer.buyer_reference

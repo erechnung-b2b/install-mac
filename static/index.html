@@ -3,8 +3,59 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="darstellung-mobil" content="1">
+<script>/* Darstellung für Handy und iPad (24.11.2026): nur wenn der Schalter oben auf 1 steht (das setzt der Bau der Kundenversion) */
+if ((document.querySelector('meta[name="darstellung-mobil"]') || {}).content === '1') document.documentElement.classList.add('mob');</script>
 <title>E-Rechnungsplattform</title>
 <style>
+/* ── Handy und iPad (hochkant): Menü zum Ausklappen, eine Spalte, Tabellen rollen in ihrer Karte ── */
+.mob-leiste,.mob-schleier{display:none}
+#bank-abdeckung-card,button[onclick^="bankGegenbuchungen"]{display:none !important}
+@media (max-width:900px){
+  html.mob .shell{display:block}
+  html.mob .sidebar{position:fixed;top:0;left:0;bottom:0;z-index:400;width:270px;max-width:86vw;overflow-y:auto;transform:translateX(-102%);transition:transform .2s ease;box-shadow:0 0 40px rgba(0,0,0,.25);padding-top:10px}
+  html.mob.mob-offen .sidebar{transform:none}
+  html.mob .mob-schleier{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:390}
+  html.mob.mob-offen .mob-schleier{display:block}
+  html.mob .mob-leiste{display:flex;position:fixed;top:0;left:0;right:0;height:52px;z-index:380;background:var(--bg2);border-bottom:1px solid var(--border);align-items:center;gap:12px;padding:0 12px}
+  html.mob .mob-leiste button{width:44px;height:40px;font-size:20px;padding:0;line-height:1}
+  html.mob .mob-leiste span{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  html.mob .main{padding:66px 12px 70px;max-width:100%;width:100%;min-width:0}
+  html.mob .nav-item{padding:13px 18px;font-size:15px}
+  html.mob .topbar{flex-wrap:wrap;gap:10px;margin-bottom:16px}
+  html.mob .topbar>div{display:flex;flex-wrap:wrap;gap:8px}
+  html.mob .topbar>div:first-child{display:block}
+  html.mob .card{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  html.mob .card table{min-width:560px}
+  html.mob .main [style*="grid-template-columns"]{grid-template-columns:1fr !important}
+  html.mob .form-row-2{grid-template-columns:1fr}
+  html.mob .metrics{grid-template-columns:1fr 1fr}
+  html.mob .detail-grid,html.mob .detail-party,html.mob .inv-doc .meta-grid{grid-template-columns:1fr}
+  html.mob .inv-doc .pay-grid,html.mob .inv-doc .footer-block{grid-template-columns:1fr 1fr}
+  html.mob .inv-doc{padding:16px 12px;overflow-x:auto}
+  html.mob .main [style*="display:flex"]{flex-wrap:wrap}
+  html.mob .main [style*="display: flex"]{flex-wrap:wrap}
+  html.mob .page{min-width:0;max-width:100%}
+  html.mob .detail-grid>*,html.mob .main [style*="grid"]>*{min-width:0}      /* sonst drückt eine Tabelle ihre Rasterspalte auf */
+  html.mob input,html.mob select,html.mob textarea{font-size:16px !important}      /* sonst zoomt iOS beim Antippen hinein; auch Felder mit eigener kleiner Schrift */
+  html.mob .main [style*="min-width"]{min-width:0 !important}      /* Karten mit fester Mindestbreite (Kunden, Lieferanten, Produkte) */
+  html.mob .main input[style*="width:1"],html.mob .main select[style*="width:1"]{width:100% !important;max-width:260px}
+  html.mob input[type=checkbox],html.mob input[type=radio]{width:auto}
+  html.mob button{min-height:40px;font-size:14px}
+  html.mob .modal,html.mob .modal-content,html.mob [class*="modal"]>div{max-width:96vw !important}
+  html.mob iframe{max-width:100%}
+  html.mob #design-rahmen{height:480px !important}
+  html.mob .toast{left:12px;right:12px;max-width:none}
+}
+@media (min-width:901px) and (max-width:1100px){      /* iPad quer: schmalere Leiste, weniger Rand */
+  html.mob .sidebar{width:180px}
+  html.mob .main{padding:20px 16px;min-width:0}
+  html.mob .topbar{flex-wrap:wrap;gap:10px}
+  html.mob .topbar>div,html.mob .main [style*="display:flex"]{flex-wrap:wrap}
+  html.mob .detail-grid>*,html.mob .main [style*="grid"]>*{min-width:0}
+  html.mob .card{overflow-x:auto}
+  html.mob .metrics{grid-template-columns:1fr 1fr}
+}
 .bank-klapp>summary::-webkit-details-marker{display:none}.bank-klapp[open] .bank-klapp-pfeil{display:inline-block;transform:rotate(90deg)}
 :root{--bg:#f8f7f5;--bg2:#fff;--bg3:#f1efe8;--text:#1a1a1a;--text2:#666;--text3:#999;--border:#e2e0d9;--accent:#185FA5;--accent-bg:#E6F1FB;--success:#0F6E56;--success-bg:#E1F5EE;--warning:#854F0B;--warning-bg:#FAEEDA;--danger:#A32D2D;--danger-bg:#FCEBEB;--info:#185FA5;--info-bg:#E6F1FB;--radius:8px;--radius-lg:12px;--font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;--mono:'SF Mono',Monaco,Consolas,monospace}
 *{margin:0;padding:0;box-sizing:border-box}
@@ -209,10 +260,12 @@ th.c,td.c{text-align:center}
 </style>
 </head>
 <body>
+<div class="mob-leiste"><button type="button" aria-label="Menü öffnen" onclick="document.documentElement.classList.toggle('mob-offen')">&#9776;</button><span id="mob-titel">e-rechnung pro</span></div>
+<div class="mob-schleier" onclick="document.documentElement.classList.remove('mob-offen')"></div>
 <div class="shell">
 
 <div class="sidebar">
-  <h1><span id="sidebar-logo" style="margin-bottom:4px"></span>E-Rechnung<span><span id="sidebar-mandant"></span>v3.0</span></h1>
+  <h1><span id="sidebar-logo" style="margin-bottom:4px"></span>E-Rechnung<span><span id="sidebar-mandant"></span>v5.0</span></h1>
   <div class="nav-item active" onclick="navigate('dashboard')"><span class="icon">&#9632;</span>Dashboard</div>
   <div class="nav-item" onclick="navigate('inbox')"><span class="icon">&#9993;</span>Rechnungen<span class="badge" id="nav-badge">3</span></div>
   <div class="nav-item" onclick="navigate('stornos')"><span class="icon">&#8630;</span>Gutschriften<span class="badge" id="storno-badge" style="display:none">0</span></div>
@@ -403,6 +456,20 @@ th.c,td.c{text-align:center}
 <!-- ═══ ERSTELLEN ═══ -->
 <div class="page" id="page-create">
   <div class="topbar"><div><h2>Rechnung erstellen</h2><div class="sub">XRechnung (UBL 2.1) erzeugen</div></div></div>
+  <!-- Rechnungen aus CSV einlesen (24.11.2026) — nur sichtbar, wenn der Server die Funktion anbietet -->
+  <details class="card" id="csv-karte" style="display:none;margin-bottom:16px">
+    <summary style="padding:14px 18px;cursor:pointer;font-weight:600">&#128229; Rechnungen aus einer CSV-Datei einlesen <span style="font-weight:400;color:var(--text2);font-size:12px">– für Rechnungen aus Ihrem eigenen Programm</span></summary>
+    <div class="card-body">
+      <p style="font-size:13px;color:var(--text2);margin:0 0 10px">Eine Zeile je Position; Zeilen mit derselben Rechnungsnummer bilden eine Rechnung. Trennzeichen Semikolon, Zahlen mit Komma, Datum TT.MM.JJJJ. Pflichtspalten: <code>rechnungsnummer</code>, <code>rechnungsdatum</code>, <code>kunde_name</code>, <code>kunde_plz</code>, <code>kunde_ort</code>, <code>kunde_email</code>, <code>bezeichnung</code>, <code>menge</code>, <code>einzelpreis</code> (netto). Weitere Spalten stehen in der Muster-Datei. <a href="/api/invoices/csv/muster">Muster-CSV herunterladen</a></p>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <input type="file" id="csv-datei" accept=".csv,text/csv" style="max-width:320px" onchange="csvZuruecksetzen()">
+        <button onclick="csvSenden(false)">1. Prüfen</button>
+        <button class="primary" id="csv-einlesen" onclick="csvSenden(true)" disabled>2. Fehlerfreie einlesen</button>
+        <span id="csv-stand" style="font-size:13px;color:var(--text2)"></span>
+      </div>
+      <div id="csv-ergebnis" style="margin-top:12px;max-height:340px;overflow:auto"></div>
+    </div>
+  </details>
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
     <div class="card"><div class="card-header"><h3>Verkäufer</h3><span style="font-size:11px;color:var(--text2)">(aus Stammdaten)</span></div><div class="card-body">
       <div class="form-row" id="c-seller-wahl-zeile" style="display:none"><label>Verkäufer wählen</label><select id="c-seller-wahl" onchange="sellerWahl()"></select></div>
@@ -1544,6 +1611,26 @@ th.c,td.c{text-align:center}
 <div class="page" id="page-settings">
   <div class="topbar"><div><h2>Einstellungen</h2><div class="sub">Lizenz, E-Mail, Mandant und Systemkonfiguration</div></div></div>
 
+  <!-- Benutzer der Firma (24.11.2026) — nur sichtbar, wenn die Installation mit Anmeldung läuft -->
+  <div class="card" id="benutzer-karte" style="margin-bottom:16px;display:none">
+    <div class="card-header"><h3>&#128101; Benutzer</h3><div id="benutzer-zahl" style="font-size:12px;color:var(--text2)"></div></div>
+    <div class="card-body">
+      <div id="benutzer-hinweis" style="font-size:13px;color:var(--text2);margin-bottom:12px"></div>
+      <div id="benutzer-liste"></div>
+      <div id="benutzer-neu" style="display:none;margin-top:16px;padding-top:14px;border-top:1px solid var(--border)">
+        <div style="font-weight:600;margin-bottom:8px">Neuen Benutzer anlegen</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;align-items:end">
+          <label style="font-size:12px">Benutzername<input id="bn-name" autocomplete="off" style="width:100%"></label>
+          <label style="font-size:12px">E-Mail-Adresse<input id="bn-mail" type="email" autocomplete="off" style="width:100%"></label>
+          <label style="font-size:12px">Passwort (mind. 12 Zeichen)<input id="bn-pw" type="password" autocomplete="new-password" style="width:100%"></label>
+          <label style="font-size:12px;display:flex;gap:6px;align-items:center"><input id="bn-admin" type="checkbox" style="width:auto"> darf Benutzer verwalten</label>
+          <button class="primary" onclick="benutzerAnlegen()">Benutzer anlegen</button>
+        </div>
+      </div>
+      <div id="benutzer-meldung" style="font-size:13px;margin-top:10px"></div>
+    </div>
+  </div>
+
   <!-- Lizenz -->
   <div class="card" style="margin-bottom:16px">
     <div class="card-header"><h3>&#128274; Lizenz</h3>
@@ -1652,6 +1739,46 @@ th.c,td.c{text-align:center}
       <div style="max-height:300px;overflow-y:auto">
         <table><thead><tr><th>Zeitpunkt</th><th>Rechnung</th><th>Empfänger</th><th>Status</th></tr></thead>
         <tbody id="send-log-table"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gestaltung der Belege (24.11.2026) -->
+  <div class="card" id="design-karte" style="margin-top:16px;display:none">
+    <div class="card-header"><h3>&#127912; Gestaltung der Belege</h3><div style="font-size:12px;color:var(--text2)">gilt für alle Formulare: Angebot, Auftragsbestätigung, Lieferschein, Rechnung, Gutschrift, Mahnung</div></div>
+    <div class="card-body">
+      <div style="display:grid;grid-template-columns:minmax(260px,340px) 1fr;gap:24px;align-items:start" id="design-raster">
+        <div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <label style="font-size:12px">Hauptfarbe<br><input type="color" id="ds-farbe_haupt" style="width:100%;height:36px;padding:2px" oninput="designGeaendert()"></label>
+            <label style="font-size:12px">Akzentfarbe<br><input type="color" id="ds-farbe_akzent" style="width:100%;height:36px;padding:2px" oninput="designGeaendert()"></label>
+            <label style="font-size:12px">Logo steht<br><select id="ds-logo_position" style="width:100%" onchange="designGeaendert()"><option value="links">links</option><option value="rechts">rechts</option></select></label>
+            <label style="font-size:12px">Logo-Größe <span id="ds-logo_groesse_mm-wert"></span><br><input type="range" id="ds-logo_groesse_mm" min="12" max="45" step="1" style="width:100%" oninput="designGeaendert()"></label>
+            <label style="font-size:12px">Tabellenkopf<br><select id="ds-tabellenkopf" style="width:100%" onchange="designGeaendert()"><option value="gefuellt">farbig gefüllt</option><option value="linie">nur Linie</option></select></label>
+            <label style="font-size:12px">Titelgröße <span id="ds-titel_groesse-wert"></span><br><input type="range" id="ds-titel_groesse" min="12" max="22" step="1" style="width:100%" oninput="designGeaendert()"></label>
+          </div>
+          <label style="font-size:13px;display:flex;gap:8px;align-items:center;margin-top:12px"><input type="checkbox" id="ds-firmenblock" style="width:auto" onchange="designGeaendert()"> Name und Anschrift neben dem Logo zeigen</label>
+          <label style="font-size:13px;display:flex;gap:8px;align-items:center;margin-top:6px"><input type="checkbox" id="ds-zebra" style="width:auto" onchange="designGeaendert()"> jede zweite Tabellenzeile hinterlegen</label>
+          <label style="font-size:12px;display:block;margin-top:12px">Zweite Fußzeile (z. B. Geschäftsführung · Registergericht)<br><input id="ds-fusszeile_zusatz" maxlength="160" style="width:100%" oninput="designGeaendert()"></label>
+          <p style="font-size:12px;color:var(--text2);margin:12px 0">Das Logo laden Sie in der Karte „Firmenlogo“ hoch. Firmenname, Anschrift und Bankverbindung kommen aus den Stammdaten.</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap" id="design-knoepfe">
+            <button class="primary" onclick="designSpeichern()">Gestaltung speichern</button>
+            <button onclick="designStandard()">Standard wiederherstellen</button>
+          </div>
+          <div id="design-meldung" style="font-size:13px;margin-top:10px"></div>
+        </div>
+        <div>
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px;font-size:13px">
+            <span>Vorschau:</span>
+            <select id="ds-art" onchange="designVorschau()" style="width:auto">
+              <option value="invoice">Rechnung</option><option value="customer_quote">Angebot</option><option value="order_confirmation">Auftragsbestätigung</option>
+              <option value="delivery_note">Lieferschein</option><option value="payment_invoice">Abschlagsrechnung</option><option value="gutschrift">Gutschrift</option>
+              <option value="storno">Stornorechnung</option><option value="dunning">Zahlungserinnerung</option>
+            </select>
+            <span id="design-stand" style="color:var(--text2)"></span>
+          </div>
+          <iframe id="design-rahmen" title="Vorschau des Belegs" style="width:100%;height:640px;border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe>
+        </div>
       </div>
     </div>
   </div>
@@ -2057,6 +2184,78 @@ th.c,td.c{text-align:center}
   </div>
 </div>
 <script>
+/* Gleichzeitiges Bearbeiten (24.11.2026): Die Oberfläche merkt sich je Kunde, Lieferant, Produkt, Vorgang und Rechnung,
+   bei welchem Stand sie zuletzt geladen hat (Antwortkopf X-Stand), und schickt ihn beim Speichern mit. Hat inzwischen ein
+   anderes Fenster dasselbe geändert, antwortet der Server mit 409 — hier kommt dann die Rückfrage. Ohne die Antwortköpfe
+   (älterer Server) geschieht nichts. */
+(function () {
+  if (typeof window.fetch !== 'function') return;
+  var orig = window.fetch.bind(window);
+  var tab = '';
+  try { tab = sessionStorage.getItem('fenster-id') || ''; if (!tab) { tab = Math.random().toString(36).slice(2) + Date.now().toString(36); sessionStorage.setItem('fenster-id', tab); } }
+  catch (e) { tab = Math.random().toString(36).slice(2); }
+  var gesehen = {}, gemeldet = {};
+  var MUSTER = /\/api\/(buyers|suppliers|products|transactions|invoices)(?:\/([^\/?#]+))?([^?#]*)/;
+  var KEINE = { all: 1, csv: 1, stats: 1, 'step-labels': 1, categories: 1, demo: 1 };
+  function kopf(o, mehr) {
+    var h = new Headers((o && o.headers) || {});
+    Object.keys(mehr).forEach(function (k) { h.set(k, mehr[k]); });
+    return Object.assign({}, o || {}, { headers: h });
+  }
+  /* Demo-Zugang: Hinweisleiste, und eine klare Meldung, wenn eine Änderung abgewiesen wird */
+  var demoGezeigt = false, demoZuletzt = 0;
+  function demo(r) {
+    try {
+      if (!r || !r.headers || r.headers.get('X-Demo') !== '1') return r;
+      if (!demoGezeigt && document.body) {
+        demoGezeigt = true;
+        var l = document.createElement('div');
+        l.textContent = 'Demo-Zugang – Sie können alles ansehen und ausprobieren. Änderungen werden nicht gespeichert.';
+        l.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#0D3A5C;color:#fff;font:600 13px system-ui,sans-serif;padding:8px 16px;text-align:center';
+        document.body.appendChild(l);
+      }
+      if (r.status === 403 && Date.now() - demoZuletzt > 4000) { demoZuletzt = Date.now(); if (typeof toast === 'function') toast('Demo-Zugang: Diese Änderung wird nicht gespeichert.', 'error'); }
+    } catch (e) {}
+    return r;
+  }
+  window.fetch = function (u, o) {
+    if (typeof u !== 'string') return orig(u, o).then(demo);
+    var m = MUSTER.exec(u);
+    if (!m) return orig(u, o).then(demo);
+    var meth = ((o && o.method) || 'GET').toUpperCase(), aendernd = meth !== 'GET' && meth !== 'HEAD';
+    var liste = m[1], obj = (m[2] && !KEINE[m[2]]) ? m[1] + '/' + m[2] : null, rest = m[3] || '';
+    var mehr = { 'X-Tab': tab };
+    if (aendernd && obj) { var g = Math.max(gesehen[liste] || 0, gesehen[obj] || 0); if (g) mehr['X-Stand-Gesehen'] = String(g); }
+    function merken(r) {
+      demo(r);
+      var st = parseInt(r.headers.get('X-Stand') || '', 10);
+      if (st) {
+        if (!aendernd) { if (obj && !rest) gesehen[obj] = st; else if (!m[2]) gesehen[liste] = st; }
+        else if (obj && r.ok) gesehen[obj] = st;
+      }
+      var dabei = r.headers.get('X-Auch-Dabei');
+      if (dabei && obj) {
+        var wer = decodeURIComponent(dabei), art = decodeURIComponent(r.headers.get('X-Auch-Dabei-Art') || 'Dieser Eintrag');
+        if (gemeldet[obj] !== wer) { gemeldet[obj] = wer; if (typeof toast === 'function') toast('Achtung: ' + art + ' ist gerade auch geöffnet bei: ' + wer + '. Bitte abstimmen, wer ändert.', 'error'); }
+      }
+      return r;
+    }
+    return orig(u, kopf(o, mehr)).then(function (r) {
+      merken(r);
+      if (r.status !== 409 || !aendernd || !obj) return r;
+      return r.clone().json().then(function (j) {
+        if (!j || !j.konflikt) return r;
+        if (confirm(j.error.replace(' Nicht gespeichert.', '') + '\n\nIhre Eingabe ist noch NICHT gespeichert.\n\nOK = trotzdem speichern (die Änderung von ' + j.von + ' kann dabei überschrieben werden)\nAbbrechen = nicht speichern; bitte neu laden und die Änderung erneut eintragen')) {
+          mehr['X-Stand-Erzwingen'] = '1';
+          return orig(u, kopf(o, mehr)).then(merken);
+        }
+        return r;
+      }, function () { return r; });
+    });
+  };
+})();
+</script>
+<script>
 /* Rückfrage vor dem Anlegen eines Kunden (06.11.2026): Der Server antwortet mit 409 + Kandidaten,
    wenn es schon einen Kunden mit ähnlichem Namen (gleiche PLZ) oder gleicher Anschrift gibt.
    Gilt für ALLE Stellen, die POST /api/buyers aufrufen. */
@@ -2262,7 +2461,7 @@ function navigate(page) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => {
     if (n.textContent.toLowerCase().includes(
-      {dashboard:'dashboard',inbox:'rechnungen',stornos:'stornos',workflow:'freigaben',create:'erstellen',archive:'archiv',settings:'einstellungen',viewer:'belegansicht',suppliers:'lieferanten',customers:'kunden',products:'produkte','offer-templates':'angebots-vorlagen',transactions:'vorg','txn-detail':'vorg',dunning:'mahnungen',bank:'bank',buchhaltung:'buchhaltung',documents:'dokumente',steuerberater:'steuerberater',mails:'mails'}[page]||''
+      {dashboard:'dashboard',inbox:'rechnungen',detail:'rechnungen',stornos:'gutschriften',workflow:'freigaben',create:'erstellen',archive:'archiv',settings:'einstellungen',viewer:'belegansicht',suppliers:'lieferanten',customers:'kunden',products:'produkte','offer-templates':'angebots-vorlagen',transactions:'vorg','txn-detail':'vorg',dunning:'mahnungen',bank:'bank',buchhaltung:'buchhaltung',documents:'dokumente',steuerberater:'steuerberater',mails:'mails'}[page]||'\u0000'   /* 24.11.2026: unbekannte Seite markiert nichts (vorher '' = alle Punkte blau) */
     )) n.classList.add('active');
   });
   if (page === 'dashboard') loadDashboard();
@@ -2270,7 +2469,7 @@ function navigate(page) {
   if (page === 'stornos') loadStornos();
   if (page === 'workflow') loadWorkflow();
   if (page === 'archive') loadArchive();
-  if (page === 'settings') loadSettings();
+  if (page === 'settings') { loadSettings(); ladeBenutzer(); ladeDesign(); }
   if (page === 'create') { fillSellerFromMandant(); loadBuyers(); ensureProductsLoaded().then(() => { fillProductPicker(); initAutocompletes(); }); const today=new Date().toISOString().split('T')[0]; document.getElementById('c-date').value=today; document.getElementById('c-delivery-date').value=today; }
   if (page === 'suppliers') { loadSuppliers().then(() => initAutocompletes()); }
   if (page === 'customers') { loadCustomers().then(() => initAutocompletes()); }
@@ -2597,7 +2796,7 @@ async function openDetail(id) {
     <span style="color:var(--text2)">IBAN</span><span>${p.iban||'—'}</span>
     <span style="color:var(--text2)">BIC</span><span>${p.bic||'—'}</span>
     <span style="color:var(--text2)">Fällig</span><span>${p.due_date||'—'}</span>
-    <span style="color:var(--text2)">Bedingung</span><span>${p.terms||'—'}</span>`
+    <span style="color:var(--text2)">Bedingung</span><span>${p.terms||'—'}</span>${Number(p.skonto_percent) > 0 ? `<span style="color:var(--text2)">Skonto</span><span>${String(p.skonto_percent).replace('.', ',')} % bei Zahlung binnen ${p.skonto_days} Tagen</span>` : ''}`
     + zahlkontoWahlHtml(inv);
 
   document.getElementById('det-status').innerHTML = `${statusBadge(inv.status, inv.direction)} <span style="font-size:12px;color:var(--text2);margin-left:8px">Zugewiesen: ${inv.assigned_to||'—'}</span>`;
@@ -2615,6 +2814,18 @@ async function openDetail(id) {
       const c = i.severity==='ERROR'?'var(--danger)':i.severity==='WARNING'?'var(--warning)':'var(--text2)';
       return `<div style="font-size:12px;margin:4px 0;color:${c}">${i.severity==='ERROR'?'&#10007;':i.severity==='WARNING'?'&#9888;':'&#8505;'} [${i.rule}] ${i.message}</div>`;
     }).join('');
+  }
+  // Amtliche Prüfung (KoSIT): Ergebnis steht an der Rechnung, sobald der Hintergrundlauf fertig ist
+  const _k = inv.kosit;
+  if (_k) {
+    const _kd = _k.am ? new Date(_k.am).toLocaleString('de-DE', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'}) : '';
+    let _kt;
+    if (_k.ausstehend) _kt = '<span style="color:var(--text2)">&#8987; Amtliche Prüfung (KoSIT) läuft noch – Ansicht in einigen Sekunden neu öffnen.</span>';
+    else if (_k.verfuegbar === false) _kt = '<span style="color:var(--warning)">&#9888; Amtliche Prüfung (KoSIT) nicht verfügbar' + (_k.grund ? ': ' + esc(_k.grund) : '') + '</span>';
+    else if (_k.gueltig) _kt = '<span style="color:var(--success);font-weight:600">&#10003; Amtliche Prüfung (KoSIT): gültig</span> <span style="color:var(--text2)">· ' + _k.warnungen + ' Warnungen · geprüft ' + _kd + '</span>';
+    else _kt = '<span style="color:var(--danger);font-weight:600">&#10007; Amtliche Prüfung (KoSIT): ' + _k.fehler + ' Fehler</span> <span style="color:var(--text2)">· geprüft ' + _kd + ' · wird so nicht versendet</span>'
+      + (_k.details || []).map(d => '<div style="margin:4px 0;color:var(--danger)">&#10007; ' + esc(d) + '</div>').join('');
+    valHtml += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--border);font-size:12px">' + _kt + '</div>';
   }
   document.getElementById('det-validation').innerHTML = valHtml;
 
@@ -3550,7 +3761,8 @@ async function _generateInvoiceInner(download=false) {
     buyer_reference: document.getElementById('c-buyer-ref').value,
     buyer_email: document.getElementById('c-buyer-email').value,
     buyer_phone: (document.getElementById('c-buyer-phone')||{}).value || '',
-    buyer_salutation: document.getElementById('c-buyer-salutation').value,
+    buyer_salutation: _buyerAnredeZuordnung().salutation || '',
+    buyer_contact_salutation: _buyerAnredeZuordnung().contact_salutation || '',
     buyer_contact_name: document.getElementById('c-buyer-contact').value,
     buyer_vat: document.getElementById('c-buyer-vat').value,
     date: document.getElementById('c-date').value,
@@ -3941,7 +4153,7 @@ function renderInvoiceDocument(inv, typeLabel) {
         <div class="pay-item"><div class="label">Zahlungsart</div><div class="val">${paymentLabel(p.means_code)}</div></div>
         <div class="pay-item"><div class="label">IBAN</div><div class="val">${formatIban(p.iban)}</div></div>
         <div class="pay-item"><div class="label">BIC</div><div class="val">${esc(p.bic||'—')}</div></div>
-        <div class="pay-item"><div class="label">Zahlungsziel</div><div class="val">${esc(p.terms||'—')}</div></div>
+        <div class="pay-item"><div class="label">Zahlungsziel</div><div class="val">${esc(p.terms||'—')}${Number(p.skonto_percent) > 0 ? '<br>' + esc(String(p.skonto_percent).replace('.', ',')) + ' % Skonto bei Zahlung binnen ' + esc(String(p.skonto_days)) + ' Tagen' : ''}</div></div>
       </div>
     </div>
 
@@ -4226,6 +4438,136 @@ async function deleteSentMail(id){
     if(res.deleted){ toast('Eintrag gelöscht'); loadSentMails(); }
     else toast(res.error||'Löschen fehlgeschlagen', 'error');
   }catch(e){ toast('Löschen fehlgeschlagen', 'error'); }
+}
+
+/* ── Handy und iPad: Menü nach der Wahl schließen, Seitentitel in die Leiste ── */
+document.addEventListener('click', function (e) {
+  var p = e.target.closest ? e.target.closest('.sidebar .nav-item') : null; if (!p) return;
+  document.documentElement.classList.remove('mob-offen');
+  var t = document.getElementById('mob-titel'); if (t) t.textContent = (p.textContent || '').replace(/^[^A-Za-zÄÖÜ]+/, '').replace(/\d+$/, '').trim() || 'e-rechnung pro';
+});
+
+/* ── Rechnungen aus CSV einlesen (24.11.2026) ── */
+function csvZuruecksetzen() { document.getElementById('csv-einlesen').disabled = true; document.getElementById('csv-ergebnis').innerHTML = ''; document.getElementById('csv-stand').textContent = ''; }
+async function csvSenden(anlegen) {
+  var d = document.getElementById('csv-datei').files[0], stand = document.getElementById('csv-stand');
+  if (!d) { stand.textContent = 'Bitte zuerst eine CSV-Datei wählen.'; return false; }
+  if (anlegen && !confirm('Alle fehlerfreien Rechnungen aus der Datei jetzt anlegen?\n\nSie erscheinen danach in der Rechnungsliste mit dem Status „Neu“ und laufen durch die übliche Freigabe.')) return false;
+  stand.textContent = anlegen ? 'Rechnungen werden angelegt …' : 'Datei wird geprüft …';
+  var fd = new FormData(); fd.append('file', d); if (anlegen) fd.append('anlegen', '1');
+  var j;
+  try { var r = await fetch(API + '/api/invoices/csv', { method: 'POST', body: fd }); j = await r.json(); if (!r.ok) { stand.textContent = j.error || 'Nicht möglich.'; return false; } }
+  catch (e) { stand.textContent = 'Keine Verbindung zum Server.'; return false; }
+  var geld = function (x) { return x == null ? '–' : Number(x).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; };
+  var zeilen = j.rechnungen.map(function (e) {
+    var st = e.angelegt ? '<span style="color:var(--success);font-weight:600">&#10003; angelegt</span>' : e.ok ? '<span style="color:var(--success)">&#10003; in Ordnung</span>' : '<span style="color:var(--danger)">&#10007; ' + esc(e.meldung || 'Fehler') + '</span>';
+    return '<tr><td>' + esc(e.nummer) + '</td><td>' + esc(e.kunde) + '</td><td>' + esc((e.datum || '').split('-').reverse().join('.')) + '</td><td style="text-align:right">' + e.positionen + '</td><td style="text-align:right">' + geld(e.brutto) + '</td><td>' + st + '</td></tr>';
+  }).join('');
+  document.getElementById('csv-ergebnis').innerHTML = (j.hinweise || []).map(function (h) { return '<div style="font-size:12px;color:var(--warning);margin-bottom:6px">' + esc(h) + '</div>'; }).join('')
+    + (j.rechnungen.length ? '<table style="width:100%;font-size:13px"><thead><tr><th style="text-align:left">Rechnung</th><th style="text-align:left">Kunde</th><th style="text-align:left">Datum</th><th style="text-align:right">Pos.</th><th style="text-align:right">Brutto</th><th style="text-align:left">Ergebnis</th></tr></thead><tbody>' + zeilen + '</tbody></table>' : '');
+  stand.textContent = anlegen ? j.angelegt + ' von ' + j.gesamt + ' Rechnungen angelegt.' : j.fehlerfrei + ' von ' + j.gesamt + ' Rechnungen fehlerfrei.';
+  document.getElementById('csv-einlesen').disabled = anlegen || !j.fehlerfrei;
+  if (anlegen && j.angelegt && typeof toast === 'function') toast(j.angelegt + ' Rechnungen aus der CSV-Datei angelegt');
+  return true;
+}
+(function () { function nach() { fetch(API + '/api/invoices/csv').then(function (r) { return r.ok ? r.json() : null; }).then(function (j) { if (j && j.verfuegbar) { var k = document.getElementById('csv-karte'); if (k) k.style.display = ''; } }).catch(function () {}); }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', nach); else nach(); })();
+
+/* ── Gestaltung der Belege (24.11.2026) ── */
+var _dsFelder = ['farbe_haupt', 'farbe_akzent', 'logo_position', 'logo_groesse_mm', 'tabellenkopf', 'titel_groesse', 'firmenblock', 'zebra', 'fusszeile_zusatz'];
+var _dsGespeichert = null, _dsUhr = null, _dsUrl = null;
+function _dsMeldung(text, fehler) { var m = document.getElementById('design-meldung'); if (m) { m.textContent = text || ''; m.style.color = fehler ? '#B42318' : '#067647'; } }
+function _dsSetzen(d) {
+  _dsFelder.forEach(function (k) { var e = document.getElementById('ds-' + k); if (!e) return; if (e.type === 'checkbox') e.checked = !!d[k]; else e.value = d[k]; });
+  _dsWerte();
+}
+function _dsLesen() {
+  var d = {}; _dsFelder.forEach(function (k) { var e = document.getElementById('ds-' + k); if (!e) return; d[k] = e.type === 'checkbox' ? e.checked : (e.type === 'range' ? parseInt(e.value, 10) : e.value); }); return d;
+}
+function _dsWerte() {
+  var a = document.getElementById('ds-logo_groesse_mm'), b = document.getElementById('ds-titel_groesse');
+  document.getElementById('ds-logo_groesse_mm-wert').textContent = a.value + ' mm'; document.getElementById('ds-titel_groesse-wert').textContent = b.value + ' pt';
+}
+async function ladeDesign() {
+  var karte = document.getElementById('design-karte'); if (!karte) return;
+  var j; try { var r = await fetch(API + '/api/design'); if (!r.ok) return; j = await r.json(); } catch (e) { return; }
+  karte.style.display = ''; _dsGespeichert = j.design; _dsSetzen(j.design);
+  if (!j.darf_aendern) { document.getElementById('design-knoepfe').style.display = 'none'; _dsMeldung('Die Gestaltung ändern darf nur ein Verwalter.', false); }
+  if (window.innerWidth < 900) document.getElementById('design-raster').style.gridTemplateColumns = '1fr';
+  designVorschau();
+}
+function designGeaendert() {
+  _dsWerte(); _dsMeldung('', false);
+  document.getElementById('design-stand').textContent = JSON.stringify(_dsLesen()).toLowerCase() === JSON.stringify(_dsGespeichert).toLowerCase() ? '' : 'noch nicht gespeichert';
+  clearTimeout(_dsUhr); _dsUhr = setTimeout(designVorschau, 600);
+}
+async function designVorschau() {
+  try {
+    var r = await fetch(API + '/api/design/vorschau', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ design: _dsLesen(), art: document.getElementById('ds-art').value }) });
+    if (!r.ok) { var j = await r.json().catch(function () { return {}; }); _dsMeldung(j.error || 'Vorschau nicht möglich.', true); return; }
+    var b = await r.blob(); if (_dsUrl) URL.revokeObjectURL(_dsUrl); _dsUrl = URL.createObjectURL(b);
+    document.getElementById('design-rahmen').src = _dsUrl + '#toolbar=0&view=FitH';
+  } catch (e) { _dsMeldung('Keine Verbindung zum Server.', true); }
+}
+async function designSpeichern(standard) {
+  try {
+    var r = await fetch(API + '/api/design', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(standard ? { standard: true } : { design: _dsLesen() }) });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) { _dsMeldung(j.error || 'Nicht gespeichert.', true); return false; }
+    _dsGespeichert = j.design; _dsSetzen(j.design); document.getElementById('design-stand').textContent = '';
+    _dsMeldung(standard ? 'Standard wiederhergestellt.' : 'Gestaltung gespeichert – gilt ab jetzt für alle neuen Belege.', false); designVorschau(); return true;
+  } catch (e) { _dsMeldung('Keine Verbindung zum Server.', true); return false; }
+}
+function designStandard() { if (!confirm('Gestaltung auf den Standard zurücksetzen?')) return false; designSpeichern(true); }
+
+/* ── Benutzer der Firma (24.11.2026) ── */
+function _bnText(x) { return String(x == null ? '' : x).replace(/[&<>"']/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]; }); }
+function _bnMeldung(text, fehler) { var m = document.getElementById('benutzer-meldung'); if (m) { m.textContent = text || ''; m.style.color = fehler ? '#B42318' : '#067647'; } }
+async function ladeBenutzer() {
+  var karte = document.getElementById('benutzer-karte'); if (!karte) return;
+  var d; try { var r = await fetch(API + '/api/benutzer'); if (!r.ok) return; d = await r.json(); } catch (e) { return; }
+  if (!d || !d.verwaltbar) { karte.style.display = 'none'; return; }
+  karte.style.display = '';
+  var n = d.benutzer.length;
+  document.getElementById('benutzer-zahl').textContent = n + (n === 1 ? ' Benutzer' : ' Benutzer') + (d.grenze ? ' von höchstens ' + d.grenze : '');
+  var h = 'Jeder Mitarbeiter meldet sich mit eigenem Benutzernamen oder seiner E-Mail-Adresse an. Alle arbeiten im selben Bestand; im Verlauf steht, wer was geändert hat.';
+  if (d.preis) h += ' Jeder Benutzer wird mit ' + d.preis + ' € im Monat berechnet.';
+  document.getElementById('benutzer-hinweis').textContent = h;
+  document.getElementById('benutzer-neu').style.display = d.admin ? '' : 'none';
+  var z = d.benutzer.map(function (b) {
+    var ich = b.username === d.ich, nm = _bnText(b.username), kn = [];
+    if (d.admin || ich) { kn.push('<button onclick="benutzerPasswort(\'' + nm + '\')">Passwort setzen</button>'); kn.push('<button onclick="benutzerMail(\'' + nm + '\')">E-Mail ändern</button>'); }
+    if (d.admin && !ich) { kn.push('<button onclick="benutzerRecht(\'' + nm + '\',' + (b.admin ? 'false' : 'true') + ')">' + (b.admin ? 'Verwaltung entziehen' : 'Verwaltung erlauben') + '</button>'); kn.push('<button class="danger" onclick="benutzerLoeschen(\'' + nm + '\')">Löschen</button>'); }
+    return '<tr><td style="font-weight:500">' + nm + (ich ? ' <span style="color:var(--text2);font-weight:400">(Sie)</span>' : '') + '</td><td>' + (_bnText(b.email) || '<span style="color:var(--text2)">—</span>') + '</td><td>' + (b.admin ? 'Verwalter' : 'Benutzer') + '</td><td style="text-align:right;white-space:nowrap">' + kn.join(' ') + '</td></tr>';
+  }).join('');
+  document.getElementById('benutzer-liste').innerHTML = '<table style="width:100%"><thead><tr><th style="text-align:left">Benutzername</th><th style="text-align:left">E-Mail-Adresse</th><th style="text-align:left">Recht</th><th></th></tr></thead><tbody>' + z + '</tbody></table>';
+}
+async function _bnSende(methode, pfad, daten, gut) {
+  try {
+    var r = await fetch(API + '/api/benutzer' + pfad, { method: methode, headers: { 'Content-Type': 'application/json' }, body: daten ? JSON.stringify(daten) : undefined });
+    var j = await r.json().catch(function () { return {}; });
+    if (!r.ok) { _bnMeldung(j.error || 'Nicht gespeichert.', true); return false; }
+    _bnMeldung(gut, false); ladeBenutzer(); return true;
+  } catch (e) { _bnMeldung('Keine Verbindung zum Server.', true); return false; }
+}
+async function benutzerAnlegen() {
+  var name = document.getElementById('bn-name').value.trim(), mail = document.getElementById('bn-mail').value.trim(), pw = document.getElementById('bn-pw').value;
+  if (await _bnSende('POST', '', { username: name, email: mail, password: pw, admin: document.getElementById('bn-admin').checked }, 'Benutzer „' + name + '“ angelegt.')) {
+    ['bn-name', 'bn-mail', 'bn-pw'].forEach(function (i) { document.getElementById(i).value = ''; }); document.getElementById('bn-admin').checked = false;
+  }
+}
+function benutzerPasswort(name) {
+  var pw = prompt('Neues Passwort für „' + name + '“ (mindestens 12 Zeichen):'); if (pw == null) return false;
+  _bnSende('PUT', '/' + encodeURIComponent(name), { password: pw }, 'Passwort für „' + name + '“ gesetzt.');
+}
+function benutzerMail(name) {
+  var mail = prompt('E-Mail-Adresse für „' + name + '“:'); if (mail == null) return false;
+  _bnSende('PUT', '/' + encodeURIComponent(name), { email: mail.trim() }, 'E-Mail-Adresse für „' + name + '“ gespeichert.');
+}
+function benutzerRecht(name, an) { _bnSende('PUT', '/' + encodeURIComponent(name), { admin: an }, an ? '„' + name + '“ darf jetzt Benutzer verwalten.' : '„' + name + '“ ist jetzt einfacher Benutzer.'); }
+function benutzerLoeschen(name) {
+  if (!confirm('Benutzer „' + name + '“ wirklich löschen?\n\nEr kann sich danach nicht mehr anmelden. Rechnungen und Verlauf bleiben erhalten.')) return false;
+  _bnSende('DELETE', '/' + encodeURIComponent(name), null, 'Benutzer „' + name + '“ gelöscht.');
 }
 
 async function loadSettings() {
@@ -4654,7 +4996,7 @@ function exportBuyersCsv() {
 // ob er sich seit dem Öffnen geändert hat.
 var _buyerFormBasis = null;   // Server-Stand beim Öffnen (Vergleichsfelder als JSON)
 function _buyerVergleich(b) {
-  return JSON.stringify(['name','street','house_number','post_code','city','email','phone','reference','salutation','contact_name','vat_id']
+  return JSON.stringify(['name','street','house_number','post_code','city','email','phone','reference','salutation','contact_salutation','contact_name','vat_id']
     .reduce((o, k) => { o[k] = (b && b[k] || '').toString().trim(); return o; }, {}));
 }
 async function _buyerFrisch(id) {
@@ -4687,7 +5029,8 @@ async function selectBuyer(idx) {
   _set('c-buyer-email', b.email);
   _set('c-buyer-phone', b.phone);
   _set('c-buyer-ref', b.reference);
-  _set('c-buyer-salutation', b.salutation);
+  // Das Auswahlfeld steht neben dem Ansprechpartner: bei Firma + Ansprechpartner zeigt es DESSEN Anrede (20.11.2026)
+  _set('c-buyer-salutation', (b.name && b.contact_name) ? (b.contact_salutation || '') : (b.salutation || b.contact_salutation || ''));
   _set('c-buyer-contact', b.contact_name);
   _set('c-buyer-vat', b.vat_id);
   // Privatperson: Buyer Reference automatisch setzen, falls leer
@@ -4697,6 +5040,19 @@ async function selectBuyer(idx) {
   { const _nf = document.getElementById('c-number-name'); if (_nf) _nf.dataset.manuell = ''; }
   document.getElementById('buyer-save-result').innerHTML = `<span style="color:var(--text2)">ID: ${b.id}${b.is_private?' · <span style="color:var(--info)">Privatperson</span>':''}</span>`;
   updateInvoiceNumber();
+}
+/* Zuordnung der Anrede im Rechnungsformular (20.11.2026, RE-2026-00160/161): Der Kunde hat ZWEI Anredefelder —
+ * `salutation` gehört zur Adresszeile des Kunden (Firma/Familie/Eheleute/Herr/Frau), `contact_salutation` zum
+ * Ansprechpartner. Das Auswahlfeld hier steht neben dem Ansprechpartner; bis heute wurde es aus `salutation` gefüllt und
+ * dorthin zurückgeschrieben — „Herr" beim Ansprechpartner überschrieb so die Kundenanrede „Firma".
+ *   Firma/Name UND Ansprechpartner → Anrede des Ansprechpartners (die Kundenanrede bleibt unberührt)
+ *   nur Ansprechpartner (Person ist der Kunde) oder nur Name → Kundenanrede wie bisher */
+function _buyerAnredeZuordnung() {
+  const v = id => ((document.getElementById(id) || {}).value || '').trim();
+  const anr = v('c-buyer-salutation'), name = v('c-buyer-name'), kontakt = v('c-buyer-contact');
+  if (name && kontakt) return { contact_salutation: anr };
+  if (!name) return { salutation: anr };
+  return anr ? { salutation: anr } : {};
 }
 function _buyerFormPayload() {
   const v = id => (document.getElementById(id) || {}).value || '';
@@ -4709,7 +5065,7 @@ function _buyerFormPayload() {
     email: v('c-buyer-email'),
     phone: v('c-buyer-phone'),
     reference: v('c-buyer-ref'),
-    salutation: v('c-buyer-salutation'),
+    ..._buyerAnredeZuordnung(),
     contact_name: v('c-buyer-contact'),
     vat_id: v('c-buyer-vat'),
   };
@@ -6666,6 +7022,7 @@ function renderPaymentInvoices() {
       <div style="text-align:right">
         <div style="font-weight:600;font-size:13px">${fmt(p.amount_gross)} €</div>
         <div style="font-size:11px;color:var(--text2)">netto ${fmt(p.amount_net)} € · ${p.tax_rate}% USt</div>
+        ${p.skonto_percent > 0 ? `<div style="font-size:11px;color:var(--text2)">${String(p.skonto_percent).replace('.', ',')} % Skonto bei Zahlung in ${p.skonto_days} Tagen</div>` : ''}
       </div>
       <div style="text-align:right">
         <div style="font-size:11px;color:${stColor};font-weight:600">${stIcon}</div>
@@ -6679,12 +7036,30 @@ function renderPaymentInvoices() {
   list.innerHTML = rows;
 }
 
+/* Skonto an der Abschlagsrechnung (24.11.2026): Prozent und Frist abfragen; Vorschlag = bisheriger Wert, sonst das Skonto
+   des Angebots. Leer oder 0 = kein Skonto. Rückgabe null bei Abbruch. */
+function _abschlagSkontoFragen(p) {
+  const cq = ((_currentTxn || {}).steps || {}).customer_quote || {};
+  const vorP = p ? (p.skonto_percent || '') : (Number(cq.skonto_percent) > 0 ? cq.skonto_percent : '');
+  const vorT = p ? (p.skonto_days || '') : (Number(cq.skonto_percent) > 0 ? (cq.skonto_days || '') : '');
+  const proz = prompt('Skonto in % (leer oder 0 = kein Skonto):', String(vorP).replace('.', ','));
+  if (proz === null) return null;
+  const pz = parseFloat(String(proz).replace(',', '.')) || 0;
+  if (!(pz > 0)) return { skonto_percent: 0, skonto_days: 0 };
+  const tage = prompt('Skontofrist in Tagen ab Rechnungsdatum:', String(vorT || 10));
+  if (tage === null) return null;
+  const tg = parseInt(tage, 10) || 0;
+  if (!(tg > 0) || pz >= 100) { toast('Skonto braucht einen Satz unter 100 % und eine Frist in Tagen.', 'error'); return null; }
+  return { skonto_percent: pz, skonto_days: tg };
+}
+
 async function addPaymentInvoice() {
   const title = prompt('Titel (z.B. "Anzahlung 30%" oder "1. Teilrechnung Wärmeschutz"):', 'Abschlagsrechnung ' + (_paymentInvoices.length+1));
   if (!title) return;
   const net = prompt('Nettobetrag in € (z.B. 1500.00):', '0');
   if (net === null) return;
   const data = { title, amount_net: parseFloat(net.replace(',','.'))||0, tax_rate: 19 };
+  const sk = _abschlagSkontoFragen(null); if (sk === null) return; Object.assign(data, sk);
   const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/payment-invoices', {
     method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)
   }).then(r=>r.json());
@@ -6700,6 +7075,7 @@ async function editPaymentInvoice(pid) {
   const net = prompt('Nettobetrag in €:', String(p.amount_net));
   if (net === null) return;
   const data = { title, amount_net: parseFloat(net.replace(',','.'))||0 };
+  const sk = _abschlagSkontoFragen(p); if (sk === null) return; Object.assign(data, sk);
   const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/payment-invoices/'+pid, {
     method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(data)
   }).then(r=>r.json());
@@ -9280,7 +9656,10 @@ async function approveAndSend(key) {
   }
   // Absendername aus Mandant-Einstellungen
   let sellerName = '';
-  try { const ms = await fetch(API+'/api/mandant/settings').then(r=>r.json()); sellerName = ms.name||''; } catch(e) {}
+  try { const ms = await fetch(API+'/api/mandant/settings').then(r=>r.json()); sellerName = ms.name||'';
+    /* Angebot läuft auf den zweiten Verkäufer (UG): dessen Name in Betreff und Gruß (19.11.2026) */
+    if (Number((((_currentTxn.steps||{}).customer_quote)||{}).verkaeufer) === 2 && ms.verkaeufer2_name) sellerName = ms.verkaeufer2_name;
+  } catch(e) {}
 
   const titles = { supplier_quote:'Anfrage', purchase_order:'Bestellung',
     customer_quote:'Angebot', order_intake:'Auftragseingang',
@@ -9387,14 +9766,16 @@ async function approveAndSend(key) {
     const gebBox = document.getElementById('txn-send-vertrag-geb');
     if (gebBox) {
       gebBox.style.display = (zeigeVertrag && key === 'customer_quote') ? 'block' : 'none';
-      let g = step.vertrag_gebaeude || null;
-      if (!g) {
-        const bl = await fetch(API+'/api/buyers').then(r=>r.json()).catch(()=>[]);
-        const b = (Array.isArray(bl) ? bl : (bl.buyers||[])).find(x => x.id === _currentTxn.buyer_id) || {};
-        g = {strasse: [b.street, b.house_number].filter(Boolean).join(' '), plz_ort: [b.post_code, b.city].filter(Boolean).join(' ')};
-      }
+      /* Objektanschrift NICHT mehr stumm mit der Kundenanschrift vorbelegen (19.11.2026: im Vertrag stand die
+         Wohnanschrift statt des Beratungsobjekts). Leer lassen und eintragen; die Kundenanschrift gibt es per Knopf. */
+      const g = step.vertrag_gebaeude || {};
+      const bl = await fetch(API+'/api/buyers').then(r=>r.json()).catch(()=>[]);
+      const b = (Array.isArray(bl) ? bl : (bl.buyers||[])).find(x => x.id === _currentTxn.buyer_id) || {};
+      gebBox.dataset.kundeStrasse = [b.street, b.house_number].filter(Boolean).join(' ');
+      gebBox.dataset.kundePlzort = [b.post_code, b.city].filter(Boolean).join(' ');
       document.getElementById('txn-send-geb-strasse').value = g.strasse || '';
       document.getElementById('txn-send-geb-plzort').value = g.plz_ort || '';
+      _txnGebMarkieren();
     }
   } catch(e) {}
   if (mergeRow) mergeRow.style.display = zeigeVertrag ? 'flex' : 'none';
@@ -9428,6 +9809,20 @@ async function approveAndSend(key) {
 
 function hideTxnSendDialog() { document.getElementById('txn-send-modal').classList.remove('show'); }
 
+/* Kein stummes Scheitern (19.11.2026, V-2026-0083): Ein Klick auf „Erneut an Kunde senden" blieb ohne
+   jede Wirkung und ohne Meldung. Bricht das Öffnen des Versand-Dialogs ab (Speichern fehlgeschlagen,
+   Verbindung weg, Sitzung abgelaufen), steht das jetzt rot am Bildschirm und in der Konsole. */
+(function () {
+  const _oeffnen = approveAndSend;
+  window.approveAndSend = async function (key) {
+    try { return await _oeffnen(key); }
+    catch (e) {
+      console.error('Versand-Dialog:', e);
+      toast('Der Versand-Dialog ließ sich nicht öffnen: ' + ((e && e.message) || e) + ' — bitte Seite neu laden (Strg+F5) und erneut versuchen.', 'error');
+    }
+  };
+})();
+
 // PDF-Vorschau im Versand-Dialog: erzeugt das Dokument-PDF und öffnet es im neuen Tab.
 // Gibt anschließend den „Freigeben + Senden"-Button frei (Prüfpflicht vor jedem Versand).
 // Auswahl "Dienstvertrag ins Angebots-PDF": null = Zeile nicht sichtbar, also nichts vorgeben.
@@ -9441,6 +9836,30 @@ function _txnVertragWahl() {
   return !!document.getElementById('txn-send-merge-contract')?.checked;
 }
 
+/* Objektanschrift im Vertrag: Pflicht, sobald ein Vertrag mitgeht (19.11.2026) */
+function _txnGebMarkieren() {
+  ['txn-send-geb-strasse', 'txn-send-geb-plzort'].forEach(function (id) { const e = document.getElementById(id);
+    if (e) e.style.border = e.value.trim() ? '' : '2px solid #B45309'; });
+  const h = document.getElementById('txn-send-geb-gleich'), box = document.getElementById('txn-send-vertrag-geb');
+  if (h && box) { const a = document.getElementById('txn-send-geb-strasse').value.trim(), o = document.getElementById('txn-send-geb-plzort').value.trim();
+    h.style.display = (a && a === (box.dataset.kundeStrasse || '') && o === (box.dataset.kundePlzort || '')) ? 'block' : 'none'; }
+}
+function txnGebWieKunde() {
+  const box = document.getElementById('txn-send-vertrag-geb'); if (!box) return;
+  document.getElementById('txn-send-geb-strasse').value = box.dataset.kundeStrasse || '';
+  document.getElementById('txn-send-geb-plzort').value = box.dataset.kundePlzort || '';
+  _txnGebMarkieren();
+}
+function _txnGebFehlt() {
+  const g = _txnVertragGebaeude(); if (!g) return false;
+  const mit = document.getElementById('txn-send-merge-contract');
+  if (mit && !mit.checked) return false;              // kein Vertrag angehakt → keine Objektanschrift nötig
+  if (g.strasse && g.plz_ort) return false;
+  _txnGebMarkieren();
+  toast('Bitte zuerst die Anschrift des Beratungsobjekts eintragen (Gebäude im Vertrag) — sie darf nicht leer bleiben.', 'error');
+  return true;
+}
+
 function _txnVertragGebaeude() {
   const box = document.getElementById('txn-send-vertrag-geb');
   if (!box || box.style.display === 'none') return null;
@@ -9451,6 +9870,7 @@ function _txnVertragGebaeude() {
 async function previewTxnSendPdf() {
   const key = _txnSendKey;
   if (!key || !_currentTxn) { toast('Kein Vorgang geladen', 'error'); return; }
+  if (_txnGebFehlt()) return;
   toast('PDF-Vorschau wird erzeugt…', 'info');
   const introEl = document.getElementById('step-intro-text');
   const closingEl = document.getElementById('step-closing-text');
@@ -9524,6 +9944,7 @@ async function confirmTxnSend() {
   const contractRow = document.getElementById('txn-send-contract-row');
   const attachContract = !!(contractRow && contractRow.dataset.separat === '1'
     && document.getElementById('txn-send-attach-contract')?.checked);
+  if (_txnGebFehlt()) return;
   const vertragWahl = _txnVertragWahl();   // vor dem Schliessen lesen
   /* Letzte Rückfrage mit Klartext: WAS geht an WEN (22.09.2026 — „ich bin
      eigentlich sicher, das nicht gemacht zu haben"). Freigeben und Freigeben+Senden
