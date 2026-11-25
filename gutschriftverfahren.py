@@ -33,16 +33,24 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 from models import (Invoice, Seller, Buyer, Address, Contact, PaymentInfo, InvoiceLine)
+try:                                             # Steuerfall (Kern ab 25.11.2026); fehlt er, gibt es nur Regelbesteuerung
+    from models import steuerfall_setzen as _steuerfall_setzen
+except ImportError:
+    _steuerfall_setzen = None
 from validator import validate_invoice
 from xrechnung_generator import generate_and_serialize
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 BELEGART = "389"
 PRAEFIX = "GV"
 EREIGNIS = "GUTSCHRIFTVERFAHREN_ERSTELLT"
 SCHLUESSEL = "gutschriftverfahren"            # Abschnitt in mandant_settings.json
 HINWEIS_BT22 = ("Gutschrift im Gutschriftverfahren gemäß § 14 Abs. 2 Satz 2 UStG "
                 "(Abrechnung durch den Leistungsempfänger).")
+TEXT_19 = "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet."
+# Steuerfall des LIEFERANTEN (er ist der leistende Unternehmer). Mehr Fälle bietet das Modul bewusst nicht an.
+STEUERFAELLE = {"regel": "Regelbesteuerung", "kleinunternehmer": "Kleinunternehmer (§ 19 UStG) – keine Umsatzsteuer"}
+_KENNUNG_IM_KERN = hasattr(Seller, "kennung")     # BT-29: Steuernummer genügt als Verkäuferkennung (BR-CO-26)
 STANDARD_BEDINGUNG = "Der Gutschriftsbetrag wird auf das angegebene Konto des leistenden Unternehmers überwiesen."
 
 # Namen aus webapp.py (globals()), die das Modul benutzt
@@ -174,6 +182,39 @@ def einheit_code(wert) -> str:
 
 def einheit_text(code) -> str:
     return EINHEITEN.get(str(code or "").upper(), str(code or ""))
+
+
+def steuerfaelle_verfuegbar() -> dict:
+    """Welche Steuerfälle dieser Programmstand ausstellen kann."""
+    return dict(STEUERFAELLE) if _steuerfall_setzen else {"regel": STEUERFAELLE["regel"]}
+
+
+def steuerfall_lesen(daten: dict) -> str:
+    """„regel“ oder „kleinunternehmer“ aus der Anfrage (Feld steuerfall, auch am Lieferanten; oder kleinunternehmer: true)."""
+    lf = daten.get("lieferant") if isinstance(daten.get("lieferant"), dict) else {}
+    roh = daten.get("steuerfall") or lf.get("steuerfall") or ""
+    t = "".join(str(roh).lower().split())
+    if not t:
+        return "kleinunternehmer" if (daten.get("kleinunternehmer") is True or lf.get("kleinunternehmer") is True) else "regel"
+    if t in ("regel", "regelbesteuerung", "standard", "s"):
+        return "regel"
+    if t in ("kleinunternehmer", "klein", "§19", "§19ustg", "19ustg"):
+        return "kleinunternehmer"
+    raise Eingabefehler(f"Steuerfall „{roh}“ ist im Gutschriftverfahren nicht vorgesehen. Möglich sind: regel, kleinunternehmer.")
+
+
+def ist_ohne_ust(inv) -> bool:
+    return (getattr(inv, "steuerfall", "regel") or "regel") == "kleinunternehmer"
+
+
+def steuerhinweis(inv) -> str:
+    """Hinweissatz für das PDF, wenn keine Umsatzsteuer berechnet wird."""
+    if not ist_ohne_ust(inv):
+        return ""
+    try:
+        return inv.steuerhinweis() or TEXT_19
+    except Exception:
+        return TEXT_19
 
 
 def ist_gv(inv) -> bool:
@@ -353,6 +394,11 @@ def beleg_bauen(daten: dict, ms: dict, nummer: str):
                             payment_terms=bedingung, due_date=faellig),
     )
 
+    fall = steuerfall_lesen(daten)
+    klein = fall == "kleinunternehmer"
+    if klein and not _steuerfall_setzen:
+        fehler("GV-STEUER", "Kleinunternehmer (§ 19 UStG): Dieser Programmstand kann Belege ohne Umsatzsteuer noch nicht "
+                            "normgerecht ausstellen (der Steuerfall fehlt im Kern).", "BT-151")
     positionen = daten.get("positionen")
     if not isinstance(positionen, list):
         positionen = []
@@ -361,15 +407,22 @@ def beleg_bauen(daten: dict, ms: dict, nummer: str):
         wo = f"Position {nr}"
         menge = _dezimal(p.get("menge", 1), f"{wo}, Menge")
         preis = _dezimal(p.get("einzelpreis", p.get("preis")), f"{wo}, Einzelpreis")
-        satz = _dezimal(p.get("steuersatz", 19), f"{wo}, Steuersatz")
+        satz = _dezimal(p.get("steuersatz") if p.get("steuersatz") not in (None, "") else (0 if klein else 19),
+                        f"{wo}, Steuersatz")
         if preis != preis.quantize(Decimal("0.01")):
             fehler("GV-PREIS", f"{wo}: Einzelpreis mit mehr als zwei Nachkommastellen ({_zahl(preis)}) kann die E-Rechnung "
                                f"dieses Programms nicht ausweisen. Bitte auf eine größere Einheit umrechnen (z. B. je Tonne statt je kg).",
                    "BT-146")
-        if satz <= 0:
-            fehler("GV-STEUER", f"{wo}: Steuersatz {_zahl(satz)} %. Belege ohne Umsatzsteuer (z. B. Kleinunternehmer, "
-                                f"steuerfreie Umsätze) brauchen einen Befreiungsgrund, den dieses Modul noch nicht ausgibt.",
-                   "BT-152")
+        if klein:
+            # Nichts stillschweigend ändern: ein angegebener Satz über 0 widerspricht dem Steuerfall. Weist die Gutschrift
+            # Umsatzsteuer aus, schuldet der Kleinunternehmer sie (§ 14c UStG).
+            if satz != 0:
+                fehler("GV-STEUER", f"{wo}: Steuersatz {_zahl(satz)} %, der Lieferant ist aber als Kleinunternehmer (§ 19 UStG) "
+                                    f"angegeben – dann wird keine Umsatzsteuer berechnet (Steuersatz 0).", "BT-152")
+        elif satz <= 0:
+            fehler("GV-STEUER", f"{wo}: Steuersatz {_zahl(satz)} % bei Regelbesteuerung. Ist der Lieferant Kleinunternehmer, "
+                                f"wählen Sie bitte den Steuerfall „Kleinunternehmer (§ 19 UStG)“; andere steuerfreie Umsätze "
+                                f"stellt dieses Modul nicht aus.", "BT-152")
         elif satz > 100:
             fehler("GV-STEUER", f"{wo}: Steuersatz {_zahl(satz)} % ist nicht plausibel.", "BT-152")
         if menge != menge.quantize(Decimal("0.0001")):
@@ -379,19 +432,24 @@ def beleg_bauen(daten: dict, ms: dict, nummer: str):
             item_name=_s(p.get("bezeichnung", p.get("name"))),
             item_description=str(p.get("beschreibung") or "").strip(),
             item_id=_s(p.get("artikelnummer"))[:60],
-            unit_price=preis, tax_category="S", tax_rate=satz,
+            unit_price=preis, tax_category="S", tax_rate=(Decimal("0") if klein else satz),
         )
         linie.line_net_amount = linie.compute_net()
         inv.lines.append(linie)
+    if klein and _steuerfall_setzen:
+        # Kategorie E, Satz 0 und Befreiungsgrund (BT-120) in Beleg und Positionen – der eine Aufruf des Kerns
+        _steuerfall_setzen(inv, "kleinunternehmer")
 
     # Eigene Prüfungen zum Verfahren
     if not lf["strasse"]:
         fehler("GV-ANSCHRIFT", "Lieferant: Straße fehlt (vollständige Anschrift des leistenden Unternehmers, § 14 Abs. 4 Nr. 1 UStG).", "BT-35")
     if not md["strasse"]:
         fehler("GV-ANSCHRIFT", "Ihre eigene Anschrift ist unvollständig (Straße fehlt) – bitte unter Einstellungen → Stammdaten ergänzen.", "BT-50")
-    if not lf["ust_id"] and lf["steuernummer"]:
-        # Die eingebaute Prüfung lässt die Steuernummer allein durch, der amtliche Prüfer (KoSIT) nicht: BR-CO-26 verlangt
-        # BT-29, BT-30 oder BT-31. BT-29/BT-30 führt das Programm beim Verkäufer nicht dauerhaft (persistence.py).
+    if not lf["ust_id"] and not lf["steuernummer"]:
+        fehler("GV-STEUERNR", "Lieferant: Steuernummer oder USt-IdNr. fehlt (§ 14 Abs. 4 Nr. 2 UStG).", "BT-31/BT-32")
+    if not lf["ust_id"] and lf["steuernummer"] and not _KENNUNG_IM_KERN:
+        # Ab Kern 25.11.2026 schreibt Seller.kennung() die Steuernummer zusätzlich als Verkäuferkennung (BT-29); damit ist
+        # BR-CO-26 der amtlichen Prüfung erfüllt. Nur ältere Programmstände können das nicht – dort bleibt es bei der Ablehnung.
         fehler("GV-KENNUNG", "Lieferant: USt-IdNr. fehlt. Die Steuernummer allein genügt zwar dem Umsatzsteuergesetz, aber nicht "
                              "der XRechnung (Regel BR-CO-26 verlangt eine USt-IdNr. oder eine andere Kennung des Verkäufers, "
                              "die dieses Programm noch nicht führt).", "BT-31")
@@ -570,7 +628,7 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
     else:
         leistung_text = _de_datum(leistung)
     daten = [("Gutschrift-Nr.", inv.invoice_number), ("Datum", _de_datum(inv.invoice_date)),
-             ("Leistungsdatum", leistung_text)]
+             ("Leistungszeitraum" if (inv.period_start and inv.period_end) else "Leistungsdatum", leistung_text)]
     if inv.payment.due_date:
         daten.append(("Zahlung bis", _de_datum(inv.payment.due_date)))
     ref = inv.buyer_reference or inv.buyer.buyer_reference
@@ -616,16 +674,23 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
     story.append(Spacer(1, 3 * mm))
 
     # Positionen
+    # Kleinunternehmer (§ 19 UStG): KEIN Steuerausweis – weder Spalte noch Zeile. Ein ausgewiesener Betrag würde vom
+    # Lieferanten geschuldet (§ 14c UStG).
+    ohne_ust = ist_ohne_ust(inv)
     zeilen = [[Paragraph("Pos.", th), Paragraph("Bezeichnung", th), Paragraph("Menge", thr), Paragraph("Einheit", th),
-               Paragraph("Einzelpreis", thr), Paragraph("USt", thr), Paragraph("Netto EUR", thr)]]
+               Paragraph("Einzelpreis", thr)] + ([] if ohne_ust else [Paragraph("USt", thr)])
+              + [Paragraph("Betrag EUR" if ohne_ust else "Netto EUR", thr)]]
     for nr, l in enumerate(inv.lines, 1):
         bez = x(l.item_name)
         if l.item_description:
             bez += "<br/><font size='8' color='#555555'>" + x(l.item_description).replace("\n", "<br/>") + "</font>"
         zeilen.append([Paragraph(str(nr), n), Paragraph(bez, n), Paragraph(_zahl(l.quantity), r),
-                       Paragraph(x(einheit_text(l.unit_code)), n), Paragraph(_geld(l.unit_price), r),
-                       Paragraph(_zahl(l.tax_rate) + " %", r), Paragraph(_geld(l.line_net_amount), r)])
-    story.append(Table(zeilen, colWidths=[11 * mm, 69 * mm, 19 * mm, 17 * mm, 22 * mm, 13 * mm, 19 * mm], repeatRows=1,
+                       Paragraph(x(einheit_text(l.unit_code)), n), Paragraph(_geld(l.unit_price), r)]
+                      + ([] if ohne_ust else [Paragraph(_zahl(l.tax_rate) + " %", r)])
+                      + [Paragraph(_geld(l.line_net_amount), r)])
+    spalten = ([11 * mm, 82 * mm, 19 * mm, 17 * mm, 22 * mm, 19 * mm] if ohne_ust
+               else [11 * mm, 69 * mm, 19 * mm, 17 * mm, 22 * mm, 13 * mm, 19 * mm])
+    story.append(Table(zeilen, colWidths=spalten, repeatRows=1,
                        style=TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("LINEBELOW", (0, 0), (-1, 0), 0.8, dunkel),
                                          ("LINEBELOW", (0, 1), (-1, -1), 0.3, linie),
                                          ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
@@ -633,17 +698,22 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
     story.append(Spacer(1, 4 * mm))
 
     # Summen
-    summen = [[Paragraph("Summe netto", n), Paragraph(_geld(inv.tax_exclusive_amount()) + " EUR", r)]]
-    for st in inv.compute_tax_subtotals():
-        summen.append([Paragraph(f"Umsatzsteuer {_zahl(st.rate)} % auf {_geld(st.taxable_amount)} EUR", n),
-                       Paragraph(_geld(st.tax_amount) + " EUR", r)])
-    summen.append([Paragraph("Gutschriftsbetrag (brutto)", f), Paragraph(_geld(inv.tax_inclusive_amount()) + " EUR", rf)])
+    if ohne_ust:
+        summen = [[Paragraph("Gutschriftsbetrag", f), Paragraph(_geld(inv.tax_inclusive_amount()) + " EUR", rf)]]
+    else:
+        summen = [[Paragraph("Summe netto", n), Paragraph(_geld(inv.tax_exclusive_amount()) + " EUR", r)]]
+        for st in inv.compute_tax_subtotals():
+            summen.append([Paragraph(f"Umsatzsteuer {_zahl(st.rate)} % auf {_geld(st.taxable_amount)} EUR", n),
+                           Paragraph(_geld(st.tax_amount) + " EUR", r)])
+        summen.append([Paragraph("Gutschriftsbetrag (brutto)", f), Paragraph(_geld(inv.tax_inclusive_amount()) + " EUR", rf)])
     letzte = len(summen) - 1
     summen_tab = Table(summen, colWidths=[62 * mm, 33 * mm], hAlign="RIGHT",
-                       style=TableStyle([("LINEABOVE", (0, letzte), (-1, letzte), 0.8, dunkel),
+                       style=TableStyle([("LINEABOVE", (0, letzte), (-1, letzte), 0.8 if letzte else 0, dunkel),
                                          ("TOPPADDING", (0, 0), (-1, -1), 2), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
                                          ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2)]))
     schluss = [summen_tab, Spacer(1, 6 * mm)]
+    if ohne_ust:
+        schluss += [Paragraph(x(steuerhinweis(inv)), f), Spacer(1, 3 * mm)]
 
     # Zahlung an den Lieferanten
     konto = "IBAN " + _iban_gruppiert(inv.payment.iban) + (f" · BIC {inv.payment.bic}" if inv.payment.bic else "")
@@ -753,7 +823,7 @@ def beleg_pdf(inv):
 
 def _signatur(inv):
     try:
-        return (str(inv.invoice_date), _s(inv.seller.name).lower(),
+        return (str(inv.invoice_date), _s(inv.seller.name).lower(), ist_ohne_ust(inv),
                 tuple((_s(l.item_name), str(l.quantity), str(l.unit_price), str(l.tax_rate)) for l in inv.lines),
                 str(inv.tax_inclusive_amount()))
     except Exception:
@@ -763,6 +833,7 @@ def _signatur(inv):
 def _zusammenfassung(inv) -> dict:
     return {"netto": float(inv.tax_exclusive_amount()), "steuer": float(inv.tax_amount()),
             "brutto": float(inv.tax_inclusive_amount()), "positionen": len(inv.lines),
+            "steuerfall": "kleinunternehmer" if ist_ohne_ust(inv) else "regel", "steuerhinweis": steuerhinweis(inv),
             "lieferant": inv.seller.name, "datum": inv.invoice_date.isoformat()}
 
 
@@ -780,6 +851,12 @@ def ausstellen(daten: dict, benutzer: str = "web-user"):
             inv, eigene = beleg_bauen(daten, ms, naechste_nummer(advance=False))
         except Eingabefehler as ex:
             return {"error": str(ex), "angelegt": False}, 400
+        vereinbart = daten.get("vereinbart") is True
+        if not vereinbart:
+            # Pflicht zum Ausstellen; beim bloßen Prüfen nur ein Hinweis, damit die übrige Prüfung nicht daran hängt
+            eigene = list(eigene) + [("GV-VEREINBART", "WARNING" if nur_pruefen else "ERROR",
+                                      "Bitte bestätigen: „Das Gutschriftverfahren ist mit dem Lieferanten vereinbart“ – ohne "
+                                      "vorherige Vereinbarung gilt die Gutschrift nicht als Rechnung (§ 14 Abs. 2 Satz 2 UStG).", "")]
         bericht, fehler, warnungen = pruefen(inv, eigene)
         xml_bytes = None
         if not fehler:
@@ -845,7 +922,9 @@ def ausstellen(daten: dict, benutzer: str = "web-user"):
             print(f"[gutschriftverfahren] Freigabelauf nicht gestartet: {ex}", flush=True)
         inv.add_audit(EREIGNIS, benutzer,
                       f"Gutschrift im Gutschriftverfahren (Belegart 389) an {inv.seller.name}, "
-                      f"{_geld(inv.tax_inclusive_amount())} EUR brutto")
+                      f"{_geld(inv.tax_inclusive_amount())} EUR"
+                      + (" ohne Umsatzsteuer (Kleinunternehmer § 19 UStG)" if ist_ohne_ust(inv) else " brutto")
+                      + f". Bestätigt von {benutzer}: Das Gutschriftverfahren ist mit dem Lieferanten vereinbart.")
         for name, aufruf in (("inbox", lambda o: o.duplicates.register(inv, inv._id)),
                              ("dash", lambda o: o.add_invoice(inv))):
             try:
@@ -921,6 +1000,7 @@ def einrichten(app, g: dict):
             kosit_grund = str(ex)
         return js({"verfuegbar": True, "version": VERSION, "aktiv": ist_aktiv(ms), "belegart": BELEGART,
                    "naechste_nummer": naechste_nummer(advance=False), "einheiten": EINHEITEN,
+                   "steuerfaelle": steuerfaelle_verfuegbar(), "nur_steuernummer_moeglich": _KENNUNG_IM_KERN,
                    "kosit_verfuegbar": bool(kosit_ok), "kosit_grund": kosit_grund,
                    "aussteller": {k: v for k, v in _mandant_lesen(ms).items() if k in ("name", "strasse", "plz", "ort", "ust_id", "email")}})
 
@@ -939,6 +1019,7 @@ def einrichten(app, g: dict):
 
     def kurz(inv):
         return {"id": inv._id, "nummer": inv.invoice_number, "datum": inv.invoice_date.isoformat(),
+                "steuerfall": "kleinunternehmer" if ist_ohne_ust(inv) else "regel",
                 "lieferant": inv.seller.name, "brutto": float(inv.tax_inclusive_amount()), "status": inv.status,
                 "kosit": getattr(inv, "_kosit", None) or {"ausstehend": True},
                 "xml_url": f"/api/gutschriftverfahren/{inv._id}/xml", "pdf_url": f"/api/gutschriftverfahren/{inv._id}/pdf"}

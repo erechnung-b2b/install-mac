@@ -478,7 +478,7 @@ th.c,td.c{text-align:center}
        mit der Karte „Verkäufer“. -->
   <details class="card" id="gv-karte" style="display:none;margin-bottom:16px" ontoggle="if(this.open)gvOeffnen()">
     <summary style="padding:14px 18px;cursor:pointer;font-weight:600">&#128228; Gutschrift im Gutschriftverfahren ausstellen <span style="font-weight:400;color:var(--text2);font-size:12px">– Sie rechnen selbst über die Leistung Ihres Lieferanten ab (Belegart 389)</span></summary>
-    <div class="card-body" oninput="gvGeaendert()" onchange="gvGeaendert()">
+    <div class="card-body" oninput="gvGeaendert(event)" onchange="gvGeaendert(event)">
       <p style="font-size:13px;color:var(--text2);margin:0 0 12px">Aussteller und Leistungsempfänger sind Sie: <b id="gv-aussteller">–</b> (aus den Stammdaten). Der Lieferant ist der leistende Unternehmer; der Betrag wird auf <b>sein</b> Konto überwiesen. Nächste Nummer: <span id="gv-nummer" style="font-family:var(--mono,monospace)">–</span></p>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
         <div>
@@ -488,7 +488,9 @@ th.c,td.c{text-align:center}
             <div class="form-row"><label>Hausnummer</label><input id="gv-l-hausnummer" style="max-width:110px"></div></div>
           <div class="form-row"><label>PLZ / Ort</label><div style="display:flex;gap:8px"><input id="gv-l-plz" style="width:80px" maxlength="5" inputmode="numeric"><input id="gv-l-ort"></div></div>
           <div class="form-row-2"><div class="form-row"><label>USt-IdNr.</label><input id="gv-l-ust" placeholder="DE123456789"></div>
-            <div class="form-row"><label>Steuernummer (zusätzlich möglich)</label><input id="gv-l-steuernummer"></div></div>
+            <div class="form-row"><label>Steuernummer (genügt, wenn es keine USt-IdNr. gibt)</label><input id="gv-l-steuernummer"></div></div>
+          <div class="form-row"><label>Steuerfall des Lieferanten</label><select id="gv-steuerfall" onchange="gvSteuerfall()"><option value="regel">Regelbesteuerung</option><option value="kleinunternehmer">Kleinunternehmer (§ 19 UStG) – keine Umsatzsteuer</option></select>
+            <div id="gv-steuerfall-hinweis" style="display:none;font-size:12px;color:var(--warning);margin-top:4px">Die Gutschrift weist dann keine Umsatzsteuer aus und trägt den Hinweis „Gemäß § 19 UStG wird keine Umsatzsteuer berechnet.“ Bitte nur wählen, wenn der Lieferant Ihnen das bestätigt hat – eine zu Unrecht ausgewiesene Umsatzsteuer müsste er abführen.</div></div>
         </div>
         <div>
           <div class="form-row-2"><div class="form-row"><label>E-Mail des Lieferanten (für die E-Rechnung)</label><input id="gv-l-email" type="email"></div>
@@ -511,6 +513,11 @@ th.c,td.c{text-align:center}
         <button onclick="gvZeileNeu()" style="font-size:12px">+ Position</button>
         <span id="gv-summe" style="font-size:13px"></span>
       </div>
+      <label style="display:flex;gap:10px;align-items:flex-start;margin-top:14px;padding:10px 12px;border:1px solid var(--border,#ddd);border-radius:8px;cursor:pointer">
+        <input type="checkbox" id="gv-vereinbart" style="margin-top:3px;width:auto">
+        <span><b>Das Gutschriftverfahren ist mit dem Lieferanten vereinbart</b><br>
+        <span style="font-size:12px;color:var(--text2)">Pflicht zum Ausstellen: Ohne vorherige Vereinbarung gilt die Gutschrift nicht als Rechnung. Ihre Bestätigung wird im Verlauf des Belegs festgehalten.</span></span>
+      </label>
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px">
         <button onclick="gvSenden(false)">1. Prüfen</button>
         <button class="primary" id="gv-ausstellen" onclick="gvSenden(true)" disabled>2. Ausstellen</button>
@@ -4734,6 +4741,19 @@ function gv_Anzeigen(j) {
   var a = j.aussteller || {};
   if (gv_El('gv-aussteller')) gv_El('gv-aussteller').textContent = [a.name, [a.plz, a.ort].filter(Boolean).join(' ')].filter(Boolean).join(', ') || 'Stammdaten fehlen';
   if (gv_El('gv-nummer')) gv_El('gv-nummer').textContent = j.naechste_nummer || '–';
+  // Kleinunternehmer nur anbieten, wenn der Server den Steuerfall ausstellen kann
+  var kl = document.querySelector('#gv-steuerfall option[value="kleinunternehmer"]');
+  if (kl) kl.disabled = !(j.steuerfaelle && j.steuerfaelle.kleinunternehmer);
+}
+function gv_Klein() { var f = gv_El('gv-steuerfall'); return !!f && f.value === 'kleinunternehmer'; }
+function gvSteuerfall() {
+  var klein = gv_Klein();
+  gv_El('gv-steuerfall-hinweis').style.display = klein ? '' : 'none';
+  Array.prototype.forEach.call(document.querySelectorAll('#gv-positionen .gv-p-satz'), function (e) {
+    if (klein) { if (e.value !== '0') e.dataset.vorher = e.value; e.value = '0'; e.disabled = true; }
+    else { e.disabled = false; if (gv_Zahl(e.value) === 0) e.value = e.dataset.vorher || '19'; }
+  });
+  gvGeaendert();
 }
 function gvLaden() {
   return fetch(API + '/api/mandant/gutschriftverfahren').then(function (r) { return r.ok ? r.json() : null; })
@@ -4772,7 +4792,10 @@ function gvLieferantWahl() {
   setze('gv-l-name', s.name); setze('gv-l-strasse', s.street); setze('gv-l-hausnummer', s.house_number); setze('gv-l-plz', s.post_code); setze('gv-l-ort', s.city);
   setze('gv-l-ust', s.vat_id); setze('gv-l-steuernummer', s.tax_registration_id); setze('gv-l-email', s.email); setze('gv-l-telefon', s.phone);
   setze('gv-l-ansprechpartner', s.contact_name); setze('gv-l-iban', s.iban); setze('gv-l-bic', s.bic);
-  gvGeaendert();
+  // Kennzeichen am Lieferanten, falls der Stamm eines führt (kleinunternehmer: true oder steuerfall) – sonst bleibt die Auswahl, wie sie ist
+  if (s.kleinunternehmer === true || s.steuerfall === 'kleinunternehmer') gv_El('gv-steuerfall').value = 'kleinunternehmer';
+  else if (s.kleinunternehmer === false || s.steuerfall === 'regel') gv_El('gv-steuerfall').value = 'regel';
+  gvSteuerfall();
 }
 function gvZeileNeu() {
   var einheiten = (gv_Info && gv_Info.einheiten) || { C62: 'Stk', LS: 'Pauschal', HUR: 'Std', KGM: 'kg', TNE: 't', MTR: 'm', MTK: 'm²', MTQ: 'm³', LTR: 'l', KWH: 'kWh' };
@@ -4783,15 +4806,16 @@ function gvZeileNeu() {
     + '<td><input class="gv-p-menge" value="1" inputmode="decimal" style="text-align:right"></td>'
     + '<td><select class="gv-p-einheit">' + opt + '</select></td>'
     + '<td><input class="gv-p-preis" inputmode="decimal" placeholder="0,00" style="text-align:right"></td>'
-    + '<td><input class="gv-p-satz" value="19" inputmode="decimal" style="text-align:right"></td>'
+    + '<td><input class="gv-p-satz" value="' + (gv_Klein() ? '0" disabled' : '19"') + ' inputmode="decimal" style="text-align:right"></td>'
     + '<td class="gv-p-netto" style="text-align:right;white-space:nowrap">–</td>'
     + '<td><button onclick="gvZeileWeg(this)" title="Position entfernen" style="font-size:12px;padding:2px 8px">&#10005;</button></td>';
   gv_El('gv-positionen').appendChild(tr);
   gvGeaendert();
 }
 function gvZeileWeg(knopf) { var tr = knopf.closest('tr'); if (tr) tr.remove(); if (!gv_El('gv-positionen').children.length) gvZeileNeu(); gvGeaendert(); }
-function gvGeaendert() {
-  // jede Änderung nach dem Prüfen verlangt ein neues Prüfen
+function gvGeaendert(ereignis) {
+  // jede Änderung nach dem Prüfen verlangt ein neues Prüfen – außer dem Häkchen zur Vereinbarung
+  if (ereignis && ereignis.target && ereignis.target.id === 'gv-vereinbart') return;
   gv_Geprueft = false;
   if (gv_El('gv-ausstellen')) gv_El('gv-ausstellen').disabled = true;
   var netto = 0, steuer = 0;
@@ -4800,7 +4824,8 @@ function gvGeaendert() {
     tr.querySelector('.gv-p-netto').textContent = gv_Geld(n);
     netto += n; steuer += n * gv_Zahl(tr.querySelector('.gv-p-satz').value) / 100;
   });
-  gv_El('gv-summe').innerHTML = 'Netto ' + gv_Geld(netto) + ' · Umsatzsteuer ' + gv_Geld(steuer) + ' · <b>Gutschriftsbetrag ' + gv_Geld(netto + steuer) + '</b>';
+  gv_El('gv-summe').innerHTML = gv_Klein() ? '<b>Gutschriftsbetrag ' + gv_Geld(netto) + '</b> · ohne Umsatzsteuer (§ 19 UStG)'
+    : 'Netto ' + gv_Geld(netto) + ' · Umsatzsteuer ' + gv_Geld(steuer) + ' · <b>Gutschriftsbetrag ' + gv_Geld(netto + steuer) + '</b>';
 }
 function gv_Daten() {
   var w = function (id) { return gv_El(id).value.trim(); };
@@ -4808,6 +4833,7 @@ function gv_Daten() {
     lieferant: { lieferant_id: w('gv-l-wahl'), name: w('gv-l-name'), strasse: w('gv-l-strasse'), hausnummer: w('gv-l-hausnummer'), plz: w('gv-l-plz'), ort: w('gv-l-ort'),
       ust_id: w('gv-l-ust'), steuernummer: w('gv-l-steuernummer'), email: w('gv-l-email'), telefon: w('gv-l-telefon'), ansprechpartner: w('gv-l-ansprechpartner'),
       iban: w('gv-l-iban'), bic: w('gv-l-bic') },
+    steuerfall: gv_El('gv-steuerfall') ? gv_El('gv-steuerfall').value : 'regel', vereinbart: !!(gv_El('gv-vereinbart') && gv_El('gv-vereinbart').checked),
     datum: w('gv-datum'), leistungsdatum: w('gv-leistungsdatum'), zahlungsziel_tage: w('gv-ziel'), zahlungsbedingung: w('gv-bedingung'), notiz: w('gv-notiz'),
     positionen: Array.prototype.map.call(gv_El('gv-positionen').children, function (tr) {
       return { bezeichnung: tr.querySelector('.gv-p-bez').value.trim(), menge: tr.querySelector('.gv-p-menge').value.trim() || '1', einheit: tr.querySelector('.gv-p-einheit').value,
@@ -4829,7 +4855,8 @@ function gv_Liste(eintraege, farbe, zeichen) {
 async function gvSenden(ausstellen) {
   var stand = gv_El('gv-stand'), erg = gv_El('gv-ergebnis'), d = gv_Daten();
   if (ausstellen && !gv_Geprueft) { stand.textContent = 'Bitte zuerst prüfen.'; return false; }
-  if (ausstellen && !confirm('Gutschrift jetzt ausstellen?\n\nLieferant: ' + d.lieferant.name + '\nKonto: ' + d.lieferant.iban + '\n\nDer Beleg erhält eine Nummer aus dem Kreis GV-… und erscheint in der Rechnungsliste als Eingang.')) return false;
+  if (ausstellen && !d.vereinbart) { stand.textContent = 'Bitte zuerst bestätigen, dass das Gutschriftverfahren mit dem Lieferanten vereinbart ist.'; return false; }
+  if (ausstellen && !confirm('Gutschrift jetzt ausstellen?\n\nLieferant: ' + d.lieferant.name + '\nKonto: ' + d.lieferant.iban + (d.steuerfall === 'kleinunternehmer' ? '\nKleinunternehmer (§ 19 UStG): ohne Umsatzsteuer' : '') + '\n\nDer Beleg erhält eine Nummer aus dem Kreis GV-… und erscheint in der Rechnungsliste als Eingang.')) return false;
   if (ausstellen) gv_El('gv-ausstellen').disabled = true;
   stand.textContent = ausstellen ? 'Gutschrift wird ausgestellt …' : 'Wird geprüft (mit amtlicher Prüfung, das dauert einige Sekunden) …';
   if (!ausstellen) { d.nur_pruefen = true; d.kosit = true; }
@@ -4844,11 +4871,13 @@ async function gvSenden(ausstellen) {
     gv_El('gv-ausstellen').disabled = !gv_Geprueft;
     stand.textContent = j.gueltig ? 'In Ordnung – Sie können ausstellen.' : (j.fehler || []).length + ' Fehler – bitte berichtigen.';
     erg.innerHTML = (j.gueltig ? '<div style="font-size:13px;color:var(--success);margin-bottom:4px">&#10003; Eingebaute Prüfung ohne Fehler · vorgesehene Nummer ' + esc(j.nummer_vorschau) + ' · Gutschriftsbetrag ' + gv_Geld(j.brutto) + '</div>' : '')
-      + html + (j.kosit ? '<div style="font-size:13px;margin-top:4px">' + gv_KositText(j.kosit) + '</div>' : '');
+      + (j.gueltig && j.steuerhinweis ? '<div style="font-size:13px;margin-bottom:4px">' + esc(j.steuerhinweis) + '</div>' : '')
+    + html + (j.kosit ? '<div style="font-size:13px;margin-top:4px">' + gv_KositText(j.kosit) + '</div>' : '');
     return !!j.gueltig;
   }
   if (!r.ok || !j.angelegt) { stand.textContent = j.error || j.message || 'Nicht ausgestellt.'; erg.innerHTML = html; gv_Geprueft = false; return false; }
   gv_Geprueft = false;
+  if (gv_El('gv-vereinbart')) gv_El('gv-vereinbart').checked = false;      // jede Gutschrift wird einzeln bestätigt
   stand.textContent = 'Ausgestellt: ' + j.nummer;
   erg.innerHTML = '<div style="font-size:14px;color:var(--success);font-weight:600;margin-bottom:6px">&#10003; Gutschrift ' + esc(j.nummer) + ' ausgestellt · ' + gv_Geld(j.brutto) + '</div>'
     + '<div style="font-size:13px;display:flex;gap:14px;flex-wrap:wrap;margin-bottom:6px">'

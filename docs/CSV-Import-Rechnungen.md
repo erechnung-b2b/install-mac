@@ -50,6 +50,10 @@ Eine Muster-Datei gibt es im selben Fenster zum Herunterladen.
 | `einheit` | nein | `Stk`, `Std`, `Tag`, `Monat`, `psch`, `m`, `m2`, `km`, `kg`, `l`. Ohne Angabe Stück | `Std` |
 | `einzelpreis` | ja | Nettopreis je Einheit, nicht negativ | `95,00` |
 | `steuersatz` | nein | Umsatzsteuersatz in Prozent. Ohne Angabe 19 | `19` |
+| `steuerfall` | nein | `regel` (Standard), `kleinunternehmer`, `reverse_charge`, `steuerfrei` oder `nullsatz`. Außer bei `regel` ist der Steuersatz 0 | `regel` |
+| `bestellnummer` | nein | Bestellnummer des Kunden | `4500012345` |
+| `vertragsnummer` | nein | Vertragsnummer | `V-2026-017` |
+| `projektnummer` | nein | Projektnummer | `P-0815` |
 | `skonto_prozent` | nein | Skonto in Prozent | `2` |
 | `skonto_tage` | nein | Skontofrist in Tagen | `10` |
 | `notiz` | nein | Bemerkung auf der Rechnung, z. B. Leistungszeitraum | `Leistungszeitraum Oktober 2026` |

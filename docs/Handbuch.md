@@ -70,6 +70,19 @@ Nach fünf falschen Versuchen ist die Anmeldung für 15 Minuten gesperrt.
 
 Die neue Rechnung steht mit dem Status „Neu" in der Liste.
 
+**Steuerfall.** Über den Positionen wählen Sie den Steuerfall. „Regelbesteuerung" ist der Normalfall mit 19 % oder 7 % je
+Position. „Kleinunternehmer (§ 19 UStG)" rechnet ohne Umsatzsteuer; auf der Rechnung steht dann „Gemäß § 19 UStG wird
+keine Umsatzsteuer berechnet." – eine USt-ID brauchen Sie dafür nicht, Ihre Steuernummer genügt. „Steuerschuld des Kunden
+(§ 13b UStG)" setzen Sie, wenn der Kunde die Umsatzsteuer schuldet; dafür müssen Ihre und seine USt-ID eingetragen sein.
+„Steuerfreier Umsatz" verlangt einen kurzen Grund. Sind Sie Kleinunternehmer, setzen Sie in den Einstellungen bei den
+Stammdaten das Häkchen „Kleinunternehmer"; der Steuerfall ist dann bei jeder neuen Rechnung vorbelegt. Lieferungen ins
+Ausland lassen sich nicht abbilden.
+
+**Bestellnummer, Vertragsnummer, Projektnummer.** Verlangt Ihr Kunde seine Bestellnummer, eine Vertrags- oder
+Projektnummer auf der Rechnung, tragen Sie sie in die drei Felder unter dem Steuerfall ein. Sie stehen in der E-Rechnung
+an der vorgesehenen Stelle und auf dem PDF. Bei Behörden gehört die Leitweg-ID in das Feld „Leitweg-ID / Käuferreferenz";
+das Programm prüft ihren Aufbau und warnt bei einem Tippfehler.
+
 ### 4. Rechnungen aus dem eigenen Programm einlesen
 
 „Rechnung erstellen" → „Rechnungen aus einer CSV-Datei einlesen". Datei wählen, **„1. Prüfen"** – dabei wird nichts
@@ -100,6 +113,19 @@ In der geöffneten Rechnung:
 
 Beide Belege sind eigene E-Rechnungen und nennen Nummer und Datum der Ursprungsrechnung. Stornieren und Gutschreiben geht
 nur bei freigegebenen Rechnungen.
+
+**Gutschrift im Gutschriftverfahren.** Das ist etwas anderes als die Gutschrift oben: Mit manchen Lieferanten ist
+vereinbart, dass nicht der Lieferant eine Rechnung schreibt, sondern Sie selbst über seine Leistung abrechnen – zum
+Beispiel bei Provisionen, Honoraren oder Lizenzen. Schalten Sie die Funktion in den Einstellungen mit dem Häkchen
+„Gutschriftverfahren nutzen" ein. Danach finden Sie unter „Rechnung erstellen" die Karte „Gutschrift im
+Gutschriftverfahren ausstellen". Wählen Sie den Lieferanten aus dem Lieferantenstamm oder tragen Sie ihn ein (Name,
+Anschrift, USt-ID oder Steuernummer, E-Mail-Adresse, Bankverbindung), ergänzen Sie Datum und Positionen und klicken Sie
+auf „1. Prüfen". Ist alles in Ordnung, bestätigen Sie mit dem Häkchen, dass das Verfahren mit dem Lieferanten vereinbart
+ist, und klicken auf „2. Ausstellen". Die Gutschrift erhält eine Nummer, die mit „GV" beginnt, und steht in der
+Rechnungsliste beim Eingang – Sie müssen sie bezahlen, und zwar auf das Konto des Lieferanten. Ist der Lieferant
+Kleinunternehmer, wählen Sie bei „Steuerfall des Lieferanten" den Eintrag „Kleinunternehmer"; die Gutschrift weist dann
+keine Umsatzsteuer aus. Wählen Sie das nur, wenn der Lieferant es bestätigt hat. Widerspricht der Lieferant der
+Gutschrift, verliert sie ihre Wirkung als Rechnung.
 
 ### 7. Zahlungen
 
