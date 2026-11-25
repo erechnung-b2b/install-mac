@@ -103,6 +103,7 @@ def _parse_seller(root) -> Seller:
         vat_id=vat_id,
         tax_registration_id=tax_reg,
         registration_name=_find(party, "cac:PartyLegalEntity/cbc:RegistrationName"),
+        legal_info=_find(party, "cac:PartyLegalEntity/cbc:CompanyLegalForm"),      # BT-33
         company_id=_find(party, "cac:PartyLegalEntity/cbc:CompanyID"),
     )
 
@@ -136,6 +137,7 @@ def _parse_buyer(root) -> Buyer:
         buyer_reference="",  # BT-10 steht im Header
         vat_id=vat_id or erste,
         company_id=_find(party, "cac:PartyLegalEntity/cbc:CompanyID"),
+        buyer_id=_find(party, "cac:PartyIdentification/cbc:ID"),      # BT-46
         contact=kontakt if (kontakt.name or kontakt.telephone or kontakt.email) else None,
     )
 
@@ -151,6 +153,10 @@ def _parse_payment(root) -> PaymentInfo:
         info.bic = _find(pm, "cac:PayeeFinancialAccount/cac:FinancialInstitutionBranch/cbc:ID")
     if pt is not None:
         info.payment_terms = _find(pt, "cbc:Note")
+    if pm is not None:
+        info.remittance = _find(pm, "cbc:PaymentID")      # BT-83 Verwendungszweck
+    from models import skonto_einlesen as _skonto_einlesen
+    _skonto_einlesen(info)                                # Prozent/Tage aus den #SKONTO#-Zeilen (BR-DE-18)
 
     # Invoice: cbc:DueDate auf Wurzelebene; CreditNote: PaymentMeans/PaymentDueDate
     info.due_date = _find_date(root, "cbc:DueDate")
@@ -203,6 +209,8 @@ def _parse_line(line_el) -> InvoiceLine:
             line.price_base_quantity = bq
 
     line.order_reference = _find(line_el, "cac:OrderLineReference/cbc:LineID")
+    line.period_start = _find_date(line_el, "cac:InvoicePeriod/cbc:StartDate")      # BT-134
+    line.period_end = _find_date(line_el, "cac:InvoicePeriod/cbc:EndDate")          # BT-135
 
     for ac_el in line_el.findall("cac:AllowanceCharge", NS):
         line.allowances_charges.append(_parse_allowance_charge(ac_el))
@@ -362,6 +370,9 @@ def parse_xrechnung(xml_bytes: bytes, source_file: str = "") -> Invoice:
     # Summen der Datei (BT-106 … BT-115) getrennt ablegen, Befreiungsgrund und Steuerfall
     inv._datei_summen = _summen_aus_datei(root)
     _steuerangaben(root, inv)
+
+    # Zusatzangaben: Lieferort, Lastschrift, Zahlungsempfänger, Anhänge, weitere Bezüge, Steuerwährung, Rundung
+    __import__("rechnungszusatz").ubl_lesen(root, inv)
 
     # Meta
     inv._source_file = source_file

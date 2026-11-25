@@ -40,10 +40,21 @@ except ImportError:
 from validator import validate_invoice
 from xrechnung_generator import generate_and_serialize
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 BELEGART = "389"
 PRAEFIX = "GV"
 EREIGNIS = "GUTSCHRIFTVERFAHREN_ERSTELLT"
+# 1.2: Storno, Versand, vom Kunden ausgestellte Gutschriften
+EREIGNIS_STORNO = "GUTSCHRIFTVERFAHREN_STORNO_ERSTELLT"      # am Stornobeleg (ST-GV-…, Belegart 381)
+EREIGNIS_STORNIERT = "GUTSCHRIFTVERFAHREN_STORNIERT"          # am ursprünglichen Beleg
+EREIGNIS_VERSENDET = "GUTSCHRIFTVERFAHREN_VERSENDET"
+EREIGNIS_KUNDE = "GUTSCHRIFTVERFAHREN_VOM_KUNDEN"             # eingegangene 389, Verkäufer = wir → als Ausgang geführt
+EREIGNIS_UNSICHER = "GUTSCHRIFTVERFAHREN_EINGANG_UNSICHER"    # eingegangene 389, Verkäufer vielleicht wir → nur Hinweis
+EREIGNIS_BLEIBT = "GUTSCHRIFTVERFAHREN_BLEIBT_EINGANG"        # von Hand entschieden: ist eine Eingangsrechnung
+EREIGNIS_ANERKANNT = "GUTSCHRIFTVERFAHREN_ANERKANNT"
+EREIGNIS_WIDERSPROCHEN = "GUTSCHRIFTVERFAHREN_WIDERSPROCHEN"
+STORNO_BELEGART = "381"      # XRechnung-tauglich (BR-DE-17); 261 „Self billed credit note“ wäre nur mit Warnung gültig
+STORNO_BEDINGUNG = "Ein bereits gezahlter Betrag ist zu erstatten oder wird verrechnet."
 SCHLUESSEL = "gutschriftverfahren"            # Abschnitt in mandant_settings.json
 HINWEIS_BT22 = ("Gutschrift im Gutschriftverfahren gemäß § 14 Abs. 2 Satz 2 UStG "
                 "(Abrechnung durch den Leistungsempfänger).")
@@ -56,7 +67,9 @@ STANDARD_BEDINGUNG = "Der Gutschriftsbetrag wird auf das angegebene Konto des le
 # Namen aus webapp.py (globals()), die das Modul benutzt
 _BRAUCHT = ("invoices", "_load_mandant_settings", "_save_mandant_settings", "archive", "auto_save")
 _OPTIONAL = ("inbox", "dash", "wf_engine", "_wer", "_kosit_pruefen", "_KOSIT_SPERRE", "_ERZEUGEN_SPERRE",
-             "_pruefmeldungen", "_build_invoice_pdf", "generate_zugferd_pdf")
+             "_pruefmeldungen", "_build_invoice_pdf", "generate_zugferd_pdf", "_log_sent_mail",
+             "_is_invoice_sent", "_is_invoice_overdue")
+# Wird bei jedem Aufruf frisch aus webapp.py gelesen (dort tauscht load_data() das Objekt aus): email_sender
 
 _BASIS = Path(__file__).resolve().parent
 _SPERRE = threading.RLock()                   # eine Ausstellung zur Zeit (Nummernvergabe)
@@ -217,12 +230,48 @@ def steuerhinweis(inv) -> str:
         return TEXT_19
 
 
+def _hat(inv, *ereignisse) -> bool:
+    return any(getattr(e, "event_type", "") in ereignisse for e in (getattr(inv, "audit_trail", None) or []))
+
+
 def ist_gv(inv) -> bool:
     """Ist das ein von UNS im Gutschriftverfahren ausgestellter Beleg? (Belegart 389 + eigener Verlaufseintrag —
     eine EINGEHENDE 389 eines Kunden hat den Eintrag nicht.)"""
     if str(getattr(inv, "invoice_type_code", "") or "") != BELEGART:
         return False
-    return any(getattr(e, "event_type", "") == EREIGNIS for e in (getattr(inv, "audit_trail", None) or []))
+    return _hat(inv, EREIGNIS)
+
+
+def ist_gv_storno(inv) -> bool:
+    """Stornobeleg zu einer selbst ausgestellten Gutschrift (Belegart 381, Nummer ST-GV-…)."""
+    return str(getattr(inv, "invoice_type_code", "") or "") == STORNO_BELEGART and _hat(inv, EREIGNIS_STORNO)
+
+
+def ist_gv_kunde(inv) -> bool:
+    """Vom KUNDEN ausgestellte Gutschrift über unsere Leistung (389, Verkäufer = wir), als Ausgang geführt."""
+    return str(getattr(inv, "invoice_type_code", "") or "") == BELEGART and _hat(inv, EREIGNIS_KUNDE)
+
+
+def art(inv) -> str:
+    """'eigen' | 'storno' | 'kunde' | 'unsicher' | '' (kein Beleg dieses Moduls)."""
+    if inv is None:
+        return ""
+    if ist_gv(inv):
+        return "eigen"
+    if ist_gv_storno(inv):
+        return "storno"
+    if ist_gv_kunde(inv):
+        return "kunde"
+    if (str(getattr(inv, "invoice_type_code", "") or "") == BELEGART and _hat(inv, EREIGNIS_UNSICHER)
+            and not _hat(inv, EREIGNIS_BLEIBT)):
+        return "unsicher"
+    return ""
+
+
+def _webapp(name):
+    """Name frisch aus webapp.py (für Objekte, die dort zur Laufzeit ausgetauscht werden)."""
+    g = _G.get("__webapp__")
+    return g.get(name) if isinstance(g, dict) else _G.get(name)
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -574,7 +623,14 @@ def _steuer_angabe(p: dict) -> str:
     return " · ".join(teile)
 
 
-def _pdf_sichtbar(inv, ms: dict) -> bytes:
+def pdf_modus(inv) -> str:
+    """'gutschrift' (selbst ausgestellt), 'storno' (Stornobeleg dazu) oder 'kunde' (Lesefassung einer erhaltenen)."""
+    if str(getattr(inv, "invoice_type_code", "") or "") == STORNO_BELEGART:
+        return "storno"
+    return "kunde" if ist_gv_kunde(inv) else "gutschrift"
+
+
+def _pdf_sichtbar(inv, ms: dict, modus: str = "gutschrift") -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.enums import TA_RIGHT
     from reportlab.lib.pagesizes import A4
@@ -627,13 +683,18 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
         leistung_text = f"{_de_datum(inv.period_start)} – {_de_datum(inv.period_end)}"
     else:
         leistung_text = _de_datum(leistung)
-    daten = [("Gutschrift-Nr.", inv.invoice_number), ("Datum", _de_datum(inv.invoice_date)),
-             ("Leistungszeitraum" if (inv.period_start and inv.period_end) else "Leistungsdatum", leistung_text)]
-    if inv.payment.due_date:
+    storno, kunde = modus == "storno", modus == "kunde"
+    vor = getattr(inv, "preceding_invoice", "") or ""
+    vor_datum = _de_datum(getattr(inv, "preceding_invoice_date", None))
+    daten = [("Storno-Nr." if storno else "Gutschrift-Nr.", inv.invoice_number), ("Datum", _de_datum(inv.invoice_date))]
+    if storno:
+        daten.append(("zur Gutschrift", vor))
+    daten.append(("Leistungszeitraum" if (inv.period_start and inv.period_end) else "Leistungsdatum", leistung_text))
+    if inv.payment.due_date and not storno:
         daten.append(("Zahlung bis", _de_datum(inv.payment.due_date)))
     ref = inv.buyer_reference or inv.buyer.buyer_reference
-    if ref and ref != inv.invoice_number:
-        daten.append(("Unser Zeichen", ref))
+    if ref and ref not in (inv.invoice_number, vor):
+        daten.append(("Zeichen" if kunde else "Unser Zeichen", ref))
     if inv.order_reference:
         daten.append(("Bestellung", inv.order_reference))
     if inv.contract_reference:
@@ -648,9 +709,18 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
     story.append(Spacer(1, 12 * mm))
 
     # Titel – das Wort „Gutschrift“ ist Pflichtangabe (§ 14 Abs. 4 Nr. 10 UStG)
-    story.append(Paragraph("Gutschrift", titel))
-    story.append(Paragraph("im Gutschriftverfahren – Abrechnung durch den Empfänger der Leistung "
-                           "(§ 14 Abs. 2 Satz 2 UStG)", k))
+    if storno:
+        story.append(Paragraph(f"Stornierung der Gutschrift {x(vor)}", titel))
+        story.append(Paragraph("Gutschriftverfahren – der Aussteller hebt seine Abrechnung auf"
+                               + (f" (Gutschrift vom {vor_datum})" if vor_datum else ""), k))
+    elif kunde:
+        story.append(Paragraph("Gutschrift", titel))
+        story.append(Paragraph(f"im Gutschriftverfahren (§ 14 Abs. 2 Satz 2 UStG) – ausgestellt von {x(md['name'])}. "
+                               "Lesefassung der erhaltenen elektronischen Rechnung.", k))
+    else:
+        story.append(Paragraph("Gutschrift", titel))
+        story.append(Paragraph("im Gutschriftverfahren – Abrechnung durch den Empfänger der Leistung "
+                               "(§ 14 Abs. 2 Satz 2 UStG)", k))
     story.append(Spacer(1, 5 * mm))
 
     # Wer ist wer
@@ -670,7 +740,10 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
                           ("LINEBELOW", (0, 0), (-1, 0), 0.5, linie), ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F3F4F6")),
                           ("TOPPADDING", (0, 0), (-1, -1), 4), ("BOTTOMPADDING", (0, 0), (-1, -1), 5)])))
     story.append(Spacer(1, 6 * mm))
-    story.append(Paragraph("Wir rechnen die folgenden Lieferungen und Leistungen des leistenden Unternehmers ab:", n))
+    story.append(Paragraph(
+        "Wir heben unsere Abrechnung über die folgenden Lieferungen und Leistungen vollständig auf:" if storno else
+        "Abgerechnet werden die folgenden Lieferungen und Leistungen des leistenden Unternehmers:" if kunde else
+        "Wir rechnen die folgenden Lieferungen und Leistungen des leistenden Unternehmers ab:", n))
     story.append(Spacer(1, 3 * mm))
 
     # Positionen
@@ -699,13 +772,15 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
 
     # Summen
     if ohne_ust:
-        summen = [[Paragraph("Gutschriftsbetrag", f), Paragraph(_geld(inv.tax_inclusive_amount()) + " EUR", rf)]]
+        summen = [[Paragraph("Stornobetrag" if storno else "Gutschriftsbetrag", f),
+                   Paragraph(_geld(inv.tax_inclusive_amount()) + " EUR", rf)]]
     else:
         summen = [[Paragraph("Summe netto", n), Paragraph(_geld(inv.tax_exclusive_amount()) + " EUR", r)]]
         for st in inv.compute_tax_subtotals():
             summen.append([Paragraph(f"Umsatzsteuer {_zahl(st.rate)} % auf {_geld(st.taxable_amount)} EUR", n),
                            Paragraph(_geld(st.tax_amount) + " EUR", r)])
-        summen.append([Paragraph("Gutschriftsbetrag (brutto)", f), Paragraph(_geld(inv.tax_inclusive_amount()) + " EUR", rf)])
+        summen.append([Paragraph("Stornobetrag (brutto)" if storno else "Gutschriftsbetrag (brutto)", f),
+                       Paragraph(_geld(inv.tax_inclusive_amount()) + " EUR", rf)])
     letzte = len(summen) - 1
     summen_tab = Table(summen, colWidths=[62 * mm, 33 * mm], hAlign="RIGHT",
                        style=TableStyle([("LINEABOVE", (0, letzte), (-1, letzte), 0.8 if letzte else 0, dunkel),
@@ -717,12 +792,22 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
 
     # Zahlung an den Lieferanten
     konto = "IBAN " + _iban_gruppiert(inv.payment.iban) + (f" · BIC {inv.payment.bic}" if inv.payment.bic else "")
-    zahl = (f"Wir überweisen den Gutschriftsbetrag von <b>{_geld(inv.amount_due())} EUR</b> auf das Konto des "
-            f"leistenden Unternehmers: <b>{x(konto)}</b>")
-    zahl += (f", spätestens am {_de_datum(inv.payment.due_date)}." if inv.payment.due_date else ".")
+    if storno:
+        zahl = (f"Die Gutschrift <b>{x(vor)}</b>" + (f" vom {vor_datum}" if vor_datum else "") + " verliert mit dieser "
+                "Stornierung ihre Wirkung als Rechnung. Der Betrag wird nicht überwiesen; ein bereits gezahlter Betrag "
+                "ist zu erstatten oder wird verrechnet.")
+    elif kunde:
+        zahl = (f"Der Aussteller überweist den Gutschriftsbetrag von <b>{_geld(inv.amount_due())} EUR</b>"
+                + (f" auf das Konto des leistenden Unternehmers: <b>{x(konto)}</b>" if inv.payment.iban else ""))
+        zahl += (f", spätestens am {_de_datum(inv.payment.due_date)}." if inv.payment.due_date else ".")
+    else:
+        zahl = (f"Wir überweisen den Gutschriftsbetrag von <b>{_geld(inv.amount_due())} EUR</b> auf das Konto des "
+                f"leistenden Unternehmers: <b>{x(konto)}</b>")
+        zahl += (f", spätestens am {_de_datum(inv.payment.due_date)}." if inv.payment.due_date else ".")
     schluss.append(Paragraph(zahl, n))
     bed = (inv.payment.payment_terms or "").strip()
-    if bed and bed != STANDARD_BEDINGUNG and not bed.startswith("Zahlung innerhalb von"):
+    if (bed and bed not in (STANDARD_BEDINGUNG, STORNO_BEDINGUNG) and not bed.startswith("Zahlung innerhalb von")
+            and not storno):
         schluss += [Spacer(1, 2 * mm), Paragraph(x(bed), n)]
     notiz = (inv.note or "")
     if notiz.startswith(HINWEIS_BT22):
@@ -730,10 +815,19 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
     notiz = notiz.strip()
     if notiz:
         schluss += [Spacer(1, 3 * mm), Paragraph(x(notiz).replace("\n", "<br/>"), n)]
-    schluss += [Spacer(1, 5 * mm),
-                Paragraph("Diese Gutschrift gilt als Rechnung des leistenden Unternehmers. Sie verliert diese Wirkung, sobald "
-                          "der Empfänger der Gutschrift ihr widerspricht (§ 14 Abs. 2 Satz 3 UStG). Maßgeblich ist die "
-                          "elektronische Rechnung (XRechnung, Belegart 389); dieses Dokument gibt ihren Inhalt lesbar wieder.", k)]
+    if storno:
+        fussnote = ("Maßgeblich ist die elektronische Rechnung (XRechnung, Belegart 381 mit Bezug auf die stornierte Gutschrift); "
+                    "dieses Dokument gibt ihren Inhalt lesbar wieder. Über die Lieferungen und Leistungen ist neu abzurechnen, "
+                    "soweit sie erbracht wurden.")
+    elif kunde:
+        fussnote = (f"Lesefassung, erzeugt am {_de_datum(date.today())} aus der erhaltenen elektronischen Rechnung (Belegart 389); "
+                    "maßgeblich ist die erhaltene Datei. Die Gutschrift gilt als Rechnung des leistenden Unternehmers, solange "
+                    "er ihr nicht widerspricht (§ 14 Abs. 2 Satz 3 UStG).")
+    else:
+        fussnote = ("Diese Gutschrift gilt als Rechnung des leistenden Unternehmers. Sie verliert diese Wirkung, sobald "
+                    "der Empfänger der Gutschrift ihr widerspricht (§ 14 Abs. 2 Satz 3 UStG). Maßgeblich ist die "
+                    "elektronische Rechnung (XRechnung, Belegart 389); dieses Dokument gibt ihren Inhalt lesbar wieder.")
+    schluss += [Spacer(1, 5 * mm), Paragraph(fussnote, k)]
     story.append(KeepTogether(schluss))
 
     fuss = " · ".join(z for z in (md["name"], md["strasse"], f"{md['plz']} {md['ort']}".strip(), _steuer_angabe(md)) if z)
@@ -746,38 +840,46 @@ def _pdf_sichtbar(inv, ms: dict) -> bytes:
         canvas.setLineWidth(0.4)
         canvas.line(20 * mm, 17 * mm, 190 * mm, 17 * mm)
         canvas.drawString(20 * mm, 13 * mm, fuss[:150])
-        canvas.drawRightString(190 * mm, 13 * mm, f"Gutschrift {inv.invoice_number} · Seite {doc.page}")
+        canvas.drawRightString(190 * mm, 13 * mm, f"{'Storno' if storno else 'Gutschrift'} {inv.invoice_number} · Seite {doc.page}")
         canvas.restoreState()
 
     puffer = io.BytesIO()
     doc = SimpleDocTemplate(puffer, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm,
-                            bottomMargin=24 * mm, title=f"Gutschrift {inv.invoice_number}", author=md["name"],
+                            bottomMargin=24 * mm, author=md["name"],
+                            title=(f"Stornierung der Gutschrift {vor}" if storno else f"Gutschrift {inv.invoice_number}"),
                             subject="Gutschrift im Gutschriftverfahren (§ 14 Abs. 2 Satz 2 UStG)")
     doc.build(story, onFirstPage=seite, onLaterPages=seite)
     return puffer.getvalue()
 
 
-def pdf_bauen(inv, ms=None, zugferd=True):
-    """Erzeugt das PDF des Belegs. Rückgabe (dateiname, bytes, art) mit art =
+def pdf_bauen(inv, ms=None, zugferd=True, modus=None):
+    """Erzeugt das PDF des Belegs. modus: 'gutschrift' | 'storno' | 'kunde' (Vorgabe: aus dem Beleg). Die Lesefassung
+    einer vom Kunden erhaltenen Gutschrift bekommt nie einen ZUGFeRD-Anhang – sie ist kein eigener Beleg.
+    Rückgabe (dateiname, bytes, art) mit art =
     'zugferd'  PDF/A-3 mit eingebetteter E-Rechnung (CII, factur-x.xml),
     'pdfa-schrift'  normales PDF mit eingebetteten Schriften (ZUGFeRD-Teil nicht verfügbar),
     'einfach'  normales PDF mit Standardschrift (Schriftdateien fehlen)."""
     ms = ms if ms is not None else (_ms() if _G else {})
     name = f"{inv.invoice_number.replace('/', '_')}.pdf"
+    modus = modus or pdf_modus(inv)
+    if modus == "kunde":
+        zugferd = False
+        name = f"{inv.invoice_number.replace('/', '_')}-Lesefassung.pdf"
     try:
         from pdfa3 import schriften_eingebettet, zu_pdfa3_zugferd
         with schriften_eingebettet():
-            sichtbar = _pdf_sichtbar(inv, ms)
+            sichtbar = _pdf_sichtbar(inv, ms, modus)
     except Exception as ex:
         print(f"[gutschriftverfahren] PDF ohne eingebettete Schriften ({ex})", flush=True)
-        return name, _pdf_sichtbar(inv, ms), "einfach"
+        return name, _pdf_sichtbar(inv, ms, modus), "einfach"
     if not zugferd:
         return name, sichtbar, "pdfa-schrift"
     try:
         from cii_generator import generate_cii_bytes, ZUGFERD_PROFIL
         cii = generate_cii_bytes(inv)
         hybrid = zu_pdfa3_zugferd(sichtbar, cii, dateiname="factur-x.xml", profil=ZUGFERD_PROFIL,
-                                  titel=f"Gutschrift {inv.invoice_number}", autor=inv.buyer.name or "")
+                                  titel=(f"Stornierung der Gutschrift {inv.preceding_invoice}" if modus == "storno"
+                                         else f"Gutschrift {inv.invoice_number}"), autor=inv.buyer.name or "")
         return name, hybrid, "zugferd"
     except Exception as ex:
         print(f"[gutschriftverfahren] PDF ohne ZUGFeRD-Anhang ({ex})", flush=True)
@@ -811,7 +913,7 @@ def beleg_pdf(inv):
     """(dateiname, bytes): das archivierte PDF, sonst neu erzeugt."""
     name = f"{inv.invoice_number.replace('/', '_')}.pdf"
     alt = archiv_pdf(inv)
-    if alt:
+    if alt:          # bei einer erhaltenen Gutschrift ist das die PDF des Kunden (z. B. ZUGFeRD) – sie geht vor
         return name, alt
     n, b, _art = pdf_bauen(inv)
     return n, b
@@ -946,6 +1048,505 @@ def ausstellen(daten: dict, benutzer: str = "web-user"):
 
 
 # ══════════════════════════════════════════════════════════════════════
+# 1.2 – Storno einer selbst ausgestellten Gutschrift
+# ══════════════════════════════════════════════════════════════════════
+# Belegart 381 (UBL CreditNote) mit Bezug BT-25/BT-26 auf die Gutschrift, Rollen wie im Original (Verkäufer = Lieferant,
+# Käufer = Mandant). Die EN 16931 kennt zwar 261 „Self billed credit note“; die XRechnung sieht den Code aber nicht vor
+# (BR-DE-17, amtliche Prüfung: gültig mit Warnung), und das Programm rechnet Stornos überall über 381 + Bezug ab.
+
+def storno_nummer(inv) -> str:
+    return f"ST-{inv.invoice_number}"            # Muster des Programms: Storno = ST-<Nummer>
+
+
+def finde_storno(inv):
+    nr = (inv.invoice_number or "").upper()
+    for v in list(_G["invoices"].values()):
+        if ist_gv_storno(v) and (getattr(v, "preceding_invoice", "") or "").upper() == nr:
+            return v
+    return None
+
+
+def ist_bezahlt(inv) -> bool:
+    return (getattr(inv, "status", "") == "BEZAHLT" or bool(getattr(inv, "_paid_at", None))
+            or bool(getattr(inv, "_teilzahlungen", None)))
+
+
+def storno_bauen(inv, grund: str):
+    import copy
+    st = Invoice(
+        invoice_number=storno_nummer(inv), invoice_date=date.today(), invoice_type_code=STORNO_BELEGART,
+        currency_code=inv.currency_code, buyer_reference=inv.buyer_reference or inv.buyer.buyer_reference,
+        tax_point_date=inv.tax_point_date, period_start=inv.period_start, period_end=inv.period_end,
+        preceding_invoice=inv.invoice_number, preceding_invoice_date=inv.invoice_date,      # BT-25 / BT-26
+        note=(f"Stornierung der Gutschrift im Gutschriftverfahren {inv.invoice_number} vom {_de_datum(inv.invoice_date)}. "
+              f"Grund: {grund}"),
+        order_reference=inv.order_reference, contract_reference=inv.contract_reference,
+        seller=copy.deepcopy(inv.seller), buyer=copy.deepcopy(inv.buyer), payment=copy.deepcopy(inv.payment),
+    )
+    st.payment.due_date = None
+    st.payment.payment_terms = STORNO_BEDINGUNG
+    st.payment.skonto_percent, st.payment.skonto_days = 0.0, 0
+    st.lines = [copy.deepcopy(l) for l in inv.lines]
+    st.allowances_charges = [copy.deepcopy(a) for a in inv.allowances_charges]
+    for feld in ("steuerfall", "steuerbefreiung_grund", "steuerbefreiung_code"):      # Kleinunternehmer bleibt Kleinunternehmer
+        if hasattr(inv, feld):
+            setattr(st, feld, getattr(inv, feld))
+    return st
+
+
+def stornieren(inv_id: str, daten: dict, benutzer: str = "web-user"):
+    """Kern von POST /api/gutschriftverfahren/<id>/storno. Rückgabe (antwort, http_status)."""
+    daten = daten if isinstance(daten, dict) else {}
+    with (_G.get("_ERZEUGEN_SPERRE") or _SPERRE), _SPERRE:
+        inv = _G["invoices"].get(inv_id)
+        if inv is None or not ist_gv(inv):
+            return {"error": "Hier lassen sich nur selbst ausgestellte Gutschriften im Gutschriftverfahren stornieren."}, 404
+        nr = inv.invoice_number
+        schon = finde_storno(inv)
+        if inv.status == "STORNIERT" or _hat(inv, EREIGNIS_STORNIERT) or schon is not None:
+            return {"error": f"Die Gutschrift {nr} ist bereits storniert" + (f" (Stornobeleg {schon.invoice_number})." if schon else "."),
+                    "storniert": False, "storno_id": schon._id if schon else None,
+                    "storno_nummer": schon.invoice_number if schon else None}, 409
+        nummer = storno_nummer(inv)
+        if any(getattr(v, "invoice_number", "") == nummer for v in list(_G["invoices"].values())):
+            return {"error": f"Die Nummer {nummer} ist bereits vergeben.", "storniert": False}, 409
+        grund = _s(daten.get("grund"))
+        if len(grund) < 3:
+            return {"error": "Bitte den Grund der Stornierung angeben.", "storniert": False}, 400
+        bezahlt = ist_bezahlt(inv)
+        if bezahlt and daten.get("trotz_zahlung") is not True:
+            return {"error": f"Die Gutschrift {nr} ist bereits als bezahlt geführt. Mit dem Storno heben Sie die Abrechnung auf – "
+                             f"den gezahlten Betrag ({_geld(inv.tax_inclusive_amount())} EUR) müssen Sie dann vom Lieferanten "
+                             f"zurückfordern oder verrechnen. Bitte bestätigen Sie das ausdrücklich.",
+                    "storniert": False, "bezahlt": True, "bestaetigung_noetig": "trotz_zahlung"}, 409
+
+        st = storno_bauen(inv, grund)
+        bericht, fehler, warnungen = pruefen(st)
+        if fehler:
+            return {"error": f"Nicht storniert: Die Prüfung des Stornobelegs meldet {len(fehler)} Fehler. Es wurde nichts angelegt.",
+                    "storniert": False, "fehler": fehler, "warnungen": warnungen}, 422
+        try:
+            xml_bytes = generate_and_serialize(st)
+            _name, pdf_bytes, pdf_art = pdf_bauen(st, _ms(), modus="storno")
+        except Exception as ex:
+            return {"error": f"Nicht storniert: Der Stornobeleg konnte nicht erzeugt werden ({ex}). Es wurde nichts angelegt.",
+                    "storniert": False}, 500
+
+        zusatz = " Die Gutschrift war als bezahlt geführt – der Betrag ist zurückzufordern oder zu verrechnen." if bezahlt else ""
+        st._direction = "EINGANG"
+        st.status = "FREIGEGEBEN"
+        st.add_audit(EREIGNIS_STORNO, benutzer,
+                     f"Stornierung der Gutschrift {nr} im Gutschriftverfahren ({_geld(st.tax_inclusive_amount())} EUR). "
+                     f"Grund: {grund}.{zusatz}")
+        _G["invoices"][st._id] = st
+        alt = inv.status
+        inv.status = "STORNIERT"
+        inv.add_audit(EREIGNIS_STORNIERT, benutzer, f"Storniert durch {nummer}. Grund: {grund}.{zusatz}",
+                      old_value=alt, new_value="STORNIERT")
+        for name, aufruf in (("inbox", lambda o: o.duplicates.register(st, st._id)), ("dash", lambda o: o.add_invoice(st))):
+            try:
+                if _G.get(name) is not None:
+                    aufruf(_G[name])
+            except Exception as ex:
+                print(f"[gutschriftverfahren] {name}: {ex}", flush=True)
+        try:
+            _G["archive"].archive_invoice(st, xml_bytes, bericht, direction="EINGANG", pdf_bytes=pdf_bytes)
+        except Exception as ex:
+            print(f"[gutschriftverfahren] Archiv {nummer}: {ex}", flush=True)
+        _G["auto_save"]()
+        _kosit_hintergrund(st, xml_bytes)
+        return {"storniert": True, "id": st._id, "nummer": nummer, "original": nr, "original_id": inv._id, "bezahlt": bezahlt,
+                "brutto": float(st.tax_inclusive_amount()), "pdf_art": pdf_art, "warnungen": warnungen,
+                "xml_url": f"/api/gutschriftverfahren/{st._id}/xml", "pdf_url": f"/api/gutschriftverfahren/{st._id}/pdf",
+                "hinweis": "Bitte übermitteln Sie den Stornobeleg dem Lieferanten." + zusatz, "kosit": {"ausstehend": True}}, 201
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 1.2 – Versand an den Lieferanten (Gutschrift und Stornobeleg)
+# ══════════════════════════════════════════════════════════════════════
+
+_MAIL = re.compile(r"^[^@\s,;<>]+@[^@\s,;<>]+\.[^@\s,;<>]+$")
+
+
+def versand_empfaenger(inv) -> str:
+    for adresse in (getattr(inv.seller.contact, "email", ""), inv.seller.electronic_address):
+        if adresse and _MAIL.match(adresse.strip()):
+            return adresse.strip()
+    return ""
+
+
+def versand_text(inv):
+    """(Betreff, Text) für die Mail an den Lieferanten."""
+    aussteller = _s(inv.buyer.name)
+    betrag = _geld(inv.tax_inclusive_amount())
+    ohne = " (ohne Umsatzsteuer, § 19 UStG)" if ist_ohne_ust(inv) else ""
+    if ist_gv_storno(inv):
+        vor = inv.preceding_invoice
+        vor_datum = _de_datum(getattr(inv, "preceding_invoice_date", None))
+        grund = (inv.note or "").split("Grund:", 1)[1].strip() if "Grund:" in (inv.note or "") else ""
+        betreff = f"Stornierung der Gutschrift Nr. {vor} im Gutschriftverfahren"
+        text = (f"Sehr geehrte Damen und Herren,\n\n"
+                f"hiermit stornieren wir unsere Gutschrift Nr. {vor}" + (f" vom {vor_datum}" if vor_datum else "")
+                + f" im Gutschriftverfahren (§ 14 Abs. 2 Satz 2 UStG) über {betrag} EUR{ohne}.\n"
+                + (f"Grund: {grund}\n" if grund else "")
+                + f"\nDie Gutschrift verliert damit ihre Wirkung als Rechnung; bitte verwenden Sie sie nicht mehr. "
+                  f"Der Betrag wird nicht überwiesen. Haben Sie ihn bereits erhalten, erstatten Sie ihn bitte oder wir "
+                  f"verrechnen ihn mit der nächsten Abrechnung.\n\n"
+                  f"Im Anhang finden Sie den Stornobeleg Nr. {inv.invoice_number} als elektronische Rechnung "
+                  f"({inv.invoice_number}.xml) und in lesbarer Fassung als PDF.\n\n"
+                  f"Mit freundlichen Grüßen\n{aussteller}")
+        return betreff, text
+    zeitraum = ""
+    if inv.period_start and inv.period_end:
+        zeitraum = f" im Zeitraum {_de_datum(inv.period_start)} bis {_de_datum(inv.period_end)}"
+    elif inv.tax_point_date or inv.period_end:
+        zeitraum = f" vom {_de_datum(inv.tax_point_date or inv.period_end)}"
+    konto = _iban_gruppiert(inv.payment.iban)
+    bis = f" bis zum {_de_datum(inv.payment.due_date)}" if inv.payment.due_date else ""
+    betreff = f"Gutschrift im Gutschriftverfahren Nr. {inv.invoice_number} – Abrechnung über Ihre Leistung"
+    text = (f"Sehr geehrte Damen und Herren,\n\n"
+            f"anbei erhalten Sie unsere Gutschrift Nr. {inv.invoice_number} vom {_de_datum(inv.invoice_date)} im "
+            f"Gutschriftverfahren (§ 14 Abs. 2 Satz 2 UStG). Wir rechnen darin über Ihre Lieferungen und Leistungen{zeitraum} ab.\n\n"
+            f"Gutschriftsbetrag: {betrag} EUR{ohne}\n"
+            f"Zahlung: per Überweisung auf Ihr Konto {konto}{bis}.\n\n"
+            f"Die Gutschrift gilt als Ihre Rechnung. Bitte prüfen Sie die Angaben. Sind Sie mit der Abrechnung nicht "
+            f"einverstanden, widersprechen Sie bitte umgehend – mit Ihrem Widerspruch verliert die Gutschrift ihre "
+            f"Wirkung als Rechnung.\n\n"
+            f"Im Anhang finden Sie die elektronische Rechnung ({inv.invoice_number}.xml) und eine lesbare Fassung als PDF.\n\n"
+            f"Mit freundlichen Grüßen\n{aussteller}")
+    return betreff, text
+
+
+def versand_sperre(inv):
+    """Warum dieser Beleg nicht versendet wird – oder None."""
+    a = art(inv)
+    if a == "kunde":
+        return "Diese Gutschrift hat Ihr Kunde ausgestellt – sie wird nicht versendet."
+    if a not in ("eigen", "storno"):
+        return "Dieser Beleg gehört nicht zum Gutschriftverfahren."
+    k = getattr(inv, "_kosit", None) or {}
+    if k.get("gueltig") is False:
+        return (f"Nicht versendet: Die amtliche Prüfung (KoSIT) meldet {k.get('fehler', 0)} Fehler in diesem Beleg. "
+                f"Der Empfänger könnte ihn zurückweisen.")
+    if a == "eigen" and inv.status == "STORNIERT":
+        st = finde_storno(inv)
+        return (f"Die Gutschrift {inv.invoice_number} ist storniert – versenden Sie bitte den Stornobeleg"
+                + (f" {st.invoice_number}." if st else "."))
+    if a == "eigen" and inv.status == "ZURUECKGEWIESEN":
+        return f"Die Gutschrift {inv.invoice_number} ist zurückgewiesen und wird nicht versendet."
+    return None
+
+
+def versand_verlauf(inv) -> list:
+    return [{"am": e.timestamp, "von": e.user, "text": e.comment}
+            for e in (inv.audit_trail or []) if e.event_type == EREIGNIS_VERSENDET]
+
+
+def versand_vorschau(inv) -> dict:
+    betreff, text = versand_text(inv)
+    sender = _webapp("email_sender")
+    cfg = getattr(sender, "config", None)
+    nr = inv.invoice_number.replace("/", "_")
+    return {"id": inv._id, "nummer": inv.invoice_number, "art": art(inv), "empfaenger": versand_empfaenger(inv),
+            "betreff": betreff, "text": text, "anhaenge": [f"{nr}.xml", f"{nr}.pdf"],
+            "absender": getattr(cfg, "smtp_from_address", "") or "", "gesperrt": versand_sperre(inv),
+            "testmodus": type(sender).__name__.startswith("Mock") if sender is not None else False,
+            "versand_moeglich": sender is not None, "bisher": versand_verlauf(inv),
+            "pdf_url": f"/api/gutschriftverfahren/{inv._id}/pdf", "kosit": getattr(inv, "_kosit", None) or {"ausstehend": True}}
+
+
+def versenden(inv_id: str, daten: dict, benutzer: str = "web-user"):
+    """Kern von POST /api/gutschriftverfahren/<id>/senden. Nutzt den Postausgang des Programms (email_sender) und sein
+    Versandprotokoll (_log_sent_mail). Rückgabe (antwort, http_status)."""
+    daten = daten if isinstance(daten, dict) else {}
+    inv = _G["invoices"].get(inv_id)
+    if inv is None or art(inv) not in ("eigen", "storno", "kunde"):
+        return {"error": "Beleg nicht gefunden"}, 404
+    sperre = versand_sperre(inv)
+    if sperre:
+        return {"error": sperre, "gesendet": False, "kosit": getattr(inv, "_kosit", None)}, 409
+    vor = versand_vorschau(inv)
+    empfaenger = _s(daten.get("empfaenger")) or vor["empfaenger"]
+    if not _MAIL.match(empfaenger or ""):
+        return {"error": "Bitte eine gültige E-Mail-Adresse des Lieferanten angeben.", "gesendet": False}, 400
+    betreff = _s(daten.get("betreff")) or vor["betreff"]
+    text = str(daten.get("text") or "").strip() or vor["text"]
+    sender = _webapp("email_sender")
+    if sender is None:
+        return {"error": "Der Postausgang des Programms steht nicht bereit.", "gesendet": False}, 503
+    try:
+        xml_bytes = archiv_xml(inv) or generate_and_serialize(inv)
+        pdf_name, pdf_bytes = beleg_pdf(inv)
+    except Exception as ex:
+        return {"error": f"Versand abgebrochen: Die Anhänge konnten nicht erzeugt werden ({ex}).", "gesendet": False}, 500
+    protokoll = sender.send_invoice(invoice=inv, recipient=empfaenger, subject=betreff, body_text=text,
+                                    xml_bytes=xml_bytes, additional_attachments=[(pdf_name, pdf_bytes)])
+    testmodus = type(sender).__name__.startswith("Mock")
+    anhaenge = [getattr(protokoll, "attachment_filename", "") or vor["anhaenge"][0], pdf_name]
+    if not getattr(protokoll, "success", False):
+        return {"error": f"Die E-Mail wurde nicht versendet: {getattr(protokoll, 'error', '') or 'unbekannter Fehler'}",
+                "gesendet": False}, 502
+    was = "Stornobeleg" if ist_gv_storno(inv) else "Gutschrift"
+    inv.add_audit(EREIGNIS_VERSENDET, benutzer,
+                  f"{was} an {empfaenger} gesendet (XML + PDF), Message-ID: {getattr(protokoll, 'message_id', '')}"
+                  + (" – Testbetrieb: kein Postausgang eingerichtet, die Nachricht wurde nur abgelegt" if testmodus else ""))
+    try:
+        log = _G.get("_log_sent_mail")
+        if callable(log):
+            log(empfaenger, getattr(protokoll, "subject", "") or betreff, text,
+                doc_type="gutschriftverfahren_storno" if ist_gv_storno(inv) else "gutschriftverfahren",
+                reference=inv.invoice_number, attachments=anhaenge,
+                from_addr=getattr(getattr(sender, "config", None), "smtp_from_address", ""),
+                message_id=getattr(protokoll, "message_id", ""))
+    except Exception as ex:
+        print(f"[gutschriftverfahren] Versandprotokoll: {ex}", flush=True)
+    _G["auto_save"]()
+    return {"gesendet": True, "testmodus": testmodus, "empfaenger": empfaenger, "betreff": betreff, "anhaenge": anhaenge,
+            "message_id": getattr(protokoll, "message_id", ""), "nummer": inv.invoice_number}, 200
+
+
+# ══════════════════════════════════════════════════════════════════════
+# 1.2 – Vom Kunden ausgestellte Gutschrift (eingehende 389, Verkäufer = wir)
+# ══════════════════════════════════════════════════════════════════════
+# Rechnet ein Kunde im Gutschriftverfahren über UNSERE Leistung ab, ist sein Beleg für uns ein Erlös (Forderung), keine
+# Eingangsrechnung. Erkannt wird das an „Belegart 389 UND Verkäufer = Mandant“. Nur bei sicherer Übereinstimmung wird
+# umgestuft; sonst bleibt der Beleg, wie er ist, und bekommt einen deutlichen Hinweis.
+
+_GESEHEN: set = set()
+_RECHTSFORM = re.compile(r"\b(gmbh|mbh|ag|kg|ohg|gbr|ug|ek|ev|eg|se|kgaa|co|partg|mbb|haftungsbeschraenkt|haftungsbeschränkt|"
+                         r"und|inhaber|inh)\b")
+
+
+def _norm_ustid(t) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(t or "").upper())
+
+
+def _norm_steuernr(t) -> str:
+    return re.sub(r"\D", "", str(t or ""))
+
+
+def _norm_name(t) -> str:
+    t = str(t or "").casefold().replace("&", " und ").replace("e. k.", "ek").replace("e.k.", "ek").replace("e. v.", "ev").replace("e.v.", "ev")
+    return " ".join(re.sub(r"[^a-z0-9äöüß ]", " ", t).split())
+
+
+def _kern_name(t) -> str:
+    return " ".join(_RECHTSFORM.sub(" ", _norm_name(t)).split())
+
+
+def eigene_firma(partei, ms: dict):
+    """Ist diese Partei eines Belegs der Mandant? Rückgabe (urteil, woran): 'sicher' | 'unsicher' | 'nein'.
+    Reihenfolge: USt-IdNr., sonst Steuernummer, sonst Name. Widerspricht eine Kennung dem gleichen Namen → unsicher."""
+    ms = ms or {}
+    name_m, name_p = _norm_name(ms.get("name")), _norm_name(getattr(partei, "name", ""))
+    name_gleich = bool(name_m) and name_m == name_p
+    kern_m, kern_p = _kern_name(ms.get("name")), _kern_name(getattr(partei, "name", ""))
+    name_aehnlich = bool(kern_m) and bool(kern_p) and (kern_m == kern_p or (len(kern_m) >= 5 and len(kern_p) >= 5
+                                                                           and (kern_m in kern_p or kern_p in kern_m)))
+    ust_m, ust_p = _norm_ustid(ms.get("vat_id")), _norm_ustid(getattr(partei, "vat_id", ""))
+    if ust_m and ust_p:
+        if ust_m == ust_p:
+            return "sicher", "USt-IdNr."
+        return ("unsicher", "gleicher Name, aber eine andere USt-IdNr.") if (name_gleich or name_aehnlich) else ("nein", "")
+    st_m, st_p = _norm_steuernr(ms.get("tax_registration_id")), _norm_steuernr(getattr(partei, "tax_registration_id", ""))
+    if st_m and st_p:
+        if st_m == st_p:
+            return "sicher", "Steuernummer"
+        return ("unsicher", "gleicher Name, aber eine andere Steuernummer") if (name_gleich or name_aehnlich) else ("nein", "")
+    if name_gleich:
+        return "sicher", "Name"
+    if name_aehnlich:
+        return "unsicher", "ähnlicher Name, keine USt-IdNr. oder Steuernummer zum Vergleich"
+    return "nein", ""
+
+
+def _archiv_richtung(inv, richtung: str):
+    """Zieht die Richtung im Archiv nach (Index und metadata.json), damit Archiv und Bestand übereinstimmen."""
+    try:
+        archiv = _G["archive"]
+        geaendert = False
+        for e in getattr(archiv, "_index", []):
+            if e.get("invoice_id") == inv._id:
+                e["direction"] = richtung
+                if isinstance(e.get("invoice_metadata"), dict):
+                    e["invoice_metadata"]["direction"] = richtung
+                geaendert = True
+        if geaendert and hasattr(archiv, "_save_index"):
+            archiv._save_index()
+        meta = Path(archiv.root) / inv._id / "metadata.json"
+        if meta.exists():
+            d = json.loads(meta.read_text("utf-8"))
+            d["direction"] = richtung
+            meta.write_text(json.dumps(d, indent=2, ensure_ascii=False), "utf-8")
+    except Exception as ex:
+        print(f"[gutschriftverfahren] Archiv-Richtung {getattr(inv, 'invoice_number', '?')}: {ex}", flush=True)
+
+
+def _als_kunde_fuehren(inv, woran: str, benutzer: str = "system"):
+    alt = f"{inv._direction or 'AUSGANG'}/{inv.status}"
+    inv._direction = "AUSGANG"                   # Forderung: Gegenpartei ist der Käufer (unser Kunde)
+    inv.status = "NEU"                           # zu prüfen: anerkennen oder widersprechen – kein Freigabelauf wie bei Kosten
+    inv.assigned_to = ""
+    inv.add_audit(EREIGNIS_KUNDE, benutzer,
+                  f"Gutschrift im Gutschriftverfahren, ausgestellt vom Kunden {_s(inv.buyer.name)} über unsere Leistung "
+                  f"(Verkäufer = eigenes Unternehmen, erkannt an: {woran}). Wird als Ausgang (Forderung) geführt, die Nummer "
+                  f"des Kunden bleibt. Bitte prüfen und anerkennen – oder widersprechen.",
+                  old_value=alt, new_value="AUSGANG/NEU")
+    _archiv_richtung(inv, "AUSGANG")
+
+
+def eingang_einstufen(inv, ms=None, benutzer: str = "system") -> str:
+    """Prüft EINEN Beleg. Rückgabe 'kunde' (umgestuft), 'unsicher' (nur Hinweis) oder '' (nichts zu tun)."""
+    if str(getattr(inv, "invoice_type_code", "") or "") != BELEGART or (getattr(inv, "_direction", "") or "") != "EINGANG":
+        return ""
+    if _hat(inv, EREIGNIS, EREIGNIS_KUNDE, EREIGNIS_UNSICHER, EREIGNIS_BLEIBT):
+        return ""                                # eigener Beleg oder schon entschieden
+    ms = ms if ms is not None else _ms()
+    if not _abschnitt(ms).get("eingang_erkennen", True):
+        return ""
+    urteil, woran = eigene_firma(inv.seller, ms)
+    if urteil == "nein":
+        return ""
+    bearbeitet = inv.status not in ("NEU", "IN_PRUEFUNG", "IN_FREIGABE") or ist_bezahlt(inv)
+    if urteil == "sicher" and not bearbeitet:
+        _als_kunde_fuehren(inv, woran, benutzer)
+        return "kunde"
+    grund = (f"der Beleg ist schon bearbeitet (Status {inv.status})" if urteil == "sicher" else woran)
+    inv.add_audit(EREIGNIS_UNSICHER, benutzer,
+                  f"Achtung: Belegart 389 (Gutschriftverfahren), und der Verkäufer „{_s(inv.seller.name)}“ könnte Ihr eigenes "
+                  f"Unternehmen sein ({grund}). Dann wäre das keine Eingangsrechnung, sondern eine Gutschrift Ihres Kunden über "
+                  f"Ihre Leistung (Erlös). Der Beleg wurde NICHT umgestuft – bitte entscheiden Sie von Hand.")
+    return "unsicher"
+
+
+def eingaenge_durchsehen() -> int:
+    """Sieht alle noch nicht betrachteten Belege an (jeder Einleseweg landet im Bestand). Rückgabe: Zahl der Änderungen."""
+    geaendert = 0
+    try:
+        offen = [(i, v) for i, v in list(_G["invoices"].items()) if i not in _GESEHEN]
+        if not offen:
+            return 0
+        ms = None
+        with _SPERRE:
+            for i, v in offen:
+                _GESEHEN.add(i)
+                if str(getattr(v, "invoice_type_code", "") or "") != BELEGART:
+                    continue
+                if ms is None:
+                    ms = _ms()
+                if eingang_einstufen(v, ms):
+                    geaendert += 1
+        if geaendert:
+            _G["auto_save"]()
+    except Exception as ex:
+        print(f"[gutschriftverfahren] Eingänge durchsehen: {ex}", flush=True)
+    return geaendert
+
+
+def von_hand_einstufen(inv_id: str, daten: dict, benutzer: str = "web-user"):
+    daten = daten if isinstance(daten, dict) else {}
+    inv = _G["invoices"].get(inv_id)
+    if inv is None or art(inv) != "unsicher":
+        return {"error": "Zu diesem Beleg ist nichts zu entscheiden."}, 404
+    als = _s(daten.get("als")).lower()
+    if als == "kunde":
+        if ist_bezahlt(inv):
+            return {"error": "Der Beleg ist schon als bezahlt geführt. Bitte zuerst die Zahlung lösen, dann umstufen."}, 409
+        _als_kunde_fuehren(inv, "von Hand bestätigt", benutzer)
+        _G["auto_save"]()
+        return {"art": "kunde", "status": inv.status, "richtung": inv._direction}, 200
+    if als == "eingang":
+        inv.add_audit(EREIGNIS_BLEIBT, benutzer, "Von Hand entschieden: Der Beleg ist eine Eingangsrechnung eines Lieferanten.")
+        _G["auto_save"]()
+        return {"art": "", "status": inv.status, "richtung": inv._direction}, 200
+    return {"error": "Feld „als“ erwartet: „kunde“ oder „eingang“."}, 400
+
+
+def anerkennen(inv_id: str, benutzer: str = "web-user"):
+    inv = _G["invoices"].get(inv_id)
+    if inv is None or not ist_gv_kunde(inv):
+        return {"error": "Beleg nicht gefunden"}, 404
+    if _hat(inv, EREIGNIS_WIDERSPROCHEN) or inv.status == "ZURUECKGEWIESEN":
+        return {"error": "Dieser Gutschrift wurde bereits widersprochen."}, 409
+    if _hat(inv, EREIGNIS_ANERKANNT):
+        return {"error": "Die Gutschrift ist bereits anerkannt.", "status": inv.status}, 409
+    alt = inv.status
+    if inv.status in ("NEU", "IN_PRUEFUNG", "IN_FREIGABE"):
+        inv.status = "FREIGEGEBEN"
+    inv.add_audit(EREIGNIS_ANERKANNT, benutzer,
+                  f"Gutschrift des Kunden {_s(inv.buyer.name)} geprüft und anerkannt ({_geld(inv.tax_inclusive_amount())} EUR).",
+                  old_value=alt, new_value=inv.status)
+    _G["auto_save"]()
+    return {"anerkannt": True, "status": inv.status}, 200
+
+
+def widersprechen(inv_id: str, daten: dict, benutzer: str = "web-user"):
+    daten = daten if isinstance(daten, dict) else {}
+    inv = _G["invoices"].get(inv_id)
+    if inv is None or not ist_gv_kunde(inv):
+        return {"error": "Beleg nicht gefunden"}, 404
+    if _hat(inv, EREIGNIS_WIDERSPROCHEN):
+        return {"error": "Dieser Gutschrift wurde bereits widersprochen."}, 409
+    if ist_bezahlt(inv):
+        return {"error": "Zu dieser Gutschrift ist schon eine Zahlung verbucht. Bitte klären Sie das zuerst mit dem Kunden "
+                         "(Zahlung lösen oder zurückzahlen); der Widerspruch wird sonst nicht vermerkt.", "bezahlt": True}, 409
+    grund = _s(daten.get("grund"))
+    if len(grund) < 3:
+        return {"error": "Bitte den Grund des Widerspruchs angeben."}, 400
+    alt = inv.status
+    inv.status = "ZURUECKGEWIESEN"
+    inv.add_audit(EREIGNIS_WIDERSPROCHEN, benutzer,
+                  f"Widerspruch gegen die Gutschrift des Kunden {_s(inv.buyer.name)} vermerkt. Grund: {grund}. Die Gutschrift "
+                  f"verliert damit die Wirkung einer Rechnung (§ 14 Abs. 2 Satz 3 UStG). Bitte teilen Sie dem Kunden den "
+                  f"Widerspruch mit und rechnen Sie die Leistung selbst ab.", old_value=alt, new_value="ZURUECKGEWIESEN")
+    _G["auto_save"]()
+    return {"widersprochen": True, "status": inv.status,
+            "hinweis": "Der Widerspruch ist vermerkt. Das Programm benachrichtigt den Kunden nicht – bitte teilen Sie ihm den "
+                       "Widerspruch mit und stellen Sie über die Leistung eine eigene Rechnung."}, 200
+
+
+def stand(inv) -> dict:
+    """Was die Rechnungsansicht über einen Beleg wissen muss (auch für Belege, die nicht zum Modul gehören: art = '')."""
+    a = art(inv)
+    aus = {"id": getattr(inv, "_id", ""), "art": a, "aktionen": {}}
+    if not a:
+        return aus
+    aus.update(nummer=inv.invoice_number, status=inv.status, richtung=inv._direction or "AUSGANG", bezahlt=ist_bezahlt(inv),
+               brutto=float(inv.tax_inclusive_amount()), kosit=getattr(inv, "_kosit", None) or {"ausstehend": True})
+    if a != "unsicher":
+        aus.update(pdf_url=f"/api/gutschriftverfahren/{inv._id}/pdf", xml_url=f"/api/gutschriftverfahren/{inv._id}/xml")
+    if a == "eigen":
+        st = finde_storno(inv)
+        aus.update(schild="Gutschriftverfahren", partner=inv.seller.name, versendet=versand_verlauf(inv),
+                   storno_id=st._id if st else None, storno_nummer=st.invoice_number if st else None,
+                   hinweis=(f"Storniert durch {st.invoice_number}." if st else
+                            "Selbst ausgestellte Gutschrift im Gutschriftverfahren – Sie zahlen an den Lieferanten."))
+        aus["aktionen"] = {"storno": st is None and inv.status != "STORNIERT", "senden": versand_sperre(inv) is None}
+    elif a == "storno":
+        orig = next((v for v in list(_G["invoices"].values())
+                     if ist_gv(v) and (v.invoice_number or "").upper() == (inv.preceding_invoice or "").upper()), None)
+        aus.update(schild="Storno im Gutschriftverfahren", partner=inv.seller.name, versendet=versand_verlauf(inv),
+                   original_id=orig._id if orig else None, original_nummer=inv.preceding_invoice,
+                   hinweis=f"Stornobeleg zur Gutschrift {inv.preceding_invoice}. Bitte dem Lieferanten übermitteln.")
+        aus["aktionen"] = {"senden": versand_sperre(inv) is None}
+    elif a == "kunde":
+        wider, anerk = _hat(inv, EREIGNIS_WIDERSPROCHEN), _hat(inv, EREIGNIS_ANERKANNT)
+        aus.update(schild="Gutschriftverfahren (vom Kunden ausgestellt)", partner=inv.buyer.name,
+                   anerkannt=anerk, widersprochen=wider,
+                   hinweis=("Sie haben dieser Gutschrift widersprochen – sie gilt nicht mehr als Rechnung." if wider else
+                            f"Diese Gutschrift hat Ihr Kunde {_s(inv.buyer.name)} über Ihre Leistung ausgestellt. Sie gilt als "
+                            f"Ihre Rechnung an ihn (Forderung), solange Sie nicht widersprechen."
+                            + ("" if anerk else " Bitte prüfen und anerkennen – oder widersprechen.")))
+        aus["aktionen"] = {"anerkennen": not anerk and not wider and inv.status not in ("STORNIERT",),
+                           "widersprechen": not wider and not ist_bezahlt(inv) and inv.status not in ("STORNIERT",)}
+    elif a == "unsicher":
+        e = next((x for x in reversed(inv.audit_trail or []) if x.event_type == EREIGNIS_UNSICHER), None)
+        aus.update(schild="Gutschriftverfahren – bitte entscheiden", partner=inv.seller.name, hinweis=e.comment if e else "")
+        aus["aktionen"] = {"einstufen": True}
+    return aus
+
+
+# ══════════════════════════════════════════════════════════════════════
 # Einhängen in die Flask-Anwendung
 # ══════════════════════════════════════════════════════════════════════
 
@@ -965,6 +1566,7 @@ def einrichten(app, g: dict):
     _G.clear()
     _G.update({n: g[n] for n in _BRAUCHT})
     _G.update({n: g[n] for n in _OPTIONAL if n in g})
+    _G["__webapp__"] = g
 
     def js(daten, status=200):
         return app.response_class(json.dumps(daten, ensure_ascii=False, default=str), status=status,
@@ -978,8 +1580,9 @@ def einrichten(app, g: dict):
             return "web-user"
 
     def finde(inv_id):
+        """Beleg dieses Moduls: selbst ausgestellt, Storno dazu oder vom Kunden erhalten."""
         inv = _G["invoices"].get(inv_id)
-        return inv if inv is not None and ist_gv(inv) else None
+        return inv if art(inv) in ("eigen", "storno", "kunde") else None
 
     # Einstellung. Unter /api/mandant/…, weil webapp.py Einstellungen dort auch ohne Lizenz speichern lässt;
     # /api/gutschriftverfahren/einstellung ist derselbe Endpunkt.
@@ -1019,7 +1622,7 @@ def einrichten(app, g: dict):
 
     def kurz(inv):
         return {"id": inv._id, "nummer": inv.invoice_number, "datum": inv.invoice_date.isoformat(),
-                "steuerfall": "kleinunternehmer" if ist_ohne_ust(inv) else "regel",
+                "steuerfall": "kleinunternehmer" if ist_ohne_ust(inv) else "regel", "art": art(inv),
                 "lieferant": inv.seller.name, "brutto": float(inv.tax_inclusive_amount()), "status": inv.status,
                 "kosit": getattr(inv, "_kosit", None) or {"ausstehend": True},
                 "xml_url": f"/api/gutschriftverfahren/{inv._id}/xml", "pdf_url": f"/api/gutschriftverfahren/{inv._id}/pdf"}
@@ -1035,7 +1638,7 @@ def einrichten(app, g: dict):
         inv = finde(inv_id)
         if inv is None:
             return js({"error": "Beleg nicht gefunden"}, 404)
-        if not getattr(inv, "_kosit", None):
+        if not getattr(inv, "_kosit", None) and art(inv) != "kunde":
             _kosit_hintergrund(inv)              # z. B. nach einem Neustart während der Prüfung
         return js(kurz(inv))
 
@@ -1068,7 +1671,7 @@ def einrichten(app, g: dict):
     alt_pdf = g.get("_build_invoice_pdf")
     if callable(alt_pdf) and not getattr(alt_pdf, "_gv", False):
         def _build_invoice_pdf(inv, *a, **kw):
-            if ist_gv(inv):
+            if art(inv) in ("eigen", "storno", "kunde"):
                 return beleg_pdf(inv)
             return alt_pdf(inv, *a, **kw)
         _build_invoice_pdf._gv = True
@@ -1078,11 +1681,122 @@ def einrichten(app, g: dict):
     alt_zf = g.get("generate_zugferd_pdf")
     if callable(alt_zf) and not getattr(alt_zf, "_gv", False):
         def generate_zugferd_pdf(inv, *a, **kw):
-            if ist_gv(inv):
+            if art(inv) in ("eigen", "storno", "kunde"):
                 return pdf_bauen(inv)[1]
             return alt_zf(inv, *a, **kw)
         generate_zugferd_pdf._gv = True
         generate_zugferd_pdf.__doc__ = alt_zf.__doc__
         g["generate_zugferd_pdf"] = generate_zugferd_pdf
+
+    # ── 1.2: Storno, Versand, vom Kunden ausgestellte Gutschriften ──────────────────────────────────────────────────
+    @app.route("/api/gutschriftverfahren/<inv_id>/stand", endpoint="gv_stand")
+    def gv_stand(inv_id):
+        inv = _G["invoices"].get(inv_id)
+        if inv is None:
+            return js({"error": "Beleg nicht gefunden"}, 404)
+        return js(stand(inv))
+
+    def _aktion(fn, *a):
+        try:
+            antwort, status = fn(*a)
+        except Exception as ex:
+            import traceback
+            print(f"[gutschriftverfahren] {ex}\n{traceback.format_exc()}", flush=True)
+            return js({"error": f"Nicht möglich: {ex}"}, 500)
+        return js(antwort, status)
+
+    @app.route("/api/gutschriftverfahren/<inv_id>/storno", methods=["POST"], endpoint="gv_storno")
+    def gv_storno(inv_id):
+        d = request.get_json(silent=True) or {}
+        return _aktion(stornieren, inv_id, d, wer(d))
+
+    @app.route("/api/gutschriftverfahren/<inv_id>/senden", methods=["GET", "POST"], endpoint="gv_senden")
+    def gv_senden(inv_id):
+        if request.method == "GET":              # Vorschau: sendet nichts
+            inv = finde(inv_id)
+            if inv is None:
+                return js({"error": "Beleg nicht gefunden"}, 404)
+            return js(versand_vorschau(inv))
+        d = request.get_json(silent=True) or {}
+        return _aktion(versenden, inv_id, d, wer(d))
+
+    @app.route("/api/gutschriftverfahren/<inv_id>/anerkennen", methods=["POST"], endpoint="gv_anerkennen")
+    def gv_anerkennen(inv_id):
+        return _aktion(anerkennen, inv_id, wer(request.get_json(silent=True) or {}))
+
+    @app.route("/api/gutschriftverfahren/<inv_id>/widerspruch", methods=["POST"], endpoint="gv_widerspruch")
+    def gv_widerspruch(inv_id):
+        d = request.get_json(silent=True) or {}
+        return _aktion(widersprechen, inv_id, d, wer(d))
+
+    @app.route("/api/gutschriftverfahren/<inv_id>/einstufen", methods=["POST"], endpoint="gv_einstufen")
+    def gv_einstufen(inv_id):
+        d = request.get_json(silent=True) or {}
+        return _aktion(von_hand_einstufen, inv_id, d, wer(d))
+
+    # Jeder Einleseweg (Hochladen, Postfach, Hintergrundabruf) legt den Beleg im Bestand ab. Statt an jedem Weg einen
+    # Haken zu setzen, sieht das Modul vor jeder Anfrage die NEUEN Belege des Bestands durch (kostet nur bei neuen etwas).
+    @app.before_request
+    def _gv_eingaenge():
+        try:
+            if (request.path or "").startswith("/api/"):
+                eingaenge_durchsehen()
+        except Exception as ex:
+            print(f"[gutschriftverfahren] {ex}", flush=True)
+        return None
+
+    # Eine vom Kunden ausgestellte Gutschrift ist eine Forderung: Sie zählt wie eine versendete Ausgangsrechnung zu den
+    # offenen Posten (Liste, Dashboard, Zahlungsabgleich) – auch ohne dass wir sie je versendet hätten. Gemahnt wird sie
+    # vom Programm nicht (die Mahntexte sprechen von „unserer Rechnung“); deshalb gilt sie hier nie als überfällig.
+    alt_sent = g.get("_is_invoice_sent")
+    if callable(alt_sent) and not getattr(alt_sent, "_gv", False):
+        def _is_invoice_sent(inv, *a, **kw):
+            if ist_gv_kunde(inv):
+                return getattr(inv, "status", "") not in ("ZURUECKGEWIESEN", "STORNIERT")
+            return alt_sent(inv, *a, **kw)
+        _is_invoice_sent._gv = True
+        _is_invoice_sent.__doc__ = alt_sent.__doc__
+        g["_is_invoice_sent"] = _is_invoice_sent
+
+    alt_over = g.get("_is_invoice_overdue")
+    if callable(alt_over) and not getattr(alt_over, "_gv", False):
+        def _is_invoice_overdue(inv, *a, **kw):
+            if ist_gv_kunde(inv):
+                return False
+            return alt_over(inv, *a, **kw)
+        _is_invoice_overdue._gv = True
+        _is_invoice_overdue.__doc__ = alt_over.__doc__
+        g["_is_invoice_overdue"] = _is_invoice_overdue
+
+    # Vorhandene Wege, die für Belege dieses Moduls das Falsche täten, weisen sie mit Klartext ab.
+    def _sperre(name, pruefung):
+        alt = app.view_functions.get(name)
+        if not callable(alt) or getattr(alt, "_gv", False):
+            return
+
+        def huelle(*a, **kw):
+            inv = _G["invoices"].get(kw.get("inv_id") or (a[0] if a else ""))
+            meldung = pruefung(inv) if inv is not None else None
+            if meldung:
+                return js({"error": meldung, "gutschriftverfahren": art(inv)}, 400)
+            return alt(*a, **kw)
+        huelle._gv = True
+        huelle.__name__ = getattr(alt, "__name__", name)
+        huelle.__doc__ = alt.__doc__
+        app.view_functions[name] = huelle
+
+    _sperre("api_send_invoice", lambda inv: {
+        "kunde": "Diese Gutschrift hat Ihr Kunde ausgestellt – sie wird nicht versendet.",
+        "eigen": "Bitte den Versand an den Lieferanten benutzen (Knopf „An Lieferanten senden“).",
+        "storno": "Bitte den Versand an den Lieferanten benutzen (Knopf „An Lieferanten senden“)."}.get(art(inv)))
+    for _name in ("api_storno", "api_gutschrift"):
+        _sperre(_name, lambda inv: {
+            "kunde": "Eine Gutschrift Ihres Kunden können Sie nicht selbst stornieren oder berichtigen – widersprechen Sie ihr "
+                     "oder bitten Sie den Kunden um eine Korrektur.",
+            "eigen": "Bitte „Gutschrift stornieren“ des Gutschriftverfahrens benutzen.",
+            "storno": "Ein Stornobeleg kann nicht storniert werden."}.get(art(inv)))
+    _sperre("api_dunning_invoice_generate", lambda inv: (
+        "Zu einer vom Kunden ausgestellten Gutschrift erzeugt das Programm kein Mahnschreiben – bitte erinnern Sie den "
+        "Kunden von Hand an die Zahlung." if art(inv) == "kunde" else None))
 
     print(f"[gutschriftverfahren] {VERSION} eingerichtet (Schalter {'an' if ist_aktiv() else 'aus'})", flush=True)

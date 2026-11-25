@@ -67,6 +67,7 @@ class Seller:
     registration_name: str = ""
     company_id: str = ""          # BT-30 Registernummer (z. B. HRB 4711)
     seller_id: str = ""           # BT-29 Verkäuferkennung (frei vergebene Kennung, z. B. Lieferantennummer)
+    legal_info: str = ""          # BT-33 weitere rechtliche Angaben (Geschäftsführer, Registergericht …)
 
     def kennung(self) -> str:
         """Wirksame Verkäuferkennung BT-29 für die E-Rechnung.
@@ -93,6 +94,7 @@ class Buyer:
     vat_id: str = ""
     company_id: str = ""
     contact: Optional[Contact] = None
+    buyer_id: str = ""            # BT-46 Käuferkennung (Kundennummer aus dem Kundenstamm)
 
 
 @dataclass
@@ -109,14 +111,28 @@ class PaymentInfo:
     # Skonto (16.11.2026): Prozent auf den Zahlbetrag bei Zahlung binnen so vielen Tagen ab Rechnungsdatum; 0 = keins
     skonto_percent: float = 0.0
     skonto_days: int = 0
+    # Zweite Skontostufe (z. B. 3 % in 8 Tagen, 2 % in 14 Tagen); 0 = keine
+    skonto2_percent: float = 0.0
+    skonto2_days: int = 0
+    # BT-83 Verwendungszweck. Leer = es gilt die Rechnungsnummer; dann wird BT-83 nicht eigens geschrieben.
+    remittance: str = ""
+
+    def skonto_stufen(self) -> list:
+        """Gültige Skontostufen als [(Prozent, Tage)], die kürzere Frist zuerst."""
+        aus = []
+        for p_, t_ in ((self.skonto_percent, self.skonto_days),
+                       (getattr(self, "skonto2_percent", 0), getattr(self, "skonto2_days", 0))):
+            try:
+                p, t = float(p_ or 0), int(t_ or 0)
+            except (TypeError, ValueError):
+                continue
+            if p > 0 and t > 0:
+                aus.append((p, t))
+        return sorted(aus, key=lambda x: x[1])
 
     def skonto_zeile(self) -> str:
         """Strukturierte Skonto-Angabe der XRechnung (BR-DE-18), leer ohne Skonto."""
-        try:
-            p, t = float(self.skonto_percent or 0), int(self.skonto_days or 0)
-        except (TypeError, ValueError):
-            return ""
-        return f"#SKONTO#TAGE={t}#PROZENT={p:.2f}#" if p > 0 and t > 0 else ""
+        return "\n".join(f"#SKONTO#TAGE={t}#PROZENT={p:.2f}#" for p, t in self.skonto_stufen())
 
     def terms_mit_skonto(self) -> str:
         """Zahlungsbedingung für die E-Rechnung (BT-20): Klartext, darunter die Skonto-Zeile mit Zeilenende."""
@@ -124,6 +140,93 @@ class PaymentInfo:
         if not z:
             return self.payment_terms
         return ((self.payment_terms or "").replace(" ohne Abzug", "").strip() + "\n" + z + "\n").lstrip("\n")
+
+
+# ── Skonto beim Einlesen zurückgewinnen (25.11.2026) ───────────────────────────────────────────────
+# XRechnung trägt Skonto als Zeilen „#SKONTO#TAGE=14#PROZENT=2.00#“ in der Zahlungsbedingung (BT-20, BR-DE-18),
+# wahlweise mit „#BASISBETRAG=…#“. Bisher blieben diese Zeilen als Text stehen, Prozent und Tage gingen verloren.
+import re as _re_skonto
+_SKONTO_ZEILE = _re_skonto.compile(
+    r"^\s*#SKONTO#TAGE=(\d+)#PROZENT=(\d+(?:\.\d+)?)#(?:BASISBETRAG=-?\d+(?:\.\d+)?#)?\s*$", _re_skonto.I)
+
+
+def skonto_aus_text(text):
+    """Zahlungsbedingung → (Klartext ohne Skonto-Zeilen, [(Prozent, Tage), …] in der Reihenfolge der Datei)."""
+    klar, stufen = [], []
+    for z in str(text or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        m = _SKONTO_ZEILE.match(z)
+        if m:
+            stufen.append((float(m.group(2)), int(m.group(1))))
+        else:
+            klar.append(z)
+    return "\n".join(klar).strip(), stufen
+
+
+def skonto_einlesen(payment, weitere=None):
+    """Trägt die Skontostufen eines EINGELESENEN Belegs in payment ein (höchstens zwei, kürzere Frist zuerst) und
+    nimmt die #SKONTO#-Zeilen aus dem Klartext. `weitere` = Stufen aus strukturierten Angaben (CII). Ohne Skonto
+    bleibt alles, wie es ist."""
+    klar, stufen = skonto_aus_text(getattr(payment, "payment_terms", ""))
+    for s in (weitere or []):
+        if s not in stufen:
+            stufen.append(s)
+    stufen = sorted({(float(p), int(t)) for p, t in stufen if p and t and 0 < float(p) < 100}, key=lambda x: x[1])
+    if not stufen:
+        return payment
+    payment.payment_terms = klar
+    payment.skonto_percent, payment.skonto_days = stufen[0]
+    if len(stufen) > 1:
+        payment.skonto2_percent, payment.skonto2_days = stufen[1]
+    return payment
+
+
+# ── Einheiten (BT-130): Anzeigename → UN/ECE-Code (Empfehlung 20/21) ────────────────────────────────
+EINHEITEN = (("C62", "Stk"), ("HUR", "Std"), ("DAY", "Tag"), ("MON", "Monat"), ("LS", "psch"),
+             ("MTR", "m"), ("MTK", "m²"), ("KMT", "km"), ("KGM", "kg"), ("LTR", "l"))
+_EINHEIT_ALIAS = {"": "C62", "stk": "C62", "stk.": "C62", "st": "C62", "stück": "C62", "stueck": "C62", "c62": "C62",
+                  "std": "HUR", "std.": "HUR", "h": "HUR", "stunde": "HUR", "stunden": "HUR", "hur": "HUR",
+                  "tag": "DAY", "tage": "DAY", "day": "DAY", "monat": "MON", "monate": "MON", "mon": "MON",
+                  "psch": "LS", "pauschal": "LS", "pauschale": "LS", "ls": "LS", "m": "MTR", "mtr": "MTR",
+                  "m2": "MTK", "m²": "MTK", "qm": "MTK", "mtk": "MTK", "km": "KMT", "kmt": "KMT",
+                  "kg": "KGM", "kgm": "KGM", "l": "LTR", "ltr": "LTR"}
+
+
+def einheit_code(wert) -> str:
+    """Einheit aus Maske/Schnittstelle (Stk, Std, m2 … oder schon ein Code) → UN/ECE-Code. Unbekanntes: ValueError."""
+    t = str(wert or "").strip()
+    if t.lower() in _EINHEIT_ALIAS:
+        return _EINHEIT_ALIAS[t.lower()]
+    if _re_skonto.fullmatch(r"[A-Z0-9]{2,3}", t):      # bereits ein Code der Empfehlung 20/21 (z. B. KWH, H87)
+        return t
+    raise ValueError(f"Einheit „{wert}“ ist unbekannt. Möglich sind: Stk, Std, Tag, Monat, psch, m, m2, km, kg, l "
+                     f"oder ein UN/ECE-Code wie KWH.")
+
+
+def _cent(wert) -> Decimal:
+    return Decimal(str(wert)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+
+def nachlass_bauen(basis, prozent=None, betrag=None, zuschlag=False, grund="", steuersatz=None, kategorie="S"):
+    """Ein Nachlass (BG-20/BG-27) oder Zuschlag (BG-21/BG-28) aus Prozent ODER Betrag.
+    Prozent: Betrag = Basis × Prozent / 100, kaufmännisch gerundet; Basis und Prozent stehen dann in der Datei.
+    Betrag: nur der Betrag. Der Grund ist Pflicht (BR-33, BR-38, BR-41, BR-42) — fehlt er, steht „Nachlass“ bzw.
+    „Zuschlag“ da."""
+    proz = Decimal(str(prozent).replace(",", ".")) if prozent not in (None, "") else Decimal("0")
+    if proz < 0 or proz > 100:
+        raise ValueError("Nachlass/Zuschlag in Prozent muss zwischen 0 und 100 liegen.")
+    if proz:
+        basis_c = _cent(basis)
+        wert = _cent(basis_c * proz / Decimal("100"))
+    else:
+        basis_c = Decimal("0.00")
+        wert = _cent(str(betrag).replace(",", ".") if betrag not in (None, "") else "0")
+    if wert < 0:
+        raise ValueError("Nachlass/Zuschlag darf nicht negativ sein – bitte die Art (Nachlass oder Zuschlag) wählen.")
+    return AllowanceCharge(
+        is_charge=bool(zuschlag), amount=wert, base_amount=basis_c, percentage=proz,
+        reason=" ".join(str(grund or "").split()) or ("Zuschlag" if zuschlag else "Nachlass"),
+        tax_category=kategorie or "S",
+        tax_rate=Decimal(str(steuersatz)) if steuersatz not in (None, "") else Decimal("19.00"))
 
 
 @dataclass
@@ -186,12 +289,23 @@ class TaxSubtotal:
 TEXT_KLEINUNTERNEHMER = "Gemäß § 19 UStG wird keine Umsatzsteuer berechnet."
 TEXT_REVERSE_CHARGE = "Steuerschuldnerschaft des Leistungsempfängers"
 TEXT_NULLSATZ = "Es gilt der Nullsteuersatz (0 % Umsatzsteuer)."
+# Paket B (25.11.2026): Umsätze mit dem Ausland
+TEXT_IG_LIEFERUNG = "Steuerfreie innergemeinschaftliche Lieferung"
+TEXT_AUSFUHR = "Steuerfreie Ausfuhrlieferung"
+TEXT_NICHT_STEUERBAR = "Nicht im Inland steuerbare Leistung"
+# Steuerfälle, deren Pflichttext immer auf der Rechnung steht; ein eigener Zusatz wird angehängt
+PFLICHTTEXT_FAELLE = ("ig_lieferung", "ausfuhr", "nicht_steuerbar")
 STEUERFAELLE = {
     "regel":            {"kategorie": "S",  "text": "",                    "code": "",            "name": "Regelbesteuerung"},
     "kleinunternehmer": {"kategorie": "E",  "text": TEXT_KLEINUNTERNEHMER, "code": "",            "name": "Kleinunternehmer (§ 19 UStG)"},
     "reverse_charge":   {"kategorie": "AE", "text": TEXT_REVERSE_CHARGE,   "code": "VATEX-EU-AE", "name": "Steuerschuldnerschaft des Leistungsempfängers (§ 13b UStG)"},
     "steuerfrei":       {"kategorie": "E",  "text": "",                    "code": "",            "name": "Steuerfreier Umsatz"},
     "nullsatz":         {"kategorie": "Z",  "text": "",                    "code": "",            "name": "Nullsteuersatz"},
+    # Paket B: innergemeinschaftliche Lieferung (§ 4 Nr. 1b, § 6a UStG), Ausfuhr (§ 4 Nr. 1a, § 6 UStG),
+    # nicht steuerbar (Leistungsort im Ausland, z. B. § 3a Abs. 2 UStG an Unternehmer im Drittland)
+    "ig_lieferung":     {"kategorie": "K",  "text": TEXT_IG_LIEFERUNG,     "code": "VATEX-EU-IC", "name": "Innergemeinschaftliche Lieferung"},
+    "ausfuhr":          {"kategorie": "G",  "text": TEXT_AUSFUHR,          "code": "VATEX-EU-G",  "name": "Ausfuhrlieferung (Drittland)"},
+    "nicht_steuerbar":  {"kategorie": "O",  "text": TEXT_NICHT_STEUERBAR,  "code": "VATEX-EU-O",  "name": "Nicht steuerbar (Leistungsort im Ausland)"},
 }
 # Kategorien, die einen Befreiungsgrund (BT-120 oder BT-121) verlangen
 KATEGORIEN_MIT_GRUND = ("E", "AE", "K", "G", "O")
@@ -203,6 +317,11 @@ _STEUERFALL_ALIAS = {
     "§13b": "reverse_charge", "13b": "reverse_charge", "§13bustg": "reverse_charge", "ae": "reverse_charge",
     "steuerfrei": "steuerfrei", "befreit": "steuerfrei", "e": "steuerfrei",
     "nullsatz": "nullsatz", "nullsteuersatz": "nullsatz", "z": "nullsatz",
+    "ig_lieferung": "ig_lieferung", "iglieferung": "ig_lieferung", "ig-lieferung": "ig_lieferung", "k": "ig_lieferung",
+    "innergemeinschaftlich": "ig_lieferung", "innergemeinschaftlichelieferung": "ig_lieferung", "igl": "ig_lieferung",
+    "ausfuhr": "ausfuhr", "ausfuhrlieferung": "ausfuhr", "export": "ausfuhr", "g": "ausfuhr",
+    "nicht_steuerbar": "nicht_steuerbar", "nichtsteuerbar": "nicht_steuerbar", "nicht-steuerbar": "nicht_steuerbar",
+    "o": "nicht_steuerbar",
 }
 
 
@@ -225,6 +344,12 @@ def steuerfall_ableiten(kategorien, grund: str = "") -> str:
         return "reverse_charge"
     if k == {"Z"}:
         return "nullsatz"
+    if k == {"K"}:
+        return "ig_lieferung"
+    if k == {"G"}:
+        return "ausfuhr"
+    if k == {"O"}:
+        return "nicht_steuerbar"
     if k == {"E"}:
         g = (grund or "").lower()
         return "kleinunternehmer" if ("§ 19" in g or "§19" in g or "kleinunternehmer" in g) else "steuerfrei"
@@ -244,6 +369,59 @@ def steuerfall_setzen(inv, fall: str, grund: str = "", satz_null: bool = True):
     inv.steuerbefreiung_grund = " ".join(str(grund or "").split())
     inv.steuerfall_anwenden(satz_null=satz_null)
     return inv
+
+
+# ── Zusatzangaben (Paket B, 25.11.2026) – Schreiben, Lesen, Speichern und Prüfen: rechnungszusatz.py ──
+@dataclass
+class DeliveryInfo:
+    """Lieferung BG-13 mit Lieferanschrift BG-15."""
+    name: str = ""                        # BT-70 Name des Empfängers der Lieferung
+    location_id: str = ""                 # BT-71 Kennung des Lieferorts
+    address: Optional[Address] = None     # BT-75 … BT-80
+
+    def leer(self) -> bool:
+        a = self.address
+        return not ((self.name or "").strip() or (self.location_id or "").strip() or (
+            a is not None and ((a.street or "").strip() or (a.city or "").strip() or (a.post_code or "").strip()
+                               or (a.address_line_2 or "").strip() or (a.country_code or "").strip())))
+
+
+@dataclass
+class Payee:
+    """Abweichender Zahlungsempfänger BG-10 (z. B. Factoring-Unternehmen bei abgetretener Forderung)."""
+    name: str = ""                        # BT-59
+    payee_id: str = ""                    # BT-60 Kennung
+    company_id: str = ""                  # BT-61 Registernummer
+
+    def leer(self) -> bool:
+        return not ((self.name or "").strip() or (self.payee_id or "").strip() or (self.company_id or "").strip())
+
+
+@dataclass
+class Attachment:
+    """Rechnungsbegründende Unterlage BG-24. Der Inhalt liegt als Datei im Archivordner der Rechnung (path);
+    nur frisch hochgeladene oder eingelesene Anhänge tragen ihn kurz im Speicher (content, kein Datenfeld)."""
+    reference: str = ""                   # BT-122 Kennung
+    description: str = ""                 # BT-123 Beschreibung
+    url: str = ""                         # BT-124 Verweis auf eine externe Unterlage
+    filename: str = ""                    # BT-125 Dateiname
+    mime: str = ""                        # BT-125 Dateiart (MIME)
+    size: int = 0
+    path: str = ""
+
+    content = None                        # bytes, solange der Anhang noch nicht abgelegt ist
+
+    def daten(self):
+        """Inhalt der Datei oder None (reiner Verweis bzw. Datei nicht mehr vorhanden)."""
+        if self.content is not None:
+            return self.content
+        if self.path:
+            try:
+                with open(self.path, "rb") as f:
+                    return f.read()
+            except OSError:
+                return None
+        return None
 
 
 @dataclass
@@ -293,6 +471,21 @@ class Invoice:
     steuerbefreiung_grund: str = ""
     # Befreiungsgrund BT-121 (VATEX-Code); leer = Vorgabe des Steuerfalls (nur § 13b: VATEX-EU-AE)
     steuerbefreiung_code: str = ""
+
+    # Zusatzangaben (Paket B, 25.11.2026) – alle freiwillig, leer = die Datei bleibt, wie sie war
+    sales_order_reference: str = ""                    # BT-14 Auftragsnummer des Verkäufers
+    receiving_advice_reference: str = ""               # BT-15 Wareneingangsmeldung
+    despatch_advice_reference: str = ""                # BT-16 Versandanzeige / Lieferschein
+    tender_reference: str = ""                         # BT-17 Ausschreibung / Los
+    object_identifier: str = ""                        # BT-18 Objektkennung (z. B. Zählernummer)
+    object_identifier_scheme: str = ""                 # BT-18-1 Schema der Objektkennung
+    buyer_accounting_reference: str = ""               # BT-19 Buchungsreferenz des Käufers (Kostenstelle)
+    tax_currency_code: str = ""                        # BT-6 Steuerwährung, nur wenn ≠ Rechnungswährung
+    tax_amount_accounting: Optional[Decimal] = None    # BT-111 Steuerbetrag in der Steuerwährung
+    rounding_amount: Decimal = Decimal("0.00")         # BT-114 Rundungsbetrag (geht in den Zahlbetrag ein)
+    delivery: Optional[DeliveryInfo] = None            # BG-13 / BG-15
+    payee: Optional[Payee] = None                      # BG-10
+    attachments: list = field(default_factory=list)    # BG-24, Liste von Attachment
 
     seller: Seller = field(default_factory=Seller)
     buyer: Buyer = field(default_factory=Buyer)
@@ -368,6 +561,11 @@ class Invoice:
         eigen = " ".join((self.steuerbefreiung_grund or "").split())
         fall = self.steuerfall or "regel"
         if fall in STEUERFAELLE and STEUERFAELLE[fall]["kategorie"] == kat:
+            if fall in PFLICHTTEXT_FAELLE:
+                _pt = STEUERFAELLE[fall]["text"]
+                if not eigen or _pt.lower() in eigen.lower():
+                    return eigen or _pt
+                return _pt + " – " + eigen
             if fall == "reverse_charge":
                 # Pflichtangabe nach § 14a Abs. 5 UStG steht immer da; ein eigener Zusatz wird angehängt
                 if not eigen or "steuerschuldnerschaft" in eigen.lower():
@@ -413,6 +611,8 @@ class Invoice:
         """
         if prepaid is None:
             prepaid = self.prepaid_amount or Decimal("0.00")
+        if not rounding:
+            rounding = Decimal(str(getattr(self, "rounding_amount", 0) or 0))      # BT-114
         return self.tax_inclusive_amount() - Decimal(str(prepaid)) + rounding
 
     def add_audit(self, event_type: str, user: str = "system", comment: str = "",

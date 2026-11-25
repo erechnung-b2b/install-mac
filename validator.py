@@ -137,7 +137,7 @@ def validate_invoice(inv: Invoice) -> ValidationReport:
     xrechnung = (getattr(inv, "_source_format", "") or "") not in ("ZUGFERD_CII", "ZUGFERD", "UBL_GENERIC")
 
     def err(rid, msg, fld=""):
-        if rid.startswith("BR-DE") and not xrechnung:
+        if rid.startswith(("BR-DE", "PEPPOL-")) and not xrechnung:
             iss.append(ValidationIssue(rid, Severity.WARNING, msg + " (nur für XRechnung verpflichtend)", fld))
         else:
             iss.append(ValidationIssue(rid, Severity.ERROR, msg, fld))
@@ -168,7 +168,13 @@ def validate_invoice(inv: Invoice) -> ValidationReport:
     _vor = (getattr(inv, "preceding_invoice", "") or "").strip()
     _vor_datum = getattr(inv, "preceding_invoice_date", None)
     if _tc == "384" and not _vor:
-        warn("BG-3", "Rechnungskorrektur (384) ohne Bezug auf die Ursprungsrechnung (BT-25).", "BT-25")
+        # BR-DE-26: beim Ausstellen ein Fehler (die Korrektur muss sagen, welche Rechnung sie berichtigt),
+        # beim Einlesen eines fremden Belegs nur ein Hinweis
+        regel("BR-DE-26", "Rechnungskorrektur (384) ohne Bezug auf die Ursprungsrechnung (BT-25).", "BT-25")
+    elif _tc == "384" and not eingang:
+        info("KORREKTUR-384", f"Rechnungskorrektur zu {_vor}: Die Ursprungsrechnung bleibt als offener Posten bestehen. "
+                              f"Ersetzt diese Korrektur die Ursprungsrechnung vollständig, stornieren Sie die "
+                              f"Ursprungsrechnung, damit der Betrag nicht doppelt gefordert und gebucht wird.", "BT-25")
     if _vor_datum and not _vor:
         err("BR-55", "Datum der Bezugsrechnung (BT-26) ohne deren Nummer (BT-25).", "BT-25")
     if _vor_datum and inv.invoice_date and _vor_datum > inv.invoice_date:
@@ -186,8 +192,8 @@ def validate_invoice(inv: Invoice) -> ValidationReport:
 
     # Seller
     if not inv.seller.name: err("BR-06", "Verkäufername (BT-27) fehlt.", "BT-27")
-    if not inv.seller.electronic_address: err("BR-DE-16", "Seller Electronic Address (BT-34) fehlt.", "BT-34")
-    if not inv.seller.electronic_address_scheme: err("BR-DE-16-S", "Scheme Identifier für BT-34 fehlt.", "BT-34-1")
+    if not inv.seller.electronic_address: err("PEPPOL-EN16931-R020", "Seller Electronic Address (BT-34) fehlt.", "BT-34")
+    if not inv.seller.electronic_address_scheme: err("BR-62", "Scheme Identifier für BT-34 fehlt.", "BT-34-1")
     if not inv.seller.address.city: err("BR-09", "Seller City (BT-37) fehlt.", "BT-37")
     if not inv.seller.address.post_code: err("BR-DE-04", "Seller Post Code (BT-38) fehlt.", "BT-38")
     if not inv.seller.address.country_code: err("BR-09-C", "Seller Country Code (BT-40) fehlt.", "BT-40")
@@ -209,7 +215,7 @@ def validate_invoice(inv: Invoice) -> ValidationReport:
 
     # Buyer
     if not inv.buyer.name: err("BR-07", "Käufername (BT-44) fehlt.", "BT-44")
-    if not inv.buyer.electronic_address: err("BR-DE-17", "Buyer Electronic Address (BT-49) fehlt.", "BT-49")
+    if not inv.buyer.electronic_address: err("PEPPOL-EN16931-R010", "Buyer Electronic Address (BT-49) fehlt.", "BT-49")
     if not inv.buyer.address.city: err("BR-11", "Buyer City (BT-52) fehlt.", "BT-52")
     if not inv.buyer.address.post_code: err("BR-DE-05", "Buyer Post Code (BT-53) fehlt.", "BT-53")
 
@@ -223,7 +229,7 @@ def validate_invoice(inv: Invoice) -> ValidationReport:
         elif not IBAN_RE.match(inv.payment.iban.replace(" ", "").upper()):
             warn("BR-DE-19-F", f"IBAN-Format prüfen: '{inv.payment.iban}'", "BT-84")
     if inv.payment.means_code == "59" and not inv.payment.mandate_reference:
-        err("BR-DE-20", "Bei Lastschrift: Mandatsreferenz (BT-89) erforderlich.", "BT-89")
+        err("BR-DE-25-a", "Bei Lastschrift (59) muss die Gruppe BG-19 übermittelt werden: Mandatsreferenz (BT-89) fehlt.", "BT-89")
 
     # Positionen
     if not inv.lines:
@@ -344,10 +350,45 @@ def validate_invoice(inv: Invoice) -> ValidationReport:
             info("SUMME-BT-114", f"Die Datei enthält einen Rundungsbetrag (BT-114) von {_rund:.2f}; "
                                  f"er wird im Zahlbetrag nicht mitgeführt.", "BT-114")
 
+    # ── Zeiträume, Nachlässe/Zuschläge, Skontostufen (Runde 2, 25.11.2026) ──
+    if inv.period_start and inv.period_end and inv.period_end < inv.period_start:
+        regel("BR-29", "Rechnungszeitraum: Das Ende (BT-74) liegt vor dem Beginn (BT-73).", "BT-74")
+    for idx, line in enumerate(inv.lines, 1):
+        if line.period_start and line.period_end and line.period_end < line.period_start:
+            regel("BR-30", f"Pos. {idx}: Der Leistungszeitraum endet (BT-135) vor seinem Beginn (BT-134).", "BT-135")
+        for ac in (line.allowances_charges or []):
+            if not (ac.reason or ac.reason_code):
+                regel("BR-42" if ac.is_charge else "BR-41",
+                      f"Pos. {idx}: {'Zuschlag' if ac.is_charge else 'Nachlass'} ohne Grund "
+                      f"({'BT-144' if ac.is_charge else 'BT-139'}).", "BT-144" if ac.is_charge else "BT-139")
+            if ac.amount < Decimal("0"):
+                regel("BR-CO-10", f"Pos. {idx}: Nachlass/Zuschlag darf nicht negativ sein.", "BT-136")
+    for idx, ac in enumerate(inv.allowances_charges, 1):
+        if not (ac.reason or ac.reason_code):
+            regel("BR-38" if ac.is_charge else "BR-33",
+                  f"{'Zuschlag' if ac.is_charge else 'Nachlass'} {idx} auf Belegebene ohne Grund "
+                  f"({'BT-104' if ac.is_charge else 'BT-97'}).", "BT-104" if ac.is_charge else "BT-97")
+        if ac.amount < Decimal("0"):
+            regel("BR-CO-11", f"Nachlass/Zuschlag {idx} auf Belegebene darf nicht negativ sein.", "BT-92")
+    _stufen = inv.payment.skonto_stufen() if hasattr(inv.payment, "skonto_stufen") else []
+    if len(_stufen) == 2 and _stufen[1][0] >= _stufen[0][0]:
+        warn("SKONTO-STUFEN", f"Skonto: Die längere Frist ({_stufen[1][1]} Tage) sollte den kleineren Satz tragen "
+                              f"(angegeben {_stufen[0][0]:g} % in {_stufen[0][1]} Tagen und {_stufen[1][0]:g} % in "
+                              f"{_stufen[1][1]} Tagen).", "BT-20")
+    if inv.payment.due_date and inv.invoice_date and _stufen and not eingang:
+        _ziel = (inv.payment.due_date - inv.invoice_date).days
+        if _ziel >= 0 and _stufen[-1][1] > _ziel > 0:
+            warn("SKONTO-FRIST", f"Skonto: Die Frist von {_stufen[-1][1]} Tagen ist länger als das Zahlungsziel "
+                                 f"({_ziel} Tage).", "BT-20")
+
     # Hinweise
     if not inv.order_reference and not inv.contract_reference:
         info("HINT-01", "Keine Bestell-/Vertragsreferenz – empfohlen für automatisierte Verarbeitung.", "BT-13/BT-12")
     if not inv.period_start and not inv.period_end and not inv.tax_point_date:
         info("HINT-02", "Kein Leistungszeitraum angegeben.", "BT-73/BT-74")
+
+    # Zusatzangaben: Land, USt-ID, innergemeinschaftliche Lieferung, Ausfuhr, Lastschrift, Zahlungsempfänger,
+    # Anhänge, Währung, Rundung
+    __import__("rechnungszusatz").pruefung_ergaenzen(inv, report, eingang)
 
     return report

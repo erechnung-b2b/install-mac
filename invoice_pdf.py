@@ -14,7 +14,7 @@ _EINHEITEN = {
     "C62": "Stk", "H87": "Stk", "PCE": "Stk", "EA": "Stk",
     "LS": "Pauschal", "HUR": "Std", "DAY": "Tag", "MON": "Monat",
     "MTR": "m", "MTK": "m\u00b2", "MTQ": "m\u00b3", "KGM": "kg",
-    "TNE": "t", "LTR": "l", "KWH": "kWh", "SET": "Satz", "P1": "%",
+    "TNE": "t", "LTR": "l", "KWH": "kWh", "SET": "Satz", "P1": "%", "KMT": "km",
 }
 
 
@@ -52,6 +52,83 @@ def verkaeufer2_name(mandant_settings) -> str:
     return name + "\n" + zus
 
 
+def _de_datum(d) -> str:
+    return d.strftime("%d.%m.%Y") if d else ""
+
+
+def _zeitraum_text(von, bis) -> str:
+    if von and bis:
+        return f"{_de_datum(von)} – {_de_datum(bis)}"
+    return ("ab " + _de_datum(von)) if von else (("bis " + _de_datum(bis)) if bis else "")
+
+
+def _eur(wert) -> str:
+    t = f"{wert:,.2f}"
+    return t.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def _positionstext(line) -> str:
+    """Text der Position für das PDF: Bezeichnung (BT-153); darunter klein die Beschreibung (BT-154), der
+    Leistungszeitraum der Position (BT-134/135) und Rabatt/Zuschlag (BG-27/28). Ohne diese Angaben bleibt es bei der
+    Bezeichnung, unverändert wie bisher."""
+    from xml.sax.saxutils import escape
+    name = line.item_name
+    zusatz = []
+    beschr = " ".join(str(getattr(line, "item_description", "") or "").split())
+    if beschr and beschr != " ".join(str(name or "").split()) and not beschr.startswith("Storno: "):
+        zusatz.append(escape(beschr))
+    zt = _zeitraum_text(getattr(line, "period_start", None), getattr(line, "period_end", None))
+    if zt:
+        zusatz.append("Leistungszeitraum: " + zt)
+    for a in (getattr(line, "allowances_charges", None) or []):
+        art = "zzgl." if a.is_charge else "abzgl."
+        proz = f" {a.percentage.normalize():f} %".replace(".", ",") if a.percentage else ""
+        zusatz.append(escape(f"{art} {a.reason or ('Zuschlag' if a.is_charge else 'Rabatt')}{proz}: {_eur(a.amount)} EUR"))
+    if not zusatz:
+        return name
+    return f'{name}<br/><font size="7.5" color="#555555">' + "<br/>".join(zusatz) + "</font>"
+
+
+def _rabatt_prozent(line):
+    """Rabatt in Prozent für die Spalte „Rab.%“ — nur wenn die Position genau einen prozentualen Rabatt trägt."""
+    acs = list(getattr(line, "allowances_charges", None) or [])
+    if len(acs) == 1 and not acs[0].is_charge and acs[0].percentage:
+        return float(acs[0].percentage)
+    return 0
+
+
+def _summen_angaben(inv) -> dict:
+    """Angaben für den Summenblock und den Kopf, die es erst seit Runde 2 gibt. Leer bei einer Rechnung ohne sie."""
+    aus = {}
+    if inv.allowances_charges:
+        nachl = [a for a in inv.allowances_charges if not a.is_charge]
+        zuschl = [a for a in inv.allowances_charges if a.is_charge]
+        def _label(liste, wort):
+            gruende = []
+            for a in liste:
+                g = " ".join(str(a.reason or "").split())
+                if a.percentage:
+                    g = (g + " " if g else "") + f"{a.percentage.normalize():f} %".replace(".", ",")
+                if g and g not in gruende:
+                    gruende.append(g)
+            from xml.sax.saxutils import escape
+            return escape(f"{wort} ({', '.join(gruende)}):" if gruende and gruende != [wort] else f"{wort}:")
+        if nachl:
+            aus["doc_discount_amount"] = inv.sum_allowances()
+            aus["doc_discount_label"] = _label(nachl, "Nachlass")
+        if zuschl:
+            aus["doc_surcharge_amount"] = inv.sum_charges()
+            aus["doc_surcharge_label"] = _label(zuschl, "Zuschlag")
+        aus["steuer_gruppen"] = [(str(t.rate), str(t.taxable_amount), str(t.tax_amount)) for t in inv.compute_tax_subtotals()]
+    stufen = inv.payment.skonto_stufen() if (inv.payment and hasattr(inv.payment, "skonto_stufen")) else []
+    if len(stufen) == 2:
+        aus["skonto_percent"], aus["skonto_days"] = stufen[0]
+        aus["skonto2_percent"], aus["skonto2_days"] = stufen[1]
+    if str(inv.invoice_type_code) == "384":
+        aus["titel"] = "Rechnungskorrektur"
+    return aus
+
+
 def build(inv, doc_gen, buyers, mandant_settings):
     """Erzeugt das PDF zur Rechnung (oder Storno) und liefert (filename, bytes).
 
@@ -63,13 +140,13 @@ def build(inv, doc_gen, buyers, mandant_settings):
     for i, line in enumerate(inv.lines):
         positions.append({
             "pos_nr": i + 1,
-            "description": line.item_name,
+            "description": _positionstext(line),
             "quantity": line.quantity,
             "unit": _einheit(line.unit_code),
             "unit_price": line.unit_price,
             "net_amount": line.line_net_amount,
             "tax_rate": line.tax_rate,
-            "discount_percent": 0,
+            "discount_percent": _rabatt_prozent(line),
             "discount_amount": 0,
         })
     # Anrede/Ansprechpartner aus dem Kundenstamm nachschlagen (die Rechnung
@@ -97,6 +174,7 @@ def build(inv, doc_gen, buyers, mandant_settings):
         "contact_salutation": _kontakt_salut,
         "contact_name": _contact,
         "is_private": _private,
+        "address_line_2": (getattr(inv.buyer.address, "address_line_2", "") or "") if inv.buyer.address else "",
         "street": inv.buyer.address.street if inv.buyer.address else "",
         "house_number": inv.buyer.address.house_number if inv.buyer.address else "",
         "city": inv.buyer.address.city if inv.buyer.address else "",
@@ -158,7 +236,8 @@ def build(inv, doc_gen, buyers, mandant_settings):
     # zeigte es die Stammdaten, während XRechnung und GiroCode das Konto der Rechnung trugen (Zweitkonto je Rechnung).
     _inv_iban = (inv.payment.iban if inv.payment else "") or ""
     doc_gen._zahlung_override = ({"iban": _inv_iban, "bic": (inv.payment.bic if inv.payment else "") or "",
-                                  "verwendungszweck": _na.get("verwendungszweck", "")} if (_na.get("abo_id") or _inv_iban) else None)
+                                  "verwendungszweck": _na.get("verwendungszweck", "") or (getattr(inv.payment, "remittance", "") or "")}
+                                 if (_na.get("abo_id") or _inv_iban or getattr(inv.payment, "remittance", "")) else None)
     _lieferdatum = (inv.tax_point_date or inv.period_end or "")
     if _na.get("abo_id") and doc_type_for_pdf == "invoice":
         # Die Standardtexte (§ 4.2 AGB, „Rechnungsnummer als Verwendungszweck") widersprechen hier: gezahlt wird
@@ -192,6 +271,8 @@ def build(inv, doc_gen, buyers, mandant_settings):
     import doc_generator as _dg
     _terms = str((inv.payment.payment_terms if inv.payment else "") or "")
     _dg._BEZAHLT_HINWEIS = _terms if (_terms.startswith("Bereits bezahlt") and not is_credit) else None
+    # Lastschrift: Einzugshinweis mit Mandat und Gläubiger-ID statt Überweisungskonto und GiroCode
+    _dg._BEZAHLT_HINWEIS = __import__("rechnungszusatz").pdf_zahlhinweis(inv, _dg._BEZAHLT_HINWEIS)
     # Steuerfall und Bezüge (25.11.2026): Hinweis nach § 19 / § 13b / Befreiungsgrund unter den Summen;
     # Bestell-, Vertrags-, Projektnummer und eine echte Leitweg-ID in der Kopfzeile.
     _steuer_pdf = {"steuer_hinweis": ""}
@@ -205,17 +286,30 @@ def build(inv, doc_gen, buyers, mandant_settings):
         _kref = (getattr(inv, "buyer_reference", "") or "").strip()
         if _kref and _lw(_kref) == (True, ""):
             _bez.append(("Leitweg-ID", _kref))
+        if getattr(inv, "period_start", None) and not _na.get("abo_id"):      # BG-14 Rechnungszeitraum
+            _bez.insert(0, ("Leistungszeitraum", _zeitraum_text(inv.period_start, inv.period_end)))
+        if str(inv.invoice_type_code) == "384" and inv.preceding_invoice:
+            _bez.insert(0, ("Berichtigt Rechnung", inv.preceding_invoice
+                            + (" vom " + _de_datum(inv.preceding_invoice_date) if getattr(inv, "preceding_invoice_date", None) else "")))
         _steuer_pdf["bezuege"] = [(k, v) for k, v in _bez if v]
     except Exception:
         pass
+    try:
+        _steuer_pdf.update(_summen_angaben(inv))
+        if getattr(inv, "period_start", None) and _lieferdatum and _lieferdatum == inv.period_end and not _na.get("abo_id"):
+            _lieferdatum = ""       # der Zeitraum steht in der zweiten Kopfzeile, sein Ende nicht noch einmal als Leistungsdatum
+    except Exception as _e_r2a:
+        print(f"[invoice_pdf] Zusatzangaben nicht übernommen: {_e_r2a}", flush=True)
+    closing_tpl = __import__("rechnungszusatz").pdf_angaben(inv, buyer_data, _steuer_pdf, closing_tpl)
     try:
       pdf_entry = doc_gen.generate(
         doc_type=doc_type_for_pdf,
         recipient=buyer_data,
         positions=positions,
-        step={"date": inv.invoice_date, **_steuer_pdf,
+        step={"date": inv.invoice_date,
               "skonto_percent": getattr(inv.payment, "skonto_percent", 0) if inv.payment else 0,
-              "skonto_days": getattr(inv.payment, "skonto_days", 0) if inv.payment else 0},
+              "skonto_days": getattr(inv.payment, "skonto_days", 0) if inv.payment else 0,
+              **_steuer_pdf},
         reference=inv.invoice_number,
         subject="",
         doc_date=inv.invoice_date,

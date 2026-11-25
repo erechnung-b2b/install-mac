@@ -446,6 +446,8 @@ class TransactionManager:
                      "kein_vertrag",
                      # Skonto (Angebot/Rechnung) und Verkäufer des Vorgangs (1 = Stammdaten, 2 = mit Zusatz), 16.11.2026
                      "skonto_percent", "skonto_days", "verkaeufer",
+                     # Steuerfall der Rechnungsstufe (25.11.2026): regel, kleinunternehmer, reverse_charge, steuerfrei, nullsatz
+                     "steuerfall", "steuerbefreiung_grund",
                      # Vertragswahl + Gebäude für den ausgefüllten Dienstvertrag (16.10.2026) —
                      # standen bisher nicht in der Liste und wurden still verworfen
                      "vertrag_dateien", "vertrag_datei", "vertrag_gebaeude",

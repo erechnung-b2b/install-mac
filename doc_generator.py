@@ -402,12 +402,18 @@ def _build_address_block(story, styles, seller: dict, recipient: dict):
             namensblock = " ".join(r_name.split()).lower()
             if contact.strip().lower() not in namensblock:
                 lines.append(kontaktzeile)
+    _zusatz = " ".join(str(recipient.get("address_line_2") or "").split())
+    if _zusatz:
+        from xml.sax.saxutils import escape as _esc_z
+        lines.append(_esc_z(_zusatz))
     r_street = _street_line(recipient)
     if r_street:
         lines.append(r_street)
     plz_city = f'{recipient.get("post_code", "")} {recipient.get("city", "")}'.strip()
     if plz_city:
         lines.append(plz_city)
+    if str(recipient.get("country_name") or "").strip():
+        lines.append(str(recipient["country_name"]).strip().upper())      # Auslandsanschrift: Land als letzte Zeile
 
     story.append(Paragraph("<br/>".join(lines), styles["recipient"]))
     story.append(Spacer(1, 12*mm))
@@ -578,6 +584,12 @@ def _steuerhinweis_vorgabe(step, positions, data_dir):
     try:
         if not isinstance(step, dict) or "steuer_hinweis" in step or not positions:
             return step
+        _sf = str(step.get("steuerfall") or "").strip()
+        if _sf and _sf != "regel":
+            # Steuerfall, der an der Rechnungsstufe des Vorgangs gewählt wurde (25.11.2026)
+            from models import Invoice as _Inv, steuerfall_normalisieren as _norm
+            _i = _Inv(steuerfall=_norm(_sf), steuerbefreiung_grund=" ".join(str(step.get("steuerbefreiung_grund") or "").split()))
+            return dict(step, steuerfall=_i.steuerfall, steuer_hinweis=_i.steuerhinweis())
         if any(Decimal(str(p.get("tax_rate") if p.get("tax_rate") not in (None, "") else 19)) != 0 for p in positions):
             return step
         import json as _j
@@ -603,6 +615,11 @@ def _build_totals(story, styles, positions: list, step: dict, gross_label: str =
     if positions:
         tax_rate = positions[0].get("tax_rate", 19)
     gruppen = _steuer_gruppen(positions, subtotal)
+    # Nachlass/Zuschlag auf Belegebene trägt in der E-Rechnung einen bestimmten Steuersatz. Liefert der Aufrufer die
+    # Aufschlüsselung der E-Rechnung mit ([(Satz, Bemessungsgrundlage, Steuer)]), gilt sie — sonst wiche das PDF bei
+    # gemischten Sätzen um Cent ab (die anteilige Verteilung oben kennt die Zuordnung nicht).
+    if isinstance(step, dict) and step.get("steuer_gruppen"):
+        gruppen = [(_dez(a), _dez(b), _dez(c)) for a, b, c in step["steuer_gruppen"]]
     tax = float(sum((g[2] for g in gruppen), Decimal("0.00")))
     gross = float(_dez(subtotal).quantize(_CENT, rounding=_HALF_UP) + sum((g[2] for g in gruppen), Decimal("0.00")))
 
@@ -617,12 +634,12 @@ def _build_totals(story, styles, positions: list, step: dict, gross_label: str =
     ])
     if doc_disc:
         rows.append([
-            Paragraph("Nachlass:", styles["total_label"]),
+            Paragraph(str(step.get("doc_discount_label") or "Nachlass:"), styles["total_label"]),
             Paragraph(f"– {_fmt(doc_disc)} €", styles["total_value"]),
         ])
     if doc_surcharge:
         rows.append([
-            Paragraph("Zuschlag:", styles["total_label"]),
+            Paragraph(str(step.get("doc_surcharge_label") or "Zuschlag:"), styles["total_label"]),
             Paragraph(f"+ {_fmt(doc_surcharge)} €", styles["total_value"]),
         ])
     if doc_disc or doc_surcharge:
@@ -1271,6 +1288,8 @@ def _generate_document_roh(
     if doc_type == "dunning":
         title_key = f"dunning_{dunning_level}" if dunning_level else "dunning_1"
     title = DOC_TYPE_TITLES.get(title_key, "Dokument")
+    if isinstance(step, dict) and step.get("titel"):
+        title = str(step["titel"])
 
     story.append(Paragraph(title, styles["doc_title"]))
 
@@ -1337,6 +1356,11 @@ def _generate_document_roh(
         _offen = max(0.0, float(totals.get("gross", 0) or 0) - float(prepaid_total or 0))
         story.append(Spacer(1, 4*mm))
         story.append(Paragraph(_skonto_text(doc_type, _sk_p, _sk_t, _offen, doc_date), styles["body"]))
+        _sk2 = _skonto_von({"skonto_percent": step.get("skonto2_percent"), "skonto_days": step.get("skonto2_days")}) \
+            if isinstance(step, dict) else (0.0, 0)
+        if _sk2[0]:
+            story.append(Paragraph(_skonto_text(doc_type, _sk2[0], _sk2[1], _offen, doc_date)
+                                   .replace("<b>Skonto:</b> Bei Zahlung", "Bei Zahlung"), styles["body"]))
         if closing_text:
             closing_text = "\n".join(z for z in str(closing_text).split("\n")
                                      if "Abzug von Skonto" not in z).replace(" ohne jeden Abzug", "")

@@ -577,7 +577,7 @@ th.c,td.c{text-align:center}
         <div class="form-row"><label>USt-ID</label><input id="c-buyer-vat" placeholder="DE..."></div></div>
       <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
         <button onclick="saveBuyerFromForm()" style="font-size:12px">Neu speichern</button>
-        <button onclick="updateSelectedBuyer()" style="font-size:12px" id="btn-buyer-update" disabled>Aendern</button>
+        <button onclick="updateSelectedBuyer()" style="font-size:12px" id="btn-buyer-update" disabled>Ändern</button>
         <span id="buyer-save-result" style="font-size:11px"></span>
       </div>
       <!-- Kundenliste (ausklappbar) -->
@@ -600,6 +600,7 @@ th.c,td.c{text-align:center}
         <select id="c-doctype" onchange="onDocTypeChange()">
           <option value="380" selected>Rechnung (380)</option>
           <option value="381">Gutschrift (381)</option>
+          <option value="384">Rechnungskorrektur (384)</option>
         </select></div>
       <div class="form-row" id="c-preceding-row" style="display:none"><label>Bezug auf Rechnung (optional)</label>
         <input id="c-preceding" placeholder="RE-2026-00012 – leer lassen für eine freie Gutschrift ohne Bezug" title="Wird eine Rechnungsnummer angegeben, mindert die Gutschrift deren offenen Betrag. Tipp: Gutschriften zu einer bestehenden Rechnung lassen sich bequemer im Rechnungsdetail über „↺ Gutschrift“ anlegen."></div>
@@ -613,6 +614,9 @@ th.c,td.c{text-align:center}
           <option value="reverse_charge">Steuerschuld des Kunden (§ 13b UStG)</option>
           <option value="steuerfrei">Steuerfreier Umsatz</option>
           <option value="nullsatz">Nullsteuersatz (0 %)</option>
+          <option value="ig_lieferung">Innergemeinschaftliche Lieferung (EU)</option>
+          <option value="ausfuhr">Ausfuhrlieferung (Drittland)</option>
+          <option value="nicht_steuerbar">Nicht steuerbar (Leistung an Kunden im Drittland)</option>
         </select></div>
       <div class="form-row" id="c-steuergrund-row" style="display:none"><label id="c-steuergrund-label">Grund der Steuerbefreiung</label>
         <input id="c-steuergrund" maxlength="200" placeholder=""></div>
@@ -639,6 +643,19 @@ th.c,td.c{text-align:center}
       <div class="form-row" id="c-skonto-zeile" style="display:none"><label>Skonto</label>
         <div style="display:flex;gap:6px;align-items:center;font-size:13px"><input id="c-skonto-percent" type="number" min="0" max="99" step="0.5" placeholder="0" style="width:70px"> % bei Zahlung binnen <input id="c-skonto-days" type="number" min="0" max="365" step="1" placeholder="0" style="width:70px"> Tagen</div></div>
     </div>
+    <!-- Runde 2 (25.11.2026): Rechnungszeitraum BT-73/BT-74, Verwendungszweck BT-83, zweite Skontostufe, Käuferzusätze BT-51/BT-47 -->
+    <div id="c-r2a-384-hinweis" style="display:none;font-size:12px;color:var(--text2);margin:-8px 0 12px 0">Die Rechnungskorrektur trägt die berichtigten Werte in voller Höhe und bekommt eine neue Rechnungsnummer. Die Ursprungsrechnung bleibt bestehen – stornieren Sie sie, wenn die Korrektur sie vollständig ersetzt.</div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px">
+      <div class="form-row"><label title="BT-73: Beginn des Zeitraums, den die Rechnung abrechnet (z. B. bei Wartung, Miete, monatlichen Leistungen)">Leistungszeitraum von <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input type="date" id="c-period-start"></div>
+      <div class="form-row"><label title="BT-74: Ende des Zeitraums, den die Rechnung abrechnet">Leistungszeitraum bis <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input type="date" id="c-period-end"></div>
+      <div class="form-row"><label title="BT-83: Text, den Ihr Kunde bei der Überweisung angeben soll. Leer = Rechnungsnummer.">Verwendungszweck <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input id="c-remittance" maxlength="140" placeholder="leer = Rechnungsnummer"></div>
+      <div class="form-row" id="c-skonto2-zeile"><label title="Zweite Skontostufe mit längerer Frist und kleinerem Satz, z. B. 3 % in 8 Tagen, 2 % in 14 Tagen">Skonto, zweite Stufe</label>
+        <div style="display:flex;gap:6px;align-items:center;font-size:13px"><input id="c-skonto2-percent" type="number" min="0" max="99" step="0.5" placeholder="0" style="width:70px"> % binnen <input id="c-skonto2-days" type="number" min="0" max="365" step="1" placeholder="0" style="width:70px"> Tagen</div></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:16px">
+      <div class="form-row"><label title="BT-51: zweite Adresszeile des Kunden, z. B. Gebäude, Abteilung, c/o. Wird beim gewählten Kunden gespeichert.">Adresszusatz des Kunden <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input id="c-buyer-line2" maxlength="100" placeholder="z. B. Gebäude B, c/o …" onchange="r2aKundeMerken()"></div>
+      <div class="form-row"><label title="BT-47: Handelsregisternummer des Kunden. Wird beim gewählten Kunden gespeichert.">Registernummer des Kunden <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input id="c-buyer-companyid" maxlength="60" placeholder="z. B. HRB 12345" onchange="r2aKundeMerken()"></div>
+    </div>
     <div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:8px">Positionen</div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
       <select id="c-product-picker" style="flex:1;font-size:12px;padding:4px 8px">
@@ -658,8 +675,16 @@ th.c,td.c{text-align:center}
       </select>
       <button onclick="addSonderleistung()" style="flex:0 0 auto;font-size:12px;padding:4px 12px;white-space:nowrap">+ Hinzuf&uuml;gen</button>
     </div>
-    <table><thead><tr><th>Bezeichnung</th><th class="r" style="width:80px">Menge</th><th class="r" style="width:100px">EP netto</th><th class="r" style="width:80px">USt %</th><th style="width:40px"></th></tr></thead>
+    <table><thead><tr><th>Bezeichnung</th><th class="r" style="width:90px">Menge</th><th class="r" style="width:120px">EP netto</th><th class="r" style="width:96px">USt %</th><th style="width:40px"></th></tr></thead>
       <tbody id="c-lines"></tbody></table>
+    <!-- Runde 2: Nachlass / Zuschlag auf die ganze Rechnung (BG-20 / BG-21) -->
+    <div style="margin-top:12px">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <span style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px">Nachlass / Zuschlag auf die Rechnung</span>
+        <button onclick="r2aAllowanceAdd()" style="font-size:11px;padding:2px 8px">+ Nachlass oder Zuschlag</button>
+      </div>
+      <div id="c-allowances"></div>
+    </div>
     <div style="margin-top:12px">
       <div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:6px">Notiz zur Rechnung <span style="text-transform:none;letter-spacing:0">(optional — erscheint als Bemerkung auf der Rechnung)</span></div>
       <textarea id="c-note" rows="3" placeholder="Zusätzliche Informationen, z.&#8239;B. Objekt/Leistungszeitraum, Hinweise für den Empfänger …" style="width:100%;box-sizing:border-box;font:inherit;font-size:13px;padding:8px 10px;resize:vertical"></textarea>
@@ -674,7 +699,7 @@ th.c,td.c{text-align:center}
 
 <!-- ═══ ARCHIV ═══ -->
 <div class="page" id="page-archive">
-  <div class="topbar"><div><h2>Archiv</h2><div class="sub">Revisionssichere Ablage aller Rechnungen</div></div>
+  <div class="topbar"><div><h2>Archiv</h2><div class="sub">Ablage aller Rechnungen mit Original, PDF und Prüfsumme</div></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
       <input type="text" id="arch-search" placeholder="Suche im Archiv..." oninput="loadArchive()" style="width:220px">
       <select id="arch-filter-status" onchange="loadArchive()" style="font-size:12px;padding:4px 8px">
@@ -1897,6 +1922,10 @@ th.c,td.c{text-align:center}
         <div class="form-row"><label title="BT-30, z. B. HRB 4711 Amtsgericht Musterstadt. Wird in die E-Rechnung geschrieben.">Handelsregisternummer <span style="font-weight:400;color:var(--text2)">(falls vorhanden)</span></label><input id="s-mandant-companyid" value="" maxlength="60" placeholder="HRB 4711"></div>
         <div class="form-row"><label title="BT-29. Eine Kennung, unter der Ihre Kunden Sie führen. Ohne USt-ID und ohne Handelsregisternummer verlangt die E-Rechnung eine Kennung; bleibt das Feld leer, wird dann Ihre Steuernummer verwendet.">Verkäuferkennung <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input id="s-mandant-sellerid" value="" maxlength="60" placeholder="leer = Steuernummer, wenn keine USt-ID"></div>
       </div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:12px;margin-top:8px">
+        <div class="form-row"><label title="BT-33: weitere rechtliche Angaben zu Ihrem Unternehmen, z. B. Geschäftsführer, Registergericht, Sitz. Werden in die E-Rechnung geschrieben.">Rechtsangaben <span style="font-weight:400;color:var(--text2)">(optional, z. B. Geschäftsführer und Registergericht)</span></label><input id="s-mandant-legal" value="" maxlength="300" placeholder="Geschäftsführerin: Erika Muster · Amtsgericht Musterstadt"></div>
+        <div class="form-row"><label title="BT-36: zweite Adresszeile, z. B. Gebäude oder Etage">Adresszusatz <span style="font-weight:400;color:var(--text2)">(optional)</span></label><input id="s-mandant-line2" value="" maxlength="100" placeholder="z. B. Gebäude B"></div>
+      </div>
       <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px;margin-top:8px">
         <div class="form-row"><label>Straße *</label><input id="s-mandant-street" value="" placeholder="Hauptstraße 42"></div>
         <div class="form-row"><label>PLZ *</label><input id="s-mandant-plz" value="" placeholder="10115" oninput="plzLookup(this,'s-mandant-city')"></div>
@@ -2690,7 +2719,7 @@ async function loadInvoices() {
   document.getElementById('inv-table').innerHTML = res.invoices.map(i=>`
     <tr class="clickable" onclick="openDetail('${i.id}')">
       <td onclick="event.stopPropagation()"><input type="checkbox" data-id="${i.id}" onchange="toggleBulkItem('${i.id}',this.checked)" style="width:auto"></td>
-      <td style="font-weight:500">${i.number}${i.type_code==='381' ? ' <span title="'+(i.is_storno?'Stornorechnung':'Gutschrift')+(i.preceding_invoice?' zu '+esc(i.preceding_invoice):'')+'" style="background:'+(i.is_storno?'var(--danger-bg);color:var(--danger)':'var(--warning-bg);color:var(--warning)')+';padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">'+(i.is_storno?'STORNO':'GUTSCHRIFT')+'</span>' : ''}${i.type_code==='389' ? ' <span title="Gutschrift im Gutschriftverfahren (Selbstfakturierung, Belegart 389)" style="background:var(--info-bg);color:var(--info);padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">GUTSCHRIFTVERFAHREN</span>' : ''}</td><td>${invPartnerCell(i)}</td>
+      <td style="font-weight:500">${i.number}${i.type_code==='381' ? ' <span title="'+(i.is_storno?'Stornorechnung':'Gutschrift')+(i.preceding_invoice?' zu '+esc(i.preceding_invoice):'')+'" style="background:'+(i.is_storno?'var(--danger-bg);color:var(--danger)':'var(--warning-bg);color:var(--warning)')+';padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">'+(i.is_storno?'STORNO':'GUTSCHRIFT')+'</span>' : ''}${i.type_code==='389' ? ' <span title="Gutschrift im Gutschriftverfahren (Selbstfakturierung, Belegart 389)" style="background:var(--info-bg);color:var(--info);padding:1px 6px;border-radius:4px;font-size:10px;font-weight:600">GUTSCHRIFTVERFAHREN'+((i.direction||'').toUpperCase()==='AUSGANG'?' · VOM KUNDEN':'')+'</span>' : ''}</td><td>${invPartnerCell(i)}</td>
       <td class="c">${dirBadge(i.direction)}</td>
       <td class="r">${fmt(i.net)}</td><td class="r" style="font-weight:500">${fmt(i.gross)} EUR${(i.credited > 0 && i.type_code!=='381' && (i.status||'').toUpperCase()!=='STORNIERT') ? '<div title="Gutschriften zu dieser Rechnung" style="font-size:11px;font-weight:400;color:var(--warning)">↺ −'+fmt(i.credited)+' · offen '+fmt(i.open_amount)+'</div>' : ''}</td>
       <td class="c"><span class="badge" style="background:var(--bg3);color:var(--text2)">${i.format||'XRechnung'}</span></td>
@@ -2878,6 +2907,7 @@ async function openDetail(id) {
   // Rücknahme nur für von Hand markierte Rechnungen (Zahlungen aus dem Bank-Abgleich: dort „Zuordnung lösen“)
   document.getElementById('btn-paid-undo').style.display = (inv.status === 'BEZAHLT' && inv.bezahlt_manuell && inv.bezahlt_manuell.ruecknehmbar) ? '' : 'none';
   window._currentInvoiceData = inv;
+  if (typeof gvDetail === 'function') gvDetail(inv);      // Gutschriftverfahren: Schild, Hinweis, eigene Knöpfe
 
   document.getElementById('det-seller').innerHTML = `
     <div class="name">${inv.seller.name}</div>
@@ -2950,6 +2980,7 @@ async function openDetail(id) {
       <span style="color:var(--text2)">Vertrag</span><span>${inv.contract_reference||'—'}</span>
       <span style="color:var(--text2)">Leistungsdatum</span><span>${inv.period_end||inv.period_start||'—'}</span>
       <span style="color:var(--text2)">Bezug</span><span>${inv.preceding_invoice||'—'}</span>
+      ${typeof r2aDetailZeilen === 'function' ? r2aDetailZeilen(inv, true) : ''}
     </div>
     ${inv.direction === 'EINGANG' ? '<button onclick="matchOrder(\''+inv.id+'\')" style="margin-top:8px;font-size:11px;padding:3px 10px">&#128279; Bestellung suchen</button>' : ''}
     <div id="det-match-result" style="margin-top:6px;font-size:12px"></div>`;
@@ -3642,6 +3673,7 @@ function addLine(name, qty, price, tax, artNr) {
     <td><input id="cl-tax-${lc}" type="number" value="${_satz(tax)}" style="text-align:right"></td>
     <td><button onclick="document.getElementById('line-${lc}').remove()" style="color:var(--danger);border:0;background:0">&#10007;</button></td>`;
   document.getElementById('c-lines').appendChild(row);
+  if (typeof r2aZeileErweitern === 'function') r2aZeileErweitern(lc);      // Einheit, Beschreibung, Zeitraum, Rabatt
   if (typeof steuerfallAnwenden === 'function') steuerfallAnwenden();
   if (artNr) {
     const _p = (typeof _products !== 'undefined') ? _products.find(x => x.art_nr === artNr) : null;
@@ -3858,7 +3890,8 @@ function fillProductPicker() {
   const sel = document.getElementById('c-product-picker');
   if (sel) sel.innerHTML = '<option value="">Produkt aus Katalog hinzufügen...</option>' + prodOpts;
   // Per-Zeile-Picker in bestehenden Rows aktualisieren
-  document.querySelectorAll('#c-lines tr select').forEach(s => {
+  // nur die Produktauswahl der Zeile – nicht Einheit, Rabatt usw. (25.11.2026: die Liste überschrieb alle Auswahlfelder)
+  document.querySelectorAll('#c-lines tr select[id^="cl-prodsel-"]').forEach(s => {
     if (s.id === 'c-product-picker') return;
     const val = s.value;
     s.innerHTML = '<option value="">Produkt...</option>' + prodOpts;
@@ -3997,6 +4030,8 @@ async function _generateInvoiceInner(download=false) {
     nur_pruefen: !download,   // „Validieren" prüft nur — angelegt wird erst mit „XRechnung erzeugen" (09.10.2026)
     fehler_sperren: true,     // bei Fehlern der Prüfung wird nichts angelegt und keine Nummer vergeben (25.11.2026)
   };
+  if (typeof r2aBodyErgaenzen === 'function') r2aBodyErgaenzen(body);
+  if (typeof zusatzInAnfrage === 'function') { try { await zusatzInAnfrage(body); } catch (e) { toast(e.message || String(e), 'error'); return; } }
   const res = await fetch(API+'/api/generate', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
   const el = document.getElementById('c-result');
   // Meldungen der Prüfung als Liste (25.11.2026) — vorher stand hier nur „3 Fehler“
@@ -4034,6 +4069,161 @@ async function _generateInvoiceInner(download=false) {
     a.download = res.number + '.xml'; a.click();
     toast('XRechnung heruntergeladen: ' + res.number);
   }
+}
+
+// ── Runde 2, Paket A (25.11.2026): Einheit, Beschreibung, Zeitraum, Rabatt je Position; Nachlass/Zuschlag; BT-83; 384 ──
+const R2A_EINHEITEN = [['C62','Stk'],['HUR','Std'],['DAY','Tag'],['MON','Monat'],['LS','psch'],['MTR','m'],['MTK','m²'],['KMT','km'],['KGM','kg'],['LTR','l']];
+function r2aWert(id) { return (((document.getElementById(id) || {}).value) || '').trim(); }
+function r2aZahl(t) { const n = parseFloat(String(t || '').replace(',', '.')); return isFinite(n) ? n : 0; }
+function r2aZeileErweitern(lc) {
+  const row = document.getElementById('line-' + lc); if (!row || !row.cells || !row.cells[0]) return;
+  const d = document.createElement('div');
+  d.className = 'r2a-zeile';
+  d.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px;font-size:12px;color:var(--text2)';
+  const klein = 'font-size:12px;padding:3px 6px';
+  d.innerHTML =
+    '<span>Einheit</span><select id="cl-unit-' + lc + '" title="Einheit der Menge (BT-130)" style="' + klein + ';width:84px">' +
+      R2A_EINHEITEN.map(e => '<option value="' + e[0] + '">' + e[1] + '</option>').join('') + '</select>' +
+    '<input id="cl-desc-' + lc + '" maxlength="500" placeholder="Beschreibung der Position (optional)" title="Zusatztext zur Position (BT-154), steht in der E-Rechnung und auf dem PDF" style="' + klein + ';flex:1;min-width:200px">' +
+    '<span title="Leistungszeitraum dieser Position (BT-134/BT-135) – nur ausfüllen, wenn er vom Leistungszeitraum der Rechnung abweicht">Zeitraum</span>' +
+    '<input type="date" id="cl-von-' + lc + '" style="' + klein + ';width:132px">–<input type="date" id="cl-bis-' + lc + '" style="' + klein + ';width:132px">' +
+    '<select id="cl-rabzus-' + lc + '" title="Rabatt oder Zuschlag auf diese Position (BG-27 / BG-28)" style="' + klein + ';width:96px"><option value="">Rabatt</option><option value="z">Zuschlag</option></select>' +
+    '<input id="cl-rab-' + lc + '" type="number" min="0" step="0.01" placeholder="Wert" title="Höhe des Rabatts oder Zuschlags – in Prozent oder als Betrag" style="' + klein + ';width:78px;text-align:right">' +
+    '<select id="cl-rabart-' + lc + '" title="Prozent oder Betrag in Euro" style="' + klein + ';width:66px"><option value="p">%</option><option value="b">EUR</option></select>' +
+    '<input id="cl-rabgrund-' + lc + '" maxlength="100" placeholder="Grund (optional)" title="Grund des Rabatts oder Zuschlags, z. B. Treuerabatt. Leer = „Rabatt“ bzw. „Zuschlag“" style="' + klein + ';width:140px">';
+  row.cells[0].appendChild(d);
+}
+// Nachlass / Zuschlag auf die ganze Rechnung
+let r2aAllowanceNr = 0;
+function r2aAllowanceAdd(vor) {
+  const box = document.getElementById('c-allowances'); if (!box) return;
+  const n = ++r2aAllowanceNr, v = vor || {};
+  const d = document.createElement('div');
+  d.id = 'c-allow-' + n; d.className = 'r2a-allow';
+  d.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:4px;font-size:12px';
+  d.innerHTML =
+    '<select id="ca-art-' + n + '" style="width:110px;font-size:12px"><option value="">Nachlass</option><option value="z">Zuschlag</option></select>' +
+    '<input id="ca-wert-' + n + '" type="number" min="0" step="0.01" placeholder="0" style="width:90px;text-align:right;font-size:12px">' +
+    '<select id="ca-wie-' + n + '" style="width:64px;font-size:12px"><option value="p">%</option><option value="b">EUR</option></select>' +
+    '<input id="ca-grund-' + n + '" maxlength="100" placeholder="Grund, z. B. Mengenrabatt oder Versandkosten" style="flex:1;font-size:12px">' +
+    '<select id="ca-satz-' + n + '" title="Steuersatz, dem der Nachlass oder Zuschlag zugeordnet wird. „alle Sätze“ verteilt ihn im Verhältnis der Nettobeträge." style="width:120px;font-size:12px">' +
+      '<option value="">alle Sätze</option><option value="19">nur 19 %</option><option value="7">nur 7 %</option><option value="0">nur 0 %</option></select>' +
+    '<button onclick="document.getElementById(\'c-allow-' + n + '\').remove()" style="color:var(--danger);border:0;background:0">&#10007;</button>';
+  box.appendChild(d);
+  if (v.charge) document.getElementById('ca-art-' + n).value = 'z';
+  if (v.amount) { document.getElementById('ca-wert-' + n).value = v.amount; document.getElementById('ca-wie-' + n).value = 'b'; }
+  if (v.percent) document.getElementById('ca-wert-' + n).value = v.percent;
+  if (v.reason) document.getElementById('ca-grund-' + n).value = v.reason;
+}
+function r2aBodyErgaenzen(body) {
+  let i = 0;
+  document.querySelectorAll('#c-lines tr').forEach(tr => {
+    const id = tr.id.split('-')[1], l = (body.lines || [])[i++]; if (!l) return;
+    const u = r2aWert('cl-unit-' + id); if (u && u !== 'C62') l.unit = u;
+    const t = r2aWert('cl-desc-' + id); if (t) l.description = t;
+    const von = r2aWert('cl-von-' + id), bis = r2aWert('cl-bis-' + id);
+    if (von) l.period_start = von;
+    if (bis) l.period_end = bis;
+    const rab = r2aZahl(r2aWert('cl-rab-' + id));
+    if (rab > 0) {
+      if (r2aWert('cl-rabart-' + id) === 'b') l.discount_amount = rab; else l.discount_percent = rab;
+      if (r2aWert('cl-rabzus-' + id) === 'z') l.discount_charge = true;
+      const g = r2aWert('cl-rabgrund-' + id); if (g) l.discount_reason = g;
+    }
+  });
+  const setze = (feld, wert) => { if (wert) body[feld] = wert; };
+  setze('period_start', r2aWert('c-period-start'));
+  setze('period_end', r2aWert('c-period-end'));
+  setze('remittance', r2aWert('c-remittance'));
+  if (r2aZahl(r2aWert('c-skonto2-percent')) > 0) { body.skonto2_percent = r2aWert('c-skonto2-percent'); body.skonto2_days = r2aWert('c-skonto2-days'); }
+  setze('buyer_address_line_2', r2aWert('c-buyer-line2'));
+  setze('buyer_company_id', r2aWert('c-buyer-companyid'));
+  if (typeof _selectedBuyerId !== 'undefined' && _selectedBuyerId) body.buyer_id = _selectedBuyerId;
+  const nachl = [];
+  document.querySelectorAll('#c-allowances .r2a-allow').forEach(d => {
+    const n = d.id.split('-')[2], w = r2aZahl(r2aWert('ca-wert-' + n)); if (!(w > 0)) return;
+    const a = {charge: r2aWert('ca-art-' + n) === 'z', reason: r2aWert('ca-grund-' + n)};
+    if (r2aWert('ca-wie-' + n) === 'b') a.amount = w; else a.percent = w;
+    const s = r2aWert('ca-satz-' + n); if (s !== '') a.tax_rate = s;
+    nachl.push(a);
+  });
+  if (nachl.length) body.allowances = nachl;
+  if (_docType() === '384') body.preceding_invoice = r2aWert('c-preceding');
+  return body;
+}
+// Belegart 384: Bezug auf die Ursprungsrechnung ist Pflicht
+function r2aBelegart() {
+  const row = document.getElementById('c-preceding-row'); if (!row) return;
+  const lbl = row.querySelector('label'), inp = document.getElementById('c-preceding'), hin = document.getElementById('c-r2a-384-hinweis');
+  if (lbl && !lbl.dataset.r2aText) { lbl.dataset.r2aText = lbl.textContent; if (inp) inp.dataset.r2aPlatz = inp.placeholder; }
+  const korr = _docType() === '384';
+  if (korr) row.style.display = '';
+  if (lbl) lbl.textContent = korr ? 'Ursprungsrechnung, die berichtigt wird (Pflicht)' : lbl.dataset.r2aText;
+  if (inp) inp.placeholder = korr ? 'Nummer der Ursprungsrechnung, z. B. RE-2026-00012' : (inp.dataset.r2aPlatz || '');
+  if (hin) hin.style.display = korr ? '' : 'none';
+  const btn = document.getElementById('c-btn-create');
+  if (btn && korr) btn.innerHTML = 'Rechnungskorrektur erzeugen &amp; herunterladen';
+}
+document.addEventListener('change', e => { if (e.target && e.target.id === 'c-doctype') r2aBelegart(); });
+// Zweite Skontostufe erscheint, sobald die erste gefüllt ist
+document.addEventListener('input', e => {
+  if (!e.target || e.target.id !== 'c-skonto-percent') return;
+  const z = document.getElementById('c-skonto2-zeile'); if (z) z.style.display = '';
+});
+// Kundenstamm: Adresszusatz (BT-51) und Registernummer (BT-47)
+function r2aKundeGewaehlt(b) {
+  const s = (id, v) => { const el = document.getElementById(id); if (el) el.value = v || ''; };
+  s('c-buyer-line2', b && b.address_line_2); s('c-buyer-companyid', b && b.company_id);
+}
+async function r2aKundeMerken() {
+  if (typeof _selectedBuyerId === 'undefined' || !_selectedBuyerId) return;
+  try {
+    const r = await fetch(API + '/api/buyers/' + encodeURIComponent(_selectedBuyerId), {method: 'PUT', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({address_line_2: r2aWert('c-buyer-line2'), company_id: r2aWert('c-buyer-companyid')})}).then(x => x.json());
+    if (r && r.saved && typeof _buyers !== 'undefined') { const i = _buyers.findIndex(x => x.id === _selectedBuyerId); if (i >= 0 && r.buyer) _buyers[i] = r.buyer; }
+  } catch (e) {}
+}
+// Rechnungsansicht: Zusatzzeilen
+function r2aDetailZeilen(inv, gitter) {
+  const z = gitter ? ((k, v) => '<span style="color:var(--text2)">' + k + '</span><span>' + v + '</span>')
+                   : ((k, v) => '<div class="meta-row"><span class="k">' + k + '</span><span>' + v + '</span></div>');
+  let h = '';
+  if (inv.steuerfall_name && (inv.direction || 'AUSGANG') !== 'EINGANG' || (inv.steuerfall && inv.steuerfall !== 'regel'))
+    h += z('Steuerfall', esc(inv.steuerfall_name || inv.steuerfall) + (inv.steuerhinweis ? '<br><span style="font-size:12px;color:var(--text2)">' + esc(inv.steuerhinweis) + '</span>' : ''));
+  if (inv.period_start) h += z('Leistungszeitraum', fmtDate(inv.period_start) + (inv.period_end ? ' – ' + fmtDate(inv.period_end) : ''));
+  if (inv.type_code === '384') h += z('Belegart', 'Rechnungskorrektur (384)' + (inv.preceding_invoice ? ' zu ' + esc(inv.preceding_invoice) + (inv.preceding_invoice_date ? ' vom ' + fmtDate(inv.preceding_invoice_date) : '') : ''));
+  if (inv.remittance) h += z('Verwendungszweck', esc(inv.remittance));
+  if ((inv.skonto_stufen || []).length > 1) h += z('Skonto', inv.skonto_stufen.map(s => esc(String(s.percent).replace('.', ',')) + ' % binnen ' + esc(String(s.days)) + ' Tagen').join(', '));
+  if ((inv.korrekturen || []).length) h += z('Berichtigt durch', inv.korrekturen.map(k => '<a href="#" onclick="openDetail(\'' + esc(k.id) + '\');return false">' + esc(k.number) + '</a>').join(', ')
+    + '<br><span style="font-size:12px;color:var(--text2)">Ersetzt die Korrektur diese Rechnung vollständig, stornieren Sie diese Rechnung.</span>');
+  const pz = (inv.positionen_zusatz || []).filter(p => p.description || p.period_start || p.period_end || (p.allowances || []).length);
+  if (pz.length) h += z('Positionen', pz.map(p => 'Pos. ' + esc(p.line_id) + ': ' + [
+      p.description ? esc(p.description) : '',
+      (p.period_start || p.period_end) ? 'Zeitraum ' + (p.period_start ? fmtDate(p.period_start) : '…') + ' – ' + (p.period_end ? fmtDate(p.period_end) : '…') : '',
+      (p.allowances || []).map(a => (a.charge ? 'Zuschlag ' : 'Rabatt ') + esc(a.reason || '') + (a.percent ? ' ' + String(a.percent).replace('.', ',') + ' %' : '') + ': ' + fmt(a.amount) + ' €').join(', ')
+    ].filter(Boolean).join(' · ')).join('<br>'));
+  return h;
+}
+// Vorgang: Steuerfall an der Rechnungsstufe
+function r2aStepSteuerfallHtml(step, readonly) {
+  const sf = (step && step.steuerfall) || 'regel', dis = readonly ? 'disabled' : '';
+  const opt = [['regel', 'Regelbesteuerung (19 % / 7 %)'], ['kleinunternehmer', 'Kleinunternehmer (§ 19 UStG)'], ['reverse_charge', 'Steuerschuld des Kunden (§ 13b UStG)'],
+               ['steuerfrei', 'Steuerfreier Umsatz'], ['nullsatz', 'Nullsteuersatz (0 %)']];
+  const t = (typeof STEUERFALL_TEXTE !== 'undefined' && STEUERFALL_TEXTE[sf]) || ['', '', ''];
+  return '<div style="margin-top:8px"><label style="font-size:11px;color:var(--text2);display:block;margin-bottom:2px">Steuerfall der Rechnung</label>' +
+    '<select id="step-steuerfall" style="width:100%;font-size:14px;padding:6px 8px" ' + dis + ' onchange="r2aStepSteuerfall(this.value)">' +
+    opt.map(o => '<option value="' + o[0] + '"' + (sf === o[0] ? ' selected' : '') + '>' + o[1] + '</option>').join('') + '</select>' +
+    (sf !== 'regel' ? '<input id="step-steuergrund" maxlength="200" value="' + esc(step.steuerbefreiung_grund || '') + '" placeholder="' + esc(t[1] || '') + '" title="' + esc(t[0] || 'Grund der Steuerbefreiung') + '" style="width:100%;margin-top:4px;font-size:13px" ' + dis + ' oninput="markDirty()">' +
+      '<div style="font-size:12px;color:var(--text2);margin-top:2px">' + esc(t[2] || '') + ' Die Positionen stehen dabei auf 0 % Umsatzsteuer.</div>' : '') + '</div>';
+}
+function r2aStepSteuerfall(wert) {
+  if (typeof _currentTxn === 'undefined' || !_currentTxn || !_currentStepKey) return;
+  const step = (_currentTxn.steps || {})[_currentStepKey]; if (!step) return;
+  step.steuerfall = wert;
+  if (wert !== 'regel') (step.positions || []).forEach(p => { p.tax_rate = 0; });
+  else (step.positions || []).forEach(p => { if (!Number(p.tax_rate)) p.tax_rate = 19; });
+  _positionsDirty = true;
+  renderStepPositions(_currentStepKey);
 }
 
 // ── Archiv ──
@@ -4354,6 +4544,7 @@ function renderInvoiceDocument(inv, typeLabel) {
       </div>
       <div class="meta-box">
         <div class="meta-row"><span class="k">Buyer Reference</span><span>${esc(inv.buyer_reference||'—')}</span></div>
+        ${typeof r2aDetailZeilen === 'function' ? r2aDetailZeilen(inv) : ''}
         ${inv.order_reference ? '<div class="meta-row"><span class="k">Bestellnummer</span><span>'+esc(inv.order_reference)+'</span></div>' : ''}
         ${inv.contract_reference ? '<div class="meta-row"><span class="k">Vertrag</span><span>'+esc(inv.contract_reference)+'</span></div>' : ''}
         ${inv.preceding_invoice ? '<div class="meta-row"><span class="k">Bezug auf</span><span>'+esc(inv.preceding_invoice)+'</span></div>' : ''}
@@ -4683,7 +4874,7 @@ document.addEventListener('click', function (e) {
 /* Verlauf: lesbare Texte statt der internen Kennungen (25.11.2026) */
 const VERLAUF_TEXTE = {ALTBESTAND_ERFASST:'Altbestand erfasst', BESTELLUNG_VERKNUEPFT:'Bestellung verknüpft', BEZAHLT:'Bezahlt', BULK_EXPORT:'Sammelexport',
   DAUERZAHLUNG:'Dauerzahlung', EMAIL_VERSENDET:'E-Mail versendet', EMAIL_VERSANDT:'E-Mail versendet', ERSTELLT:'Erstellt', EXPORTIERT:'Exportiert',
-  FREIGABE_ERTEILT:'Freigabe erteilt', FREIGEGEBEN:'Freigegeben', GUTSCHRIFT_ERHALTEN:'Gutschrift erhalten', GUTSCHRIFT_ERSTELLT:'Gutschrift erstellt', GUTSCHRIFTVERFAHREN_ERSTELLT:'Gutschrift im Gutschriftverfahren erstellt',
+  FREIGABE_ERTEILT:'Freigabe erteilt', FREIGEGEBEN:'Freigegeben', GUTSCHRIFT_ERHALTEN:'Gutschrift erhalten', GUTSCHRIFT_ERSTELLT:'Gutschrift erstellt', GUTSCHRIFTVERFAHREN_ERSTELLT:'Gutschrift im Gutschriftverfahren erstellt', GUTSCHRIFTVERFAHREN_VERSENDET:'An den Lieferanten gesendet', GUTSCHRIFTVERFAHREN_STORNIERT:'Gutschrift storniert', GUTSCHRIFTVERFAHREN_STORNO_ERSTELLT:'Stornobeleg zur Gutschrift erstellt', GUTSCHRIFTVERFAHREN_VOM_KUNDEN:'Gutschrift des Kunden erkannt (als Ausgang geführt)', GUTSCHRIFTVERFAHREN_EINGANG_UNSICHER:'Hinweis: vielleicht Gutschrift eines Kunden', GUTSCHRIFTVERFAHREN_BLEIBT_EINGANG:'Entschieden: Eingangsrechnung', GUTSCHRIFTVERFAHREN_ANERKANNT:'Gutschrift des Kunden anerkannt', GUTSCHRIFTVERFAHREN_WIDERSPROCHEN:'Der Gutschrift des Kunden widersprochen',
   KAUFMAENNISCHE_FREIGABE:'Kaufmännische Freigabe', KAUFMAENNISCHE_FREIGABE_ABGELEHNT:'Kaufmännische Freigabe abgelehnt', KONTIERUNG:'Kontierung',
   RUECKFRAGE:'Rückfrage', SACHLICHE_PRUEFUNG_OK:'Sachliche Prüfung in Ordnung', SACHLICHE_PRUEFUNG_ABGELEHNT:'Sachliche Prüfung abgelehnt',
   SKONTO_ABGEZOGEN:'Skonto abgezogen', SKONTO_ANERKANNT:'Skonto anerkannt', SKONTO_VERSPAETET:'Skonto verspätet', STORNIERT:'Storniert',
@@ -4726,7 +4917,7 @@ async function csvSenden(anlegen) {
  * EINBAU: im großen <script>-Block von static/index.html, direkt VOR der Zeile
  *     /* ── Gestaltung der Belege (24.11.2026) ── * /
  * (= direkt nach dem Block der CSV-Karte, der mit  fetch(API + '/api/invoices/csv')  beginnt).
- * Benutzt aus der Seite: API, esc(), toast(), openDetail(). Alle Namen beginnen mit gv. */
+ * Benutzt aus der Seite: API, esc(), toast(), openDetail(), currentInvoiceId. Alle Namen beginnen mit gv. Stand 1.2. */
 var gv_Info = null, gv_Lieferanten = [], gv_Geprueft = false, gv_Uhr = null;
 function gv_El(id) { return document.getElementById(id); }
 function gv_Geld(x) { return x == null ? '–' : Number(x).toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €'; }
@@ -4903,6 +5094,135 @@ function gv_KositNachsehen(id, versuch) {
     }).catch(function () {});
   }, 3000);
 }
+/* ── Gutschriftverfahren 1.2: Rechnungsansicht (Storno, Versand an den Lieferanten, Gutschrift vom Kunden) ──
+ * gvDetail(inv) wird am Ende von openDetail() aufgerufen (eine Zeile dort). Es fragt den Stand des Belegs ab und zeigt
+ * für Belege des Gutschriftverfahrens ein Schild, einen Hinweis und die passenden Knöpfe; unpassende werden ausgeblendet. */
+var gv_Stand = null;
+function gv_Knopf(text, aufruf, stil) {
+  var b = document.createElement('button'); b.className = 'gv-detail-knopf'; b.innerHTML = text; b.onclick = aufruf;
+  if (stil) b.setAttribute('style', stil);
+  var vor = gv_El('btn-send'); if (vor && vor.parentNode) vor.parentNode.insertBefore(b, vor);
+  return b;
+}
+function gv_Aus(ids) { ids.forEach(function (id) { var e = gv_El(id); if (e) e.style.display = 'none'; }); }
+async function gvDetail(inv) {
+  var altes = gv_El('gv-detail'); if (altes) altes.remove();
+  Array.prototype.forEach.call(document.querySelectorAll('.gv-detail-knopf'), function (e) { e.remove(); });
+  gv_Stand = null;
+  if (!inv || (inv.type_code !== '389' && inv.type_code !== '381')) return;
+  var s;
+  try { var r = await fetch(API + '/api/gutschriftverfahren/' + encodeURIComponent(inv.id) + '/stand'); if (!r.ok) return; s = await r.json(); } catch (e) { return; }
+  if (!s || !s.art || currentInvoiceId !== inv.id) return;
+  gv_Stand = s;
+  var a = s.aktionen || {}, farbe = s.art === 'unsicher' ? 'warning' : 'info';
+  var html = '<div id="gv-detail" style="margin-top:8px;padding:10px 16px;background:var(--' + farbe + '-bg);border:1px solid var(--' + farbe + ');border-radius:var(--radius);font-size:13px;color:var(--' + farbe + ')">'
+    + '<strong>' + esc(s.schild || 'Gutschriftverfahren') + '</strong> · ' + esc(s.hinweis || '');
+  if (s.storno_id) html += ' <a href="#" onclick="openDetail(\'' + esc(s.storno_id) + '\');return false" style="color:inherit;font-weight:600">Stornobeleg öffnen</a>';
+  if (s.original_id) html += ' <a href="#" onclick="openDetail(\'' + esc(s.original_id) + '\');return false" style="color:inherit;font-weight:600">Gutschrift öffnen</a>';
+  if (s.versendet && s.versendet.length) html += '<div style="margin-top:4px;font-size:12px">Zuletzt gesendet: ' + esc(String(s.versendet[s.versendet.length - 1].am || '').replace('T', ' ').slice(0, 16)) + ' · ' + esc(s.versendet[s.versendet.length - 1].text || '') + '</div>';
+  if (s.kosit && s.art !== 'unsicher' && s.art !== 'kunde') html += '<div style="margin-top:4px;font-size:12px">' + gv_KositText(s.kosit) + '</div>';
+  html += '</div>';
+  var sub = gv_El('det-sub'); if (sub) sub.insertAdjacentHTML('afterend', html);
+  if (s.art === 'unsicher') {
+    gv_Knopf('Ist eine Gutschrift meines Kunden', function () { gvEinstufen('kunde'); }, 'background:var(--warning-bg);color:var(--warning);border-color:var(--warning)');
+    gv_Knopf('Ist eine Eingangsrechnung', function () { gvEinstufen('eingang'); });
+    return;
+  }
+  // Die allgemeinen Knöpfe passen für diese Belege nicht (Texte für Kundenrechnungen, falsches PDF-Layout, eigener Storno-Weg)
+  gv_Aus(['btn-send', 'btn-storno', 'btn-gutschrift', 'btn-zugferd', 'btn-kosit']);
+  gv_Knopf('&#128196; PDF ansehen', function () { window.open(API + s.pdf_url, '_blank'); });
+  if (s.art === 'kunde') {
+    gv_Aus(['btn-approve', 'btn-reject']);
+    if (a.anerkennen) gv_Knopf('&#10003; Anerkennen', gvAnerkennen, 'background:var(--success-bg);color:var(--success);border-color:var(--success)');
+    if (a.widersprechen) gv_Knopf('&#10007; Widersprechen', gvWiderspruch, 'background:var(--danger-bg);color:var(--danger);border-color:var(--danger)');
+    return;
+  }
+  if (a.senden) gv_Knopf('&#9993; An Lieferanten senden', gvSendenDialog, 'background:var(--accent);color:#fff;border-color:var(--accent);font-weight:500');
+  if (a.storno) gv_Knopf('&#10007; Gutschrift stornieren', gvStorno, 'background:var(--danger-bg);color:var(--danger);border-color:var(--danger)');
+}
+async function gv_Post(pfad, daten) {
+  try { var r = await fetch(API + pfad, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(daten || {}) }); var j = await r.json(); j._status = r.status; j._ok = r.ok; return j; }
+  catch (e) { return { _ok: false, _status: 0, error: 'Keine Verbindung zum Server.' }; }
+}
+async function gvStorno() {
+  var s = gv_Stand; if (!s || s.art !== 'eigen') return false;
+  var grund = prompt('Gutschrift ' + s.nummer + ' stornieren – bitte den Grund angeben (er steht auf dem Stornobeleg):');
+  if (grund === null) return false;
+  grund = grund.trim(); if (grund.length < 3) { toast('Bitte einen Grund angeben.', 'error'); return false; }
+  if (!confirm('Gutschrift ' + s.nummer + ' an ' + (s.partner || '') + ' über ' + gv_Geld(s.brutto) + ' wirklich stornieren?\n\nEs entsteht der Stornobeleg ST-' + s.nummer + '. Die Gutschrift verliert ihre Wirkung als Rechnung. Das lässt sich nicht zurücknehmen.')) return false;
+  var j = await gv_Post('/api/gutschriftverfahren/' + encodeURIComponent(s.id) + '/storno', { grund: grund });
+  if (j._status === 409 && j.bezahlt) {
+    if (!confirm(j.error + '\n\nTrotzdem stornieren?')) return false;
+    j = await gv_Post('/api/gutschriftverfahren/' + encodeURIComponent(s.id) + '/storno', { grund: grund, trotz_zahlung: true });
+  }
+  if (!j._ok || !j.storniert) { toast(j.error || 'Nicht storniert.', 'error'); return false; }
+  toast('Storniert: ' + j.nummer + '. ' + (j.hinweis || ''));
+  openDetail(j.id);
+  return true;
+}
+async function gvAnerkennen() {
+  var s = gv_Stand; if (!s || s.art !== 'kunde') return false;
+  if (!confirm('Gutschrift ' + s.nummer + ' Ihres Kunden ' + (s.partner || '') + ' über ' + gv_Geld(s.brutto) + ' anerkennen?\n\nSie gilt dann als geprüfte Abrechnung über Ihre Leistung (Forderung an den Kunden).')) return false;
+  var j = await gv_Post('/api/gutschriftverfahren/' + encodeURIComponent(s.id) + '/anerkennen', {});
+  if (!j._ok) { toast(j.error || 'Nicht möglich.', 'error'); return false; }
+  toast('Gutschrift ' + s.nummer + ' anerkannt'); openDetail(s.id); return true;
+}
+async function gvWiderspruch() {
+  var s = gv_Stand; if (!s || s.art !== 'kunde') return false;
+  var grund = prompt('Der Gutschrift ' + s.nummer + ' widersprechen – bitte den Grund angeben:');
+  if (grund === null) return false;
+  grund = grund.trim(); if (grund.length < 3) { toast('Bitte einen Grund angeben.', 'error'); return false; }
+  if (!confirm('Der Gutschrift ' + s.nummer + ' Ihres Kunden ' + (s.partner || '') + ' wirklich widersprechen?\n\nSie verliert damit die Wirkung einer Rechnung. Das Programm vermerkt den Widerspruch nur – bitte teilen Sie ihn dem Kunden selbst mit und stellen Sie eine eigene Rechnung.')) return false;
+  var j = await gv_Post('/api/gutschriftverfahren/' + encodeURIComponent(s.id) + '/widerspruch', { grund: grund });
+  if (!j._ok) { toast(j.error || 'Nicht möglich.', 'error'); return false; }
+  toast(j.hinweis || 'Widerspruch vermerkt'); openDetail(s.id); return true;
+}
+async function gvEinstufen(als) {
+  var s = gv_Stand; if (!s || s.art !== 'unsicher') return false;
+  var frage = als === 'kunde' ? 'Beleg ' + s.nummer + ' als Gutschrift Ihres Kunden führen?\n\nEr wird dann als Ausgang (Forderung) geführt, nicht mehr als Eingangsrechnung.'
+    : 'Beleg ' + s.nummer + ' ist eine Eingangsrechnung eines Lieferanten?\n\nDer Hinweis wird dann entfernt.';
+  if (!confirm(frage)) return false;
+  var j = await gv_Post('/api/gutschriftverfahren/' + encodeURIComponent(s.id) + '/einstufen', { als: als });
+  if (!j._ok) { toast(j.error || 'Nicht möglich.', 'error'); return false; }
+  toast('Entscheidung gespeichert'); openDetail(s.id); return true;
+}
+function gvSendenZu() { var m = gv_El('gv-senden-fenster'); if (m) m.remove(); }
+async function gvSendenDialog() {
+  var s = gv_Stand; if (!s || (s.art !== 'eigen' && s.art !== 'storno')) return false;
+  var v;
+  try { var r = await fetch(API + '/api/gutschriftverfahren/' + encodeURIComponent(s.id) + '/senden'); v = await r.json(); if (!r.ok) { toast(v.error || 'Nicht möglich.', 'error'); return false; } }
+  catch (e) { toast('Keine Verbindung zum Server.', 'error'); return false; }
+  gvSendenZu();
+  var d = document.createElement('div'); d.id = 'gv-senden-fenster';
+  d.setAttribute('style', 'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;display:flex;align-items:center;justify-content:center');
+  d.innerHTML = '<div style="background:var(--bg2,#fff);border-radius:12px;padding:24px;width:640px;max-width:94vw;max-height:90vh;overflow-y:auto">'
+    + '<h3 style="margin:0 0 4px">' + (v.art === 'storno' ? 'Stornobeleg' : 'Gutschrift') + ' ' + esc(v.nummer) + ' an den Lieferanten senden</h3>'
+    + '<div style="font-size:12px;color:var(--text2);margin-bottom:12px">Anhänge: ' + esc((v.anhaenge || []).join(', ')) + ' · <a href="' + API + esc(v.pdf_url) + '" target="_blank" style="color:var(--accent)">PDF ansehen</a>' + (v.absender ? ' · Absender ' + esc(v.absender) : '') + '</div>'
+    + (v.gesperrt ? '<div style="padding:8px 12px;background:var(--danger-bg);color:var(--danger);border-radius:8px;font-size:13px;margin-bottom:10px">' + esc(v.gesperrt) + '</div>' : '')
+    + (v.testmodus ? '<div style="padding:8px 12px;background:var(--warning-bg);color:var(--warning);border-radius:8px;font-size:13px;margin-bottom:10px">Es ist kein Postausgang eingerichtet (Einstellungen → E-Mail). Die Nachricht wird nur abgelegt, nicht zugestellt.</div>' : '')
+    + (v.bisher && v.bisher.length ? '<div style="font-size:12px;color:var(--text2);margin-bottom:10px">Bereits gesendet: ' + v.bisher.map(function (b) { return esc(String(b.am || '').replace('T', ' ').slice(0, 16)); }).join(', ') + '</div>' : '')
+    + '<div class="form-row"><label>Empfänger (E-Mail des Lieferanten)</label><input id="gv-senden-an" type="email" value="' + esc(v.empfaenger) + '"></div>'
+    + '<div class="form-row"><label>Betreff</label><input id="gv-senden-betreff" value="' + esc(v.betreff).replace(/"/g, '&quot;') + '"></div>'
+    + '<div class="form-row"><label>Text</label><textarea id="gv-senden-text" rows="14" style="width:100%;font-family:inherit;font-size:13px"></textarea></div>'
+    + '<div style="display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:10px"><span id="gv-senden-stand" style="font-size:13px;color:var(--text2);margin-right:auto"></span>'
+    + '<button onclick="gvSendenZu()">Abbrechen</button><button class="primary" id="gv-senden-knopf" onclick="gvSendenAb()"' + (v.gesperrt || !v.versand_moeglich ? ' disabled' : '') + '>Senden</button></div></div>';
+  document.body.appendChild(d);
+  gv_El('gv-senden-text').value = v.text || '';
+  return true;
+}
+async function gvSendenAb() {
+  var s = gv_Stand, stand = gv_El('gv-senden-stand'); if (!s) return false;
+  var an = gv_El('gv-senden-an').value.trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(an)) { stand.textContent = 'Bitte eine gültige E-Mail-Adresse angeben.'; return false; }
+  if (!confirm((s.art === 'storno' ? 'Stornobeleg ' : 'Gutschrift ') + s.nummer + ' für ' + (s.partner || 'den Lieferanten') + '\njetzt an ' + an + ' senden?')) return false;
+  gv_El('gv-senden-knopf').disabled = true; stand.textContent = 'Wird gesendet …';
+  var j = await gv_Post('/api/gutschriftverfahren/' + encodeURIComponent(s.id) + '/senden', { empfaenger: an, betreff: gv_El('gv-senden-betreff').value, text: gv_El('gv-senden-text').value });
+  if (!j._ok || !j.gesendet) { stand.textContent = j.error || 'Nicht gesendet.'; gv_El('gv-senden-knopf').disabled = false; return false; }
+  gvSendenZu();
+  toast(j.testmodus ? 'Kein Postausgang eingerichtet – die Nachricht an ' + j.empfaenger + ' wurde nur abgelegt.' : 'Gesendet an ' + j.empfaenger, j.testmodus ? 'error' : 'success');
+  openDetail(s.id);
+  return true;
+}
 (function () { if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', gvLaden); else gvLaden(); })();
 
 /* ── Gestaltung der Belege (24.11.2026) ── */
@@ -5045,6 +5365,8 @@ async function loadMandantSettings() {
     { const ku = document.getElementById('s-mandant-kleinunternehmer'); if (ku) ku.checked = !!m.kleinunternehmer;
       const ci = document.getElementById('s-mandant-companyid'); if (ci) ci.value = m.company_id || '';
       const si = document.getElementById('s-mandant-sellerid'); if (si) si.value = m.seller_id || ''; }
+    { const li = document.getElementById('s-mandant-legal'); if (li) li.value = m.legal_info || '';
+      const l2 = document.getElementById('s-mandant-line2'); if (l2) l2.value = m.address_line_2 || ''; }
     document.getElementById('s-mandant-street').value = m.street || '';
     document.getElementById('s-mandant-plz').value = m.post_code || '';
     document.getElementById('s-mandant-city').value = m.city || '';
@@ -5071,7 +5393,7 @@ async function resetAllData() {
     toast('Alle Rechnungsdaten geloescht');
     loadDashboard();
   } else {
-    document.getElementById('reset-result').innerHTML = '<span style="color:var(--danger)">Fehler beim Loeschen</span>';
+    document.getElementById('reset-result').innerHTML = '<span style="color:var(--danger)">Fehler beim Löschen</span>';
   }
 }
 function zahlkontoMarkieren(an) {
@@ -5099,6 +5421,8 @@ async function saveMandantSettings() {
     kleinunternehmer: !!(document.getElementById('s-mandant-kleinunternehmer') || {}).checked,
     company_id: (document.getElementById('s-mandant-companyid') || {}).value || '',
     seller_id: (document.getElementById('s-mandant-sellerid') || {}).value || '',
+    legal_info: (document.getElementById('s-mandant-legal') || {}).value || '',
+    address_line_2: (document.getElementById('s-mandant-line2') || {}).value || '',
     street: document.getElementById('s-mandant-street').value,
     post_code: document.getElementById('s-mandant-plz').value,
     city: document.getElementById('s-mandant-city').value,
@@ -5473,9 +5797,10 @@ async function selectBuyer(idx) {
   _set('c-buyer-salutation', (b.name && b.contact_name) ? (b.contact_salutation || '') : (b.salutation || b.contact_salutation || ''));
   _set('c-buyer-contact', b.contact_name);
   _set('c-buyer-vat', b.vat_id);
+  if (typeof r2aKundeGewaehlt === 'function') r2aKundeGewaehlt(b);
   // Privatperson: Buyer Reference automatisch setzen, falls leer
   if (b.is_private && !b.reference) {
-    document.getElementById('c-buyer-ref').value = 'PRIV-' + b.id;
+    document.getElementById('c-buyer-ref').value = b.id;      // Kundennummer aus dem Kundenstamm (bis 25.11.2026: 'PRIV-' + ID)
   }
   { const _nf = document.getElementById('c-number-name'); if (_nf) _nf.dataset.manuell = ''; }
   document.getElementById('buyer-save-result').innerHTML = `<span style="color:var(--text2)">ID: ${b.id}${b.is_private?' · <span style="color:var(--info)">Privatperson</span>':''}</span>`;
@@ -6629,6 +6954,8 @@ function renderStepPositions(key) {
         '</select></div>';
     }
 
+    // Steuerfall an der Rechnungsstufe (25.11.2026): alle Fälle, nicht nur Kleinunternehmer über das Häkchen der Stammdaten
+    if (key === 'invoice' && typeof r2aStepSteuerfallHtml === 'function') closingHtml += r2aStepSteuerfallHtml(step, readonly);
     // Skonto am Angebot und an der Rechnung; Verkäufer des Vorgangs am Angebot (16.11.2026)
     if ((key === 'customer_quote' || key === 'invoice') && window._ms2 && window._ms2.skonto) {
       const cqS = (_currentTxn.steps||{}).customer_quote || {};
@@ -7241,6 +7568,8 @@ async function saveTxnStepPositions() {
   { const sp = document.getElementById('step-skonto-percent'), st = document.getElementById('step-skonto-days'), sv = document.getElementById('step-verkaeufer');
     if (sp && !sp.disabled) { saveData.skonto_percent = sp.value === '' ? 0 : Number(sp.value); saveData.skonto_days = (st && st.value !== '') ? Number(st.value) : 0; }
     if (sv && !sv.disabled) saveData.verkaeufer = Number(sv.value) === 2 ? 2 : 1; }
+  { const sf = document.getElementById('step-steuerfall');
+    if (sf && !sf.disabled) { saveData.steuerfall = sf.value; saveData.steuerbefreiung_grund = ((document.getElementById('step-steuergrund') || {}).value || '').trim(); } }
   const res = await fetch(API+'/api/transactions/'+_currentTxn.id+'/steps/'+_currentStepKey, {
     method:'PUT', headers:{'Content-Type':'application/json'},
     body:JSON.stringify(saveData)
@@ -11505,5 +11834,435 @@ document.getElementById('dep-end').value = new Date(Date.now()+7*86400000).toISO
 })();
 
 </script><!--/knopf-rueckmeldung-->
+<!-- ═══ Zusatzangaben der Rechnung (Paket B, 25.11.2026) ═══════════════════════════════════════════════════
+     Land des Kunden, Lieferadresse, Lastschrift, Zahlungsempfänger, Anhänge, weitere Bezüge.
+     Die Vorlagen unten werden beim Laden an ihre Stelle gesetzt (Rechnung erstellen, Einstellungen → Stammdaten,
+     Rechnungsansicht); das Skript hängt sich an die vorhandenen Funktionen, ohne sie zu ändern.
+     Server: rechnungszusatz.py (Routen /api/zusatz/info, /api/invoices/<id>/zusatz, …/anhaenge). -->
+<template id="zusatz-vorlage-land">
+  <div class="form-row-2" id="zusatz-land-zeile" style="margin-top:8px">
+    <div class="form-row"><label title="BT-55: Land der Kundenanschrift. Für Kunden im Ausland steht das Land in der E-Rechnung und in der Anschrift des PDF.">Land</label>
+      <select id="c-buyer-country" onchange="zusatzLandGeaendert()"><option value="DE">Deutschland</option></select></div>
+    <div class="form-row"><label>&nbsp;</label><div id="c-buyer-vat-hinweis" style="font-size:12px;color:var(--text2);padding-top:6px"></div></div>
+  </div>
+</template>
+
+<template id="zusatz-vorlage-kunde">
+  <div id="zusatz-kunde-zeile" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+    <div class="form-row"><label title="BT-55: Land der Kundenanschrift">Land</label><select id="cust-country" onchange="zusatzKundenLand()"><option value="DE">Deutschland</option></select></div>
+    <div class="form-row"><label title="BT-91: Konto des Kunden für die SEPA-Lastschrift">IBAN (für Lastschrift)</label><input id="cust-iban" maxlength="42" placeholder="nur bei Lastschrift"></div>
+    <div class="form-row"><label title="BT-89">Mandatsreferenz</label><input id="cust-mandat" maxlength="60" placeholder="nur bei Lastschrift"></div>
+  </div>
+</template>
+
+<template id="zusatz-vorlage-maske">
+  <div id="zusatz-block" style="margin-top:12px">
+    <div style="font-size:11px;text-transform:uppercase;color:var(--text2);letter-spacing:.5px;margin-bottom:6px">Weitere Angaben <span style="text-transform:none;letter-spacing:0">(optional — nur ausfüllen, was Ihr Kunde braucht)</span></div>
+
+    <details class="zusatz-klappe" id="zusatz-k-liefer">
+      <summary>Lieferadresse <span class="zusatz-marke" id="zusatz-m-liefer"></span></summary>
+      <div class="zusatz-inhalt">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Nur ausfüllen, wenn die Ware oder Leistung an eine andere Anschrift ging als die Rechnung. Bei einer innergemeinschaftlichen Lieferung oder Ausfuhr gilt ohne Angabe die Anschrift des Kunden als Lieferort.</div>
+        <div style="display:grid;grid-template-columns:2fr 2fr;gap:12px">
+          <div class="form-row"><label title="BT-70">Name des Empfängers</label><input id="c-liefer-name" maxlength="150" placeholder="z. B. Lager Wien" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-75">Straße und Hausnummer</label><input id="c-liefer-strasse" maxlength="150" oninput="zusatzMarken()"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 2fr 2fr;gap:12px">
+          <div class="form-row"><label title="BT-78">PLZ</label><input id="c-liefer-plz" maxlength="20" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-77">Ort</label><input id="c-liefer-ort" maxlength="100" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-80">Land</label><select id="c-liefer-land" onchange="zusatzMarken()"><option value="">wie Kunde</option></select></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="zusatz-klappe" id="zusatz-k-zahlung">
+      <summary>Lastschrift und Zahlungsempfänger <span class="zusatz-marke" id="zusatz-m-zahlung"></span></summary>
+      <div class="zusatz-inhalt">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div class="form-row"><label title="BT-81">Zahlungsart</label>
+            <select id="c-payment-code" onchange="zusatzZahlungsart()">
+              <option value="58" selected>Überweisung</option>
+              <option value="59">SEPA-Lastschrift</option>
+            </select></div>
+          <div class="form-row zusatz-ls" style="display:none"><label title="BT-89">Mandatsreferenz</label><input id="c-mandat" maxlength="60" placeholder="z. B. M-2026-0042" oninput="zusatzMarken()"></div>
+          <div class="form-row zusatz-ls" style="display:none"><label title="BT-91: das Konto Ihres Kunden, von dem eingezogen wird">IBAN des Kunden</label><input id="c-buyer-iban" maxlength="42" placeholder="DE…" oninput="zusatzMarken()"></div>
+        </div>
+        <div class="zusatz-ls" id="c-lastschrift-hinweis" style="display:none;font-size:12px;color:var(--text2);margin:-2px 0 10px"></div>
+        <div style="font-size:12px;color:var(--text2);margin:6px 0 8px">Abweichender Zahlungsempfänger – nur wenn ein anderer das Geld erhält, z. B. ein Factoring-Unternehmen bei abgetretener Forderung:</div>
+        <div style="display:grid;grid-template-columns:2fr 1fr 1fr;gap:12px">
+          <div class="form-row"><label title="BT-59">Name des Zahlungsempfängers</label><input id="c-payee-name" maxlength="150" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-60">Kennung</label><input id="c-payee-id" maxlength="60" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-61">Registernummer</label><input id="c-payee-register" maxlength="60" placeholder="z. B. HRB 1234" oninput="zusatzMarken()"></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="zusatz-klappe" id="zusatz-k-anhang">
+      <summary>Anhänge zur E-Rechnung <span class="zusatz-marke" id="zusatz-m-anhang"></span></summary>
+      <div class="zusatz-inhalt">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Rechnungsbegründende Unterlagen (Aufmaß, Stundennachweis, Lieferschein) werden in die E-Rechnung eingebettet. Erlaubt sind PDF, PNG, JPEG, CSV, XLSX und ODS, zusammen höchstens <span id="zusatz-anhang-grenze">5</span> MB.</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input type="file" id="c-anhang-datei" multiple accept=".pdf,.png,.jpg,.jpeg,.csv,.xlsx,.ods" onchange="zusatzAnhangGewaehlt(this)" style="font-size:12px">
+          <span id="c-anhang-summe" style="font-size:12px;color:var(--text2)"></span>
+        </div>
+        <div id="c-anhang-liste" style="margin-top:8px"></div>
+        <div style="display:grid;grid-template-columns:2fr 2fr;gap:12px;margin-top:8px">
+          <div class="form-row"><label title="BT-124: statt einer Datei ein Verweis auf eine Unterlage im Internet">Verweis auf eine Unterlage (Internetadresse)</label><input id="c-anhang-url" maxlength="300" placeholder="https://…" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-123">Beschreibung des Verweises</label><input id="c-anhang-url-text" maxlength="200" placeholder="z. B. Aufmaßblatt im Kundenportal"></div>
+        </div>
+      </div>
+    </details>
+
+    <details class="zusatz-klappe" id="zusatz-k-bezuege">
+      <summary>Weitere Bezüge <span class="zusatz-marke" id="zusatz-m-bezuege"></span></summary>
+      <div class="zusatz-inhalt">
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+          <div class="form-row"><label title="BT-14: Ihre eigene Auftragsnummer">Unsere Auftragsnummer</label><input id="c-bez-sales_order_reference" maxlength="100" placeholder="z. B. AB-2026-0031" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-16: Nummer des Lieferscheins oder der Versandanzeige">Lieferschein / Versandanzeige</label><input id="c-bez-despatch_advice_reference" maxlength="100" placeholder="z. B. LS-2026-0102" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-15: Nummer der Wareneingangsmeldung Ihres Kunden">Wareneingangsmeldung</label><input id="c-bez-receiving_advice_reference" maxlength="100" placeholder="z. B. WE-4711" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-17: Nummer der Ausschreibung oder des Loses">Ausschreibung / Los</label><input id="c-bez-tender_reference" maxlength="100" placeholder="z. B. VG-2026-17 Los 2" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-18: Kennung des abgerechneten Objekts, z. B. Zählernummer">Objektkennung</label><input id="c-bez-object_identifier" maxlength="100" placeholder="z. B. Zählernummer" oninput="zusatzMarken()"></div>
+          <div class="form-row"><label title="BT-19: Kostenstelle oder Buchungsreferenz Ihres Kunden">Kostenstelle / Buchungsreferenz</label><input id="c-bez-buyer_accounting_reference" maxlength="100" placeholder="z. B. 4711" oninput="zusatzMarken()"></div>
+        </div>
+      </div>
+    </details>
+  </div>
+</template>
+
+<template id="zusatz-vorlage-stamm">
+  <div id="zusatz-stamm" style="margin-top:10px;padding:10px 12px;border:1px solid var(--border,#ddd);border-radius:8px">
+    <div style="font-weight:600;margin-bottom:2px">Lastschrift und Zahlungsempfänger</div>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:8px">Nur nötig, wenn Sie per SEPA-Lastschrift einziehen oder Ihre Forderungen abgetreten haben. Ein hier eingetragener Zahlungsempfänger ist bei jeder neuen Rechnung vorbelegt.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px">
+      <div class="form-row"><label title="BT-90: Ihre Gläubiger-Identifikationsnummer der Bundesbank">Gläubiger-ID (SEPA)</label><input id="s-glaeubiger-id" maxlength="40" placeholder="DE98ZZZ09999999999"></div>
+      <div class="form-row"><label title="BT-59">Zahlungsempfänger – Name</label><input id="s-payee-name" maxlength="150" placeholder="leer = Sie selbst"></div>
+      <div class="form-row"><label title="BT-60">Zahlungsempfänger – Kennung</label><input id="s-payee-id" maxlength="60"></div>
+      <div class="form-row"><label title="BT-61">Zahlungsempfänger – Registernummer</label><input id="s-payee-register" maxlength="60"></div>
+    </div>
+  </div>
+</template>
+
+<template id="zusatz-vorlage-detail">
+  <div class="card" id="zusatz-detail" style="display:none"><div class="card-header"><h3>Weitere Angaben</h3></div>
+    <div class="card-body" id="zusatz-detail-inhalt" style="font-size:13px"></div></div>
+</template>
+
+<style>
+.zusatz-klappe{border:1px solid var(--border,#ddd);border-radius:var(--radius,8px);margin-bottom:6px;background:var(--bg2,transparent)}
+.zusatz-klappe>summary{cursor:pointer;padding:8px 12px;font-size:13px;font-weight:500;user-select:none}
+.zusatz-klappe .zusatz-inhalt{padding:4px 12px 10px}
+.zusatz-marke{font-weight:400;font-size:12px;color:var(--success,#16a34a);margin-left:8px}
+.zusatz-tab{display:grid;grid-template-columns:200px 1fr;gap:4px 12px}
+.zusatz-tab>span:nth-child(odd){color:var(--text2)}
+</style>
+
+<script>
+/* Zusatzangaben der Rechnung (Paket B, 25.11.2026) */
+(function () {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const wert = id => (($(id) || {}).value || '').trim();
+  const setze = (id, v) => { const el = $(id); if (el) el.value = v || ''; };
+  const sicher = t => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const BEZUEGE = ['sales_order_reference', 'despatch_advice_reference', 'receiving_advice_reference', 'tender_reference', 'object_identifier', 'buyer_accounting_reference'];
+  const EU = ['AT','BE','BG','CY','CZ','DE','DK','EE','ES','FI','FR','GR','HR','HU','IE','IT','LT','LU','LV','MT','NL','PL','PT','RO','SE','SI','SK'];
+  let info = { laender: [{code:'DE',name:'Deutschland',eu:true},{code:'AT',name:'Österreich',eu:true},{code:'FR',name:'Frankreich',eu:true},{code:'NL',name:'Niederlande',eu:true},{code:'CH',name:'Schweiz',eu:false},{code:'GB',name:'Vereinigtes Königreich',eu:false},{code:'NO',name:'Norwegen',eu:false},{code:'US',name:'Vereinigte Staaten',eu:false},{code:'TR',name:'Türkei',eu:false}],
+               anhang: {max_gesamt: 5 * 1024 * 1024, max_anzahl: 20}, stammdaten: {} };
+  let anhaenge = [];          // {datei: File, beschreibung: ''}
+  window._zusatzAnhaenge = () => anhaenge;
+
+  // ── Aufbau: Vorlagen an ihre Stelle setzen ──
+  function einsetzen(vorlage, ziel, wo) {
+    const v = $(vorlage);
+    if (!v || !ziel) return false;
+    ziel.insertAdjacentElement(wo, v.content.firstElementChild.cloneNode(true));
+    return true;
+  }
+  function laenderFuellen() {
+    const l = info.laender.slice().sort((a, b) => (a.code === 'DE' ? -1 : b.code === 'DE' ? 1 : a.name.localeCompare(b.name, 'de')));
+    const opt = l.map(x => `<option value="${x.code}">${sicher(x.name)} (${x.code})</option>`).join('');
+    ['c-buyer-country', 'cust-country'].forEach(i => { const k = $(i); if (k) { const alt = k.value || 'DE'; k.innerHTML = opt; k.value = alt; } });
+    const d = $('c-liefer-land'); if (d) { const alt = d.value; d.innerHTML = '<option value="">wie Kunde</option>' + opt; d.value = alt; }
+  }
+  function aufbauen() {
+    const vat = $('c-buyer-vat');
+    if (vat && !$('zusatz-land-zeile')) einsetzen('zusatz-vorlage-land', vat.closest('.form-row-2') || vat.parentElement, 'afterend');
+    const cv = $('cust-vat');
+    if (cv && !$('zusatz-kunde-zeile')) { let z = cv.closest('.form-row'); z = (z && z.parentElement && z.parentElement.id !== 'page-customers' && /grid/.test(z.parentElement.getAttribute('style') || '')) ? z.parentElement : z; einsetzen('zusatz-vorlage-kunde', z || cv, 'afterend'); }
+    const note = $('c-note');
+    if (note && !$('zusatz-block')) einsetzen('zusatz-vorlage-maske', note.parentElement, 'beforebegin');
+    const sp = document.querySelector('button[onclick="saveMandantSettings()"]');
+    if (sp && !$('zusatz-stamm')) einsetzen('zusatz-vorlage-stamm', sp.parentElement, 'beforebegin');
+    const dp = $('det-payment');
+    if (dp && !$('zusatz-detail')) einsetzen('zusatz-vorlage-detail', dp.closest('.card') || dp.parentElement, 'afterend');
+    laenderFuellen();
+    if (vat) vat.addEventListener('input', ustidHinweis);
+  }
+
+  // ── Steuerfälle mit Auslandsbezug: Hinweistexte der Auswahl „Steuerfall“ ──
+  try {
+    Object.assign(STEUERFALL_TEXTE, {
+      ig_lieferung: ['Zusatz zum Pflichthinweis (optional)', 'z. B. § 4 Nr. 1 Buchst. b in Verbindung mit § 6a UStG',
+        'Innergemeinschaftliche Lieferung: Warenlieferung an ein Unternehmen in einem anderen EU-Land. Ihre USt-ID und die USt-ID des Kunden sind Pflicht, ebenso das Lieferdatum. Lieferort ist die Anschrift des Kunden oder die Lieferadresse unter „Weitere Angaben“. Auf der Rechnung steht „Steuerfreie innergemeinschaftliche Lieferung“.'],
+      ausfuhr: ['Zusatz zum Pflichthinweis (optional)', 'z. B. § 4 Nr. 1 Buchst. a in Verbindung mit § 6 UStG',
+        'Ausfuhrlieferung: Warenlieferung in ein Land außerhalb der EU. Ihre USt-ID ist Pflicht. Auf der Rechnung steht „Steuerfreie Ausfuhrlieferung“.'],
+      nicht_steuerbar: ['Zusatz zum Hinweis (optional)', 'z. B. Leistungsort nach § 3a Abs. 2 UStG',
+        'Nicht steuerbar: Leistung an einen Unternehmer außerhalb der EU, deren Ort im Ausland liegt. Die E-Rechnung trägt dann keine USt-ID; Ihre Steuernummer muss in den Stammdaten stehen. Für Leistungen an EU-Unternehmer wählen Sie „Steuerschuld des Kunden“.'],
+    });
+  } catch (e) {}
+
+  // ── Land und USt-ID ──
+  function ustidHinweis() {
+    const el = $('c-buyer-vat-hinweis'); if (!el) return;
+    const u = wert('c-buyer-vat').replace(/[\s.\-]/g, '').toUpperCase(), land = wert('c-buyer-country') || 'DE';
+    const soll = land === 'GR' ? 'EL' : land;
+    let t = '', farbe = 'var(--text2)';
+    if (u && !/^[A-Z]{2}/.test(u)) { t = 'Die USt-ID beginnt mit dem Länderkennzeichen, z. B. ' + soll + '…'; farbe = 'var(--warning)'; }
+    else if (u && (EU.indexOf(land) >= 0) && u.slice(0, 2) !== soll) { t = 'Die USt-ID beginnt mit ' + u.slice(0, 2) + ', das Land ist aber ' + land + ' (' + soll + '…).'; farbe = 'var(--warning)'; }
+    else if (land !== 'DE') { t = EU.indexOf(land) >= 0 ? 'EU-Ausland: Warenlieferung an Unternehmen = „Innergemeinschaftliche Lieferung“, Leistung = „Steuerschuld des Kunden“.' : 'Drittland: Warenlieferung = „Ausfuhrlieferung“, Leistung an Unternehmer = „Nicht steuerbar“.'; }
+    el.textContent = t; el.style.color = farbe;
+  }
+  // Postleitzahl: im Ausland nicht auf fünf Ziffern begrenzt
+  function plzFrei(feld, land) { const el = $(feld); if (!el) return; if (el.dataset.zusatzMax === undefined) el.dataset.zusatzMax = el.getAttribute('maxlength') || ''; if (land && land !== 'DE') el.removeAttribute('maxlength'); else if (el.dataset.zusatzMax) el.setAttribute('maxlength', el.dataset.zusatzMax); }
+  window.zusatzLandGeaendert = function () { plzFrei('c-buyer-plz', wert('c-buyer-country')); ustidHinweis(); zusatzMarken(); };
+  window.zusatzKundenLand = function () { plzFrei('cust-plz', wert('cust-country')); };
+
+  // ── Zahlungsart ──
+  window.zusatzZahlungsart = function () {
+    const ls = wert('c-payment-code') === '59';
+    document.querySelectorAll('#zusatz-block .zusatz-ls').forEach(e => { e.style.display = ls ? '' : 'none'; });
+    const h = $('c-lastschrift-hinweis');
+    if (h) {
+      const gid = (info.stammdaten || {}).glaeubiger_id || '';
+      h.innerHTML = gid ? 'Gläubiger-ID: <b>' + sicher(gid) + '</b>. Auf der Rechnung steht, dass der Betrag eingezogen wird; ein Überweisungskonto und der GiroCode entfallen.'
+                        : '<span style="color:var(--warning)">Es ist noch keine Gläubiger-ID hinterlegt (Einstellungen → Stammdaten). Ohne sie wird die Rechnung nicht angelegt.</span>';
+    }
+    const terms = $('c-terms'); if (terms) terms.title = ls ? 'Bei Lastschrift bestimmt das Zahlungsziel den Tag des Einzugs' : '';
+    zusatzMarken();
+  };
+
+  // ── Markierungen an den zugeklappten Bereichen ──
+  window.zusatzMarken = function () {
+    const m = (id, t) => { const el = $(id); if (el) el.textContent = t ? '· ' + t : ''; };
+    const lief = ['c-liefer-name', 'c-liefer-strasse', 'c-liefer-plz', 'c-liefer-ort'].some(i => wert(i)) || wert('c-liefer-land');
+    m('zusatz-m-liefer', lief ? 'ausgefüllt' : '');
+    const z = [];
+    if (wert('c-payment-code') === '59') z.push('Lastschrift');
+    if (wert('c-payee-name')) z.push('Zahlungsempfänger: ' + wert('c-payee-name'));
+    m('zusatz-m-zahlung', z.join(', '));
+    const n = anhaenge.length + (wert('c-anhang-url') ? 1 : 0);
+    m('zusatz-m-anhang', n ? n + (n === 1 ? ' Anhang' : ' Anhänge') : '');
+    const b = BEZUEGE.filter(f => wert('c-bez-' + f)).length;
+    m('zusatz-m-bezuege', b ? b + (b === 1 ? ' Angabe' : ' Angaben') : '');
+  };
+
+  // ── Anhänge in der Maske ──
+  const mb = n => (n / 1048576).toFixed(n < 1048576 ? 2 : 1).replace('.', ',') + ' MB';
+  function anhangListe() {
+    const el = $('c-anhang-liste'); if (!el) return;
+    const summe = anhaenge.reduce((s, a) => s + a.datei.size, 0);
+    el.innerHTML = anhaenge.map((a, i) => `<div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;font-size:12px">
+      <span style="flex:0 0 240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${sicher(a.datei.name)}">${sicher(a.datei.name)} <span style="color:var(--text2)">(${mb(a.datei.size)})</span></span>
+      <input style="flex:1;font-size:12px;padding:3px 6px" maxlength="200" placeholder="Beschreibung, z. B. Stundennachweis Oktober" value="${sicher(a.beschreibung)}" oninput="zusatzAnhangText(${i}, this.value)">
+      <button type="button" style="font-size:11px;padding:2px 8px" onclick="zusatzAnhangWeg(${i})">Entfernen</button></div>`).join('');
+    const s = $('c-anhang-summe');
+    if (s) { s.textContent = anhaenge.length ? 'zusammen ' + mb(summe) + ' von ' + mb(info.anhang.max_gesamt) : ''; s.style.color = summe > info.anhang.max_gesamt ? 'var(--danger)' : 'var(--text2)'; }
+    zusatzMarken();
+  }
+  window.zusatzAnhangGewaehlt = function (eingabe) {
+    for (const f of Array.from(eingabe.files || [])) {
+      if (!/\.(pdf|png|jpe?g|csv|xlsx|ods)$/i.test(f.name)) { toast('„' + f.name + '“: Erlaubt sind PDF, PNG, JPEG, CSV, XLSX und ODS.', 'error'); continue; }
+      if (anhaenge.some(a => a.datei.name.toLowerCase() === f.name.toLowerCase())) { toast('„' + f.name + '“ ist schon angehängt.', 'error'); continue; }
+      const summe = anhaenge.reduce((s, a) => s + a.datei.size, 0) + f.size;
+      if (summe > info.anhang.max_gesamt) { toast('Die Anhänge wären zusammen ' + mb(summe) + ' groß – möglich sind ' + mb(info.anhang.max_gesamt) + '.', 'error'); continue; }
+      anhaenge.push({datei: f, beschreibung: ''});
+    }
+    eingabe.value = '';
+    anhangListe();
+  };
+  window.zusatzAnhangText = function (i, t) { if (anhaenge[i]) anhaenge[i].beschreibung = t; };
+  window.zusatzAnhangWeg = function (i) { anhaenge.splice(i, 1); anhangListe(); };
+  window.zusatzAnhaengeLeeren = function () { anhaenge = []; setze('c-anhang-url', ''); setze('c-anhang-url-text', ''); anhangListe(); };
+  function base64(datei) {
+    return new Promise((ok, nein) => {
+      const r = new FileReader();
+      r.onload = () => ok(String(r.result).split(',', 2)[1] || '');
+      r.onerror = () => nein(new Error('Die Datei „' + datei.name + '“ konnte nicht gelesen werden.'));
+      r.readAsDataURL(datei);
+    });
+  }
+
+  // ── Anfrage „Rechnung erstellen“ ergänzen (Aufruf aus _generateInvoiceInner) ──
+  window.zusatzInAnfrage = async function (body) {
+    if (!$('zusatz-block')) return body;
+    body.buyer_country = wert('c-buyer-country') || 'DE';
+    body.payment_code = wert('c-payment-code') || '58';
+    if (body.payment_code === '59') { body.mandate_reference = wert('c-mandat'); body.debited_account = wert('c-buyer-iban'); }
+    const lief = {name: wert('c-liefer-name'), street: wert('c-liefer-strasse'), post_code: wert('c-liefer-plz'), city: wert('c-liefer-ort'), country: wert('c-liefer-land')};
+    if (Object.values(lief).some(Boolean)) body.delivery = lief;
+    body.payee_name = wert('c-payee-name'); body.payee_id = wert('c-payee-id'); body.payee_company_id = wert('c-payee-register');
+    BEZUEGE.forEach(f => { if (wert('c-bez-' + f)) body[f] = wert('c-bez-' + f); });
+    const liste = [];
+    for (const a of anhaenge) liste.push({filename: a.datei.name, mime: a.datei.type || '', description: a.beschreibung, data_base64: await base64(a.datei)});
+    if (wert('c-anhang-url')) liste.push({url: wert('c-anhang-url'), description: wert('c-anhang-url-text')});
+    if (liste.length) body.attachments = liste;
+    return body;
+  };
+
+  // ── an vorhandene Funktionen hängen ──
+  function danach(name, fn) {
+    const alt = window[name];
+    if (typeof alt !== 'function') return;
+    window[name] = async function () { const r = await alt.apply(this, arguments); try { await fn.apply(this, arguments); } catch (e) { console.warn('zusatz', name, e); } return r; };
+  }
+  // Kunde gewählt: Land, IBAN und Mandat aus dem Kundenstamm
+  danach('selectBuyer', async function (idx) {
+    if (idx === '' || idx === undefined) return;
+    const b = (typeof _buyers !== 'undefined' && _buyers[parseInt(idx)]) || null;
+    const k = (b && typeof _buyerFrisch === 'function' && (await _buyerFrisch(b.id))) || b; if (!k) return;
+    setze('c-buyer-country', k.country || 'DE'); if ($('c-buyer-country') && !$('c-buyer-country').value) $('c-buyer-country').value = 'DE';
+    setze('c-buyer-iban', k.iban); setze('c-mandat', k.mandate_reference);
+    zusatzLandGeaendert();
+  });
+  async function kundeZusatzSpeichern(id) {
+    if (!id || !$('c-buyer-country')) return;
+    const koerper = {country: wert('c-buyer-country') || 'DE'};
+    if (wert('c-buyer-iban') || wert('c-payment-code') === '59') koerper.iban = wert('c-buyer-iban');
+    if (wert('c-mandat') || wert('c-payment-code') === '59') koerper.mandate_reference = wert('c-mandat');
+    const r = await fetch(API + '/api/buyers/' + encodeURIComponent(id) + '/zusatz', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(koerper)}).then(x => x.json()).catch(() => ({}));
+    if (r.error) toast(r.error, 'error');
+  }
+  danach('updateSelectedBuyer', async function () { if (typeof _selectedBuyerId !== 'undefined') await kundeZusatzSpeichern(_selectedBuyerId); });
+  danach('saveBuyerFromForm', async function () {
+    const land = wert('c-buyer-country') || 'DE';
+    if (land === 'DE' && !wert('c-buyer-iban') && !wert('c-mandat')) return;
+    const l = await fetch(API + '/api/buyers').then(r => r.json()).catch(() => ({buyers: []}));
+    const name = wert('c-buyer-name'), kontakt = wert('c-buyer-contact'), mail = wert('c-buyer-email').toLowerCase();
+    const k = (l.buyers || []).filter(b => (b.name || '') === name && (b.contact_name || '') === kontakt && (b.email || '').toLowerCase() === mail).pop();
+    if (k) await kundeZusatzSpeichern(k.id);
+  });
+  // Seite „Kunden“: Land, IBAN, Mandat am Kundendatensatz
+  danach('editCustomer', async function (id) {
+    const b = (typeof _customers !== 'undefined' && _customers.find(x => x.id === id)) || null; if (!b || !$('cust-country')) return;
+    setze('cust-country', b.country || 'DE'); if (!$('cust-country').value) $('cust-country').value = 'DE';
+    setze('cust-iban', b.iban); setze('cust-mandat', b.mandate_reference); zusatzKundenLand();
+  });
+  danach('clearCustForm', async function () { if ($('cust-country')) { $('cust-country').value = 'DE'; setze('cust-iban', ''); setze('cust-mandat', ''); zusatzKundenLand(); } });
+  (function () {
+    const alt = window.saveCustomer;
+    if (typeof alt !== 'function') return;
+    window.saveCustomer = async function () {
+      const vorher = {id: wert('cust-edit-id'), name: wert('cust-name'), kontakt: wert('cust-contact'), mail: wert('cust-email').toLowerCase(),
+                      country: wert('cust-country') || 'DE', iban: wert('cust-iban'), mandate_reference: wert('cust-mandat')};
+      const r = await alt.apply(this, arguments);
+      try {
+        if (!$('zusatz-kunde-zeile') || !vorher.name) return r;
+        if (!vorher.id && vorher.country === 'DE' && !vorher.iban && !vorher.mandate_reference) return r;
+        let id = vorher.id;
+        if (!id) {
+          const l = await fetch(API + '/api/buyers').then(x => x.json()).catch(() => ({buyers: []}));
+          const k = (l.buyers || []).filter(b => (b.name || '').trim() === vorher.name && (b.contact_name || '').trim() === vorher.kontakt && (b.email || '').toLowerCase() === vorher.mail).pop();
+          id = k && k.id;
+        }
+        if (!id) return r;
+        const z = await fetch(API + '/api/buyers/' + encodeURIComponent(id) + '/zusatz', {method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({country: vorher.country, iban: vorher.iban, mandate_reference: vorher.mandate_reference})}).then(x => x.json()).catch(() => ({}));
+        if (z.error) toast(z.error, 'error'); else if (typeof loadCustomers === 'function') await loadCustomers();
+      } catch (e) { console.warn('zusatz saveCustomer', e); }
+      return r;
+    };
+  })();
+  // Stammdaten
+  danach('loadMandantSettings', async function () {
+    const m = await fetch(API + '/api/zusatz/info').then(r => r.json()).catch(() => null);
+    if (!m || !m.stammdaten) return;
+    info = Object.assign(info, m); laenderFuellen();
+    setze('s-glaeubiger-id', m.stammdaten.glaeubiger_id); setze('s-payee-name', m.stammdaten.zahlungsempfaenger_name);
+    setze('s-payee-id', m.stammdaten.zahlungsempfaenger_kennung); setze('s-payee-register', m.stammdaten.zahlungsempfaenger_register);
+  });
+  danach('saveMandantSettings', async function () {
+    if (!$('zusatz-stamm')) return;
+    const r = await fetch(API + '/api/mandant/zusatz', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({
+      glaeubiger_id: wert('s-glaeubiger-id'), zahlungsempfaenger_name: wert('s-payee-name'),
+      zahlungsempfaenger_kennung: wert('s-payee-id'), zahlungsempfaenger_register: wert('s-payee-register')})}).then(x => x.json()).catch(() => ({}));
+    if (r.saved) { info.stammdaten = r.stammdaten; vorbelegen(true); } else toast('Lastschrift/Zahlungsempfänger nicht gespeichert', 'error');
+  });
+  // Maske: Zahlungsempfänger aus den Stammdaten vorbelegen
+  function vorbelegen(erzwingen) {
+    const s = info.stammdaten || {};
+    if (erzwingen || (!wert('c-payee-name') && !wert('c-payee-id') && !wert('c-payee-register'))) {
+      setze('c-payee-name', s.zahlungsempfaenger_name); setze('c-payee-id', s.zahlungsempfaenger_kennung); setze('c-payee-register', s.zahlungsempfaenger_register);
+    }
+    const g = $('zusatz-anhang-grenze'); if (g) g.textContent = Math.round(info.anhang.max_gesamt / 1048576);
+    zusatzZahlungsart();
+  }
+  // Nach dem Anlegen: Anhänge der Maske leeren, damit sie nicht an der nächsten Rechnung hängen
+  danach('_generateInvoiceInner', async function (download) {
+    const el = $('c-result');
+    if (download && el && el.innerHTML && el.innerHTML.indexOf('danger-bg') < 0) zusatzAnhaengeLeeren();
+  });
+
+  // ── Rechnungsansicht ──
+  async function detailZeigen(id) {
+    const karte = $('zusatz-detail'), el = $('zusatz-detail-inhalt');
+    if (!karte || !el) return;
+    karte.style.display = 'none';
+    const z = await fetch(API + '/api/invoices/' + encodeURIComponent(id) + '/zusatz').then(r => r.json()).catch(() => null);
+    if (!z || z.error) return;
+    if (typeof currentInvoiceId !== 'undefined' && currentInvoiceId !== id) return;
+    const zeilen = [];
+    const z2 = (name, inhalt) => zeilen.push(`<span>${sicher(name)}</span><span>${inhalt}</span>`);
+    if (z.steuerfall && z.steuerfall !== 'regel') z2('Steuerfall', sicher(z.steuerfall_name) + (z.steuerhinweis ? ' – ' + sicher(z.steuerhinweis) : ''));
+    if (z.kaeufer_land && z.kaeufer_land !== z.verkaeufer_land) z2('Land des Käufers', sicher(z.kaeufer_land_name) + ' (' + sicher(z.kaeufer_land) + ')');
+    if (z.verkaeufer_land && z.verkaeufer_land !== 'DE') z2('Land des Verkäufers', sicher(z.verkaeufer_land_name) + ' (' + sicher(z.verkaeufer_land) + ')');
+    if (z.lieferung) z2('Lieferadresse', [z.lieferung.name].concat(z.lieferung.zeilen || []).filter(Boolean).map(sicher).join(', ') + (z.lieferung.kennung ? ' · Kennung ' + sicher(z.lieferung.kennung) : ''));
+    if (z.zahlungsempfaenger) z2('Zahlungsempfänger', sicher(z.zahlungsempfaenger.name) + (z.zahlungsempfaenger.kennung ? ' · Kennung ' + sicher(z.zahlungsempfaenger.kennung) : '') + (z.zahlungsempfaenger.register ? ' · Register ' + sicher(z.zahlungsempfaenger.register) : ''));
+    if (z.zahlungsart === '59' || z.lastschrift) {
+      const l = z.lastschrift || {};
+      z2('Zahlung', (z.zahlungsart === '59' ? 'SEPA-Lastschrift' : 'Lastschriftdaten') + ' · Mandat ' + sicher(l.mandat || '—') + ' · Gläubiger-ID ' + sicher(l.glaeubiger_id || '—') + ' · IBAN des Zahlungspflichtigen ' + sicher(l.iban || '—'));
+    }
+    (z.bezuege || []).forEach(b => z2(b.name, sicher(b.wert)));
+    if (z.steuerwaehrung) z2('Steuer in Buchungswährung', (z.steuerbetrag_buchungswaehrung == null ? '—' : fmt(z.steuerbetrag_buchungswaehrung)) + ' ' + sicher(z.steuerwaehrung));
+    if (z.rundung) z2('Rundungsbetrag', fmt(z.rundung) + ' EUR (im Zahlbetrag enthalten)');
+    let anh = '';
+    if ((z.anhaenge || []).length || z.anhang_aenderbar) {
+      anh = '<div style="margin-top:10px;font-weight:600">Anhänge der E-Rechnung</div>' + ((z.anhaenge || []).map(a => `<div style="display:flex;gap:10px;align-items:center;margin-top:4px">
+        <span>${a.ladbar ? `<a href="${API}/api/invoices/${encodeURIComponent(id)}/anhaenge/${a.nr}" download>${sicher(a.datei)}</a>` : (a.url ? `<a href="${sicher(a.url)}" target="_blank" rel="noopener noreferrer">${sicher(a.url)}</a>` : sicher(a.datei || a.kennung))}</span>
+        <span style="color:var(--text2)">${sicher(a.beschreibung || a.kennung || '')}${a.groesse ? ' · ' + mb(a.groesse) : ''}${a.ladbar && a.url ? ' · Verweis: ' + sicher(a.url) : ''}${a.zulaessig ? '' : ' · <span style="color:var(--warning)">Dateiart nicht zulässig</span>'}</span>
+        ${z.anhang_aenderbar ? `<button type="button" style="font-size:11px;padding:2px 8px" onclick="zusatzDetailAnhangWeg(${a.nr})">Entfernen</button>` : ''}</div>`).join('') || '<div style="color:var(--text2);margin-top:4px">Keine.</div>');
+      if (z.anhang_aenderbar) anh += `<div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <input type="file" id="zusatz-detail-datei" accept=".pdf,.png,.jpg,.jpeg,.csv,.xlsx,.ods" style="font-size:12px">
+        <input id="zusatz-detail-text" maxlength="200" placeholder="Beschreibung" style="font-size:12px;padding:3px 6px;width:240px">
+        <button type="button" style="font-size:12px" onclick="zusatzDetailAnhangNeu()">Anhängen</button>
+        <span style="font-size:12px;color:var(--text2)">nur vor der Freigabe · zusammen höchstens ${z.anhang_grenze_mb} MB</span></div>`;
+    }
+    if (!zeilen.length && !anh) return;
+    el.innerHTML = (zeilen.length ? '<div class="zusatz-tab">' + zeilen.join('') + '</div>' : '') + anh;
+    karte.style.display = '';
+  }
+  danach('openDetail', async function (id) { await detailZeigen(id); });
+  window.zusatzDetailAnhangNeu = async function () {
+    const f = ($('zusatz-detail-datei') || {}).files; if (!f || !f[0]) { toast('Bitte eine Datei wählen', 'error'); return; }
+    const form = new FormData(); form.append('datei', f[0]); form.append('beschreibung', wert('zusatz-detail-text'));
+    const r = await fetch(API + '/api/invoices/' + encodeURIComponent(currentInvoiceId) + '/anhaenge', {method: 'POST', body: form}).then(x => x.json()).catch(() => ({error: 'Hochladen fehlgeschlagen'}));
+    if (r.error) { toast(r.error, 'error'); return; }
+    toast('Anhang hinzugefügt'); detailZeigen(currentInvoiceId);
+  };
+  window.zusatzDetailAnhangWeg = async function (nr) {
+    if (!confirm('Diesen Anhang von der Rechnung entfernen?')) return;
+    const r = await fetch(API + '/api/invoices/' + encodeURIComponent(currentInvoiceId) + '/anhaenge/' + nr, {method: 'DELETE'}).then(x => x.json()).catch(() => ({error: 'Entfernen fehlgeschlagen'}));
+    if (r.error) { toast(r.error, 'error'); return; }
+    toast('Anhang entfernt'); detailZeigen(currentInvoiceId);
+  };
+
+  // ── Start ──
+  async function start() {
+    aufbauen();
+    try { const m = await fetch(API + '/api/zusatz/info').then(r => r.ok ? r.json() : null); if (m && m.laender) { info = Object.assign(info, m); laenderFuellen(); } } catch (e) {}
+    vorbelegen(false); ustidHinweis(); anhangListe();
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+})();
+</script>
 </body>
 </html>

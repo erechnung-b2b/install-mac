@@ -86,6 +86,9 @@ class InvoiceStore:
             "steuerfall": getattr(inv, "steuerfall", "regel") or "regel",
             "steuerbefreiung_grund": getattr(inv, "steuerbefreiung_grund", "") or "",
             "steuerbefreiung_code": getattr(inv, "steuerbefreiung_code", "") or "",
+            # Zusatzangaben (Lieferort, Zahlungsempfänger, weitere Bezüge, Anhänge als Verweis auf die Datei im
+            # Archivordner, Steuerwährung, Rundung); None bei Belegen ohne solche Angaben
+            "zusatz": __import__("rechnungszusatz").speichern(inv, self.data_dir),
             # Summen aus der eingelesenen Datei (BT-106 … BT-115), nur bei Eingangsbelegen
             "_datei_summen": ({k: str(v) for k, v in getattr(inv, "_datei_summen").items()}
                               if isinstance(getattr(inv, "_datei_summen", None), dict) and getattr(inv, "_datei_summen")
@@ -128,6 +131,7 @@ class InvoiceStore:
                 "registration_name": getattr(inv.seller, "registration_name", "") or "",
                 "company_id": getattr(inv.seller, "company_id", "") or "",        # BT-30
                 "seller_id": getattr(inv.seller, "seller_id", "") or "",          # BT-29
+                "legal_info": getattr(inv.seller, "legal_info", "") or "",        # BT-33
             },
             "buyer": {
                 "name": inv.buyer.name,
@@ -142,6 +146,7 @@ class InvoiceStore:
                 "vat_id": inv.buyer.vat_id,
                 "buyer_reference": inv.buyer.buyer_reference,
                 "company_id": getattr(inv.buyer, "company_id", "") or "",         # BT-47
+                "buyer_id": getattr(inv.buyer, "buyer_id", "") or "",             # BT-46
                 "contact_name": (inv.buyer.contact.name if getattr(inv.buyer, "contact", None) else ""),       # BT-56
                 "contact_phone": (inv.buyer.contact.telephone if getattr(inv.buyer, "contact", None) else ""), # BT-57
                 "contact_email": (inv.buyer.contact.email if getattr(inv.buyer, "contact", None) else ""),     # BT-58
@@ -158,6 +163,9 @@ class InvoiceStore:
                 "debited_account": inv.payment.debited_account,
                 "skonto_percent": getattr(inv.payment, "skonto_percent", 0) or 0,
                 "skonto_days": getattr(inv.payment, "skonto_days", 0) or 0,
+                "skonto2_percent": getattr(inv.payment, "skonto2_percent", 0) or 0,
+                "skonto2_days": getattr(inv.payment, "skonto2_days", 0) or 0,
+                "remittance": getattr(inv.payment, "remittance", "") or "",       # BT-83
             },
             "lines": [{
                 "line_id": l.line_id,
@@ -254,6 +262,7 @@ class InvoiceStore:
                 registration_name=s.get("registration_name", "") or "",
                 company_id=s.get("company_id", "") or "",
                 seller_id=s.get("seller_id", "") or "",
+                legal_info=s.get("legal_info", "") or "",
                 contact=Contact(s.get("contact_name", ""), s.get("contact_phone", ""),
                                 s.get("contact_email", "")),
             ),
@@ -272,6 +281,7 @@ class InvoiceStore:
                 buyer_reference=b.get("buyer_reference", ""),
                 vat_id=b.get("vat_id", ""),
                 company_id=b.get("company_id", "") or "",
+                buyer_id=b.get("buyer_id", "") or "",
                 contact=(Contact(b.get("contact_name", "") or "", b.get("contact_phone", "") or "",
                                  b.get("contact_email", "") or "")
                          if (b.get("contact_name") or b.get("contact_phone") or b.get("contact_email")) else None),
@@ -288,6 +298,9 @@ class InvoiceStore:
                 debited_account=p.get("debited_account", ""),
                 skonto_percent=float(p.get("skonto_percent") or 0),
                 skonto_days=int(p.get("skonto_days") or 0),
+                skonto2_percent=float(p.get("skonto2_percent") or 0),
+                skonto2_days=int(p.get("skonto2_days") or 0),
+                remittance=p.get("remittance", "") or "",
             ),
         )
 
@@ -304,6 +317,8 @@ class InvoiceStore:
                 inv._datei_summen = {k: Decimal(str(v)) for k, v in d["_datei_summen"].items()}
             except Exception:
                 pass
+
+        __import__("rechnungszusatz").laden(inv, d.get("zusatz"), self.data_dir)
 
         # Positionen
         for ld in d.get("lines", []):

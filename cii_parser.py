@@ -125,6 +125,7 @@ def _verkaeufer(agr) -> Seller:
         tax_registration_id=fc,
         registration_name=_t(p, "ram:SpecifiedLegalOrganization/ram:TradingBusinessName") or _t(p, "ram:Name"),
         seller_id=_t(p, "ram:ID") or _t(p, "ram:GlobalID"),      # BT-29
+        legal_info=_t(p, "ram:Description"),                     # BT-33
         company_id=_t(p, "ram:SpecifiedLegalOrganization/ram:ID"),
     )
 
@@ -143,6 +144,7 @@ def _kaeufer(agr) -> Buyer:
         electronic_address_scheme=scheme,
         vat_id=vat,
         company_id=_t(p, "ram:SpecifiedLegalOrganization/ram:ID"),
+        buyer_id=_t(p, "ram:ID") or _t(p, "ram:GlobalID"),      # BT-46
         contact=kontakt if (kontakt.name or kontakt.email or kontakt.telephone) else None,
     )
 
@@ -240,6 +242,7 @@ def parse_cii(xml_bytes: bytes, source_file: str = "") -> Invoice:
             pay.due_date = _datum(pt, "ram:DueDateDateTime")
             pay.mandate_reference = _t(pt, "ram:DirectDebitMandateID")
         pay.creditor_id = _t(st, "ram:CreditorReferenceID")
+        pay.remittance = _t(st, "ram:PaymentReference")      # BT-83 Verwendungszweck
         inv.period_start = _datum(st, "ram:BillingSpecifiedPeriod/ram:StartDateTime")
         inv.period_end = _datum(st, "ram:BillingSpecifiedPeriod/ram:EndDateTime")
         for ac in st.findall("ram:SpecifiedTradeAllowanceCharge", NS):
@@ -273,6 +276,22 @@ def parse_cii(xml_bytes: bytes, source_file: str = "") -> Invoice:
                     except InvalidOperation:
                         pass
         inv._datei_summen = _summen
+    # Skonto: #SKONTO#-Zeilen der XRechnung, sonst die strukturierte Angabe von ZUGFeRD (Prozent + Frist in Tagen)
+    _sk_weitere = []
+    for _pt in (st.findall("ram:SpecifiedTradePaymentTerms", NS) if st is not None else []):
+        _dt_el = _pt.find("ram:ApplicableTradePaymentDiscountTerms", NS)
+        if _dt_el is None:
+            continue
+        _proz = _d(_dt_el, "ram:CalculationPercent")
+        _frist = _dt_el.find("ram:BasisPeriodMeasure", NS)
+        try:
+            _tage = int(Decimal((_frist.text or "").strip())) if _frist is not None and (_frist.get("unitCode") or "DAY") == "DAY" else 0
+        except (InvalidOperation, ValueError):
+            _tage = 0
+        if _proz and _tage:
+            _sk_weitere.append((float(_proz), _tage))
+    from models import skonto_einlesen as _skonto_einlesen
+    _skonto_einlesen(pay, _sk_weitere)
     inv.payment = pay
 
     for li in (tx.findall("ram:IncludedSupplyChainTradeLineItem", NS) if tx is not None else []):
@@ -281,6 +300,9 @@ def parse_cii(xml_bytes: bytes, source_file: str = "") -> Invoice:
     from models import steuerfall_ableiten
     if inv.lines:
         inv.steuerfall = steuerfall_ableiten([l.tax_category for l in inv.lines], inv.steuerbefreiung_grund)
+
+    # Zusatzangaben: Lieferort, Zahlungsempfänger, Anhänge, weitere Bezüge, Steuerwährung, Rundung
+    __import__("rechnungszusatz").cii_lesen(root, inv)
 
     gid = ""
     try:

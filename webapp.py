@@ -1140,6 +1140,7 @@ def api_mandant_settings_get():
 def api_mandant_next_number():
     """Gibt die naechste freie Rechnungsnummer als Vorschau zurueck (ohne hochzuzaehlen).
     ?type=381 liefert die naechste Gutschriftsnummer."""
+    # Rechnungskorrektur (384) ist eine Rechnung mit den berichtigten Werten: RE-Kreis, kein eigener Kreis
     if request.args.get("type") == "381":
         return _json({"number": _next_gutschrift_number(advance=False)})
     number = _next_invoice_number(advance=False)
@@ -1169,6 +1170,10 @@ def api_mandant_settings_save():
     for _k in ("seller_id", "company_id"):
         if _k in data:
             settings[_k] = " ".join(str(data.get(_k) or "").split())[:60]
+    # Rechtsangaben des Verkäufers BT-33 (Geschäftsführer, Registergericht …) und zweite Adresszeile BT-36
+    for _k, _n in (("legal_info", 300), ("address_line_2", 100)):
+        if _k in data:
+            settings[_k] = " ".join(str(data.get(_k) or "").split())[:_n]
     # Zweiter Verkäufer: Zusatz unter dem Firmennamen; leer = kein zweiter Verkäufer
     if "verkaeufer2_zusatz" in data:
         _zus = " ".join(str(data.get("verkaeufer2_zusatz") or "").split())[:80]
@@ -1744,7 +1749,8 @@ def api_buyers_update(buyer_id):
         if b.get("id") == buyer_id:
             for key in ["name", "street", "house_number", "post_code", "city", "email",
                         "phone", "reference", "vat_id", "salutation", "contact_name",
-                        "contact_salutation", "quelle"]:
+                        "contact_salutation", "quelle",
+                        "address_line_2", "company_id"]:      # BT-51 Adresszusatz, BT-47 Registernummer (25.11.2026)
                 if key in data:
                     b[key] = data[key].strip() if isinstance(data[key], str) else data[key]
             if "is_private" in data:
@@ -3576,7 +3582,7 @@ def _abschlag_registrieren(tid, txn, p):
                             house_number=buyer_data.get("house_number", ""),
                             city=buyer_data.get("city", ""),
                             post_code=buyer_data.get("post_code", "")),
-            electronic_address=buyer_data.get("email", "") or "buyer@example.com",
+            electronic_address=_kaeufer_email_pflicht(buyer_data),      # fehlt sie: Fehler mit Klartext statt Platzhalter
             electronic_address_scheme="EM",
             buyer_reference=buyer_data.get("reference", ""),
             vat_id=buyer_data.get("vat_id", ""),
@@ -3591,8 +3597,9 @@ def _abschlag_registrieren(tid, txn, p):
         unit_price=netto, line_net_amount=netto,
         tax_rate=Decimal(str(_steuersatz(p.get("tax_rate")))),
     ))
+    __import__("rechnungszusatz").kunde_in_beleg(inv, buyer_data)      # Land des Käufers (BT-55)
 
-    _steuerfall_vorgabe_vorgang(inv)
+    _steuerfall_vorgabe_vorgang(inv, (txn.get("steps") or {}).get("invoice"))
     report = validate_invoice(inv)
     xml_bytes = generate_and_serialize(inv)
     inv._direction = "AUSGANG"
@@ -4321,6 +4328,10 @@ def _txn_invoice_registrieren(tid, txn, data=None):
     if not buyer_data:
         buyer_data = {"name": txn.get("buyer_name", ""), "street": "", "post_code": "", "city": "", "email": "", "reference": ""}
 
+    # Die E-Rechnung verlangt die elektronische Adresse des Käufers (BT-49). Fehlt sie, bricht der Weg hier ab —
+    # vor der Nummernvergabe, damit keine Rechnungsnummer verbraucht wird (25.11.2026, vorher „buyer@example.com“).
+    _kaeufer_email_pflicht(buyer_data)
+
     # Rechnungsnummer
     number = inv_step.get("reference", "")
     if not number:
@@ -4374,7 +4385,7 @@ def _txn_invoice_registrieren(tid, txn, data=None):
                 city=buyer_data.get("city", ""),
                 post_code=buyer_data.get("post_code", ""),
             ),
-            electronic_address=buyer_data.get("email", "") or "buyer@example.com",
+            electronic_address=_kaeufer_email_pflicht(buyer_data),      # fehlt sie: Fehler mit Klartext statt Platzhalter
             electronic_address_scheme="EM",
             buyer_reference=buyer_data.get("reference", ""),
             vat_id=buyer_data.get("vat_id", ""),
@@ -4425,8 +4436,9 @@ def _txn_invoice_registrieren(tid, txn, data=None):
     if any(v.invoice_number == inv.invoice_number for v in invoices.values()):
         raise ValueError(f"Rechnungsnummer {inv.invoice_number} existiert bereits.")
 
-    _steuerfall_vorgabe_vorgang(inv)
+    _steuerfall_vorgabe_vorgang(inv, inv_step)
     # Validieren + XML erzeugen
+    __import__("rechnungszusatz").kunde_in_beleg(inv, buyer_data)      # Land des Käufers (BT-55)
     report = validate_invoice(inv)
     xml_bytes = generate_and_serialize(inv)
     inv._direction = "AUSGANG"
@@ -6238,7 +6250,9 @@ def api_link_order(inv_id):
 # ── API: Rechnungsliste ───────────────────────────────────────────────
 
 # Rein formale Pflichtfeld-Regeln (fehlende Stammdaten/Steuer-ID) — kein "echter" Fehler.
-_FORMAL_VALIDATION_RULES = {"BR-CO-26", "BR-08", "BR-09", "BR-10", "BR-11"}
+_FORMAL_VALIDATION_RULES = {"BR-CO-26", "BR-08", "BR-09", "BR-10", "BR-11",
+                            # 25.11.2026: richtig benannte Regeln der elektronischen Adresse (vorher BR-DE-16/-16-S/-17)
+                            "PEPPOL-EN16931-R020", "PEPPOL-EN16931-R010", "BR-62"}
 
 
 def _hard_validation_error(report):
@@ -6388,6 +6402,7 @@ def api_invoice_detail(inv_id):
         "contract_reference": inv.contract_reference,
         "project_reference": inv.project_reference,
         "preceding_invoice": inv.preceding_invoice,
+        **_r2a_detail(inv),
         "period_start": inv.period_start.isoformat() if inv.period_start else None,
         "period_end": inv.period_end.isoformat() if inv.period_end else None,
         "seller": {
@@ -10119,6 +10134,9 @@ def api_validate_kosit(inv_id):
 # Maske (Prüfung, XRechnung, Archiv, amtliche Prüfung). Erst prüfen, dann einlesen — nichts wird stillschweigend angelegt.
 # Formatbeschreibung: docs/CSV-Import-Rechnungen.md und /api/invoices/csv/muster.
 _CSV_FELDER = {
+    # Paket B: kunde_land, zahlungsart, mandatsreferenz, kunde_iban, lieferadresse_*, zahlungsempfaenger_*,
+    # auftragsnummer, wareneingang, versandanzeige, ausschreibung, objektkennung, kostenstelle, rundung, anhang_verweis
+    **__import__("rechnungszusatz").CSV_SPALTEN,
     "rechnungsnummer": ("rechnungsnummer", "rechnungsnr", "rechnung", "nummer", "belegnummer", "invoice_number"),
     "rechnungsdatum": ("rechnungsdatum", "datum", "belegdatum", "invoice_date"),
     "leistungsdatum": ("leistungsdatum", "lieferdatum", "delivery_date"),
@@ -10152,6 +10170,15 @@ _CSV_FELDER = {
     "bestellnummer": ("bestellnummer", "bestell_nr", "bestellnr", "order_reference"),
     "vertragsnummer": ("vertragsnummer", "vertrag", "vertragsnr", "contract_reference"),
     "projektnummer": ("projektnummer", "projekt", "projektnr", "project_reference"),
+    # 25.11.2026 (Runde 2): Leistungszeitraum, Rabatt je Position, Verwendungszweck, zweite Skontostufe
+    "leistung_von": ("leistung_von", "leistungszeitraum_von", "zeitraum_von"),
+    "leistung_bis": ("leistung_bis", "leistungszeitraum_bis", "zeitraum_bis"),
+    "rabatt_prozent": ("rabatt_prozent", "rabatt"),
+    "rabatt_betrag": ("rabatt_betrag",),
+    "rabatt_grund": ("rabatt_grund", "rabattgrund"),
+    "verwendungszweck": ("verwendungszweck", "zahlungsreferenz", "remittance"),
+    "skonto2_prozent": ("skonto2_prozent",),
+    "skonto2_tage": ("skonto2_tage",),
 }
 _CSV_PFLICHT = ("rechnungsnummer", "rechnungsdatum", "kunde_name", "kunde_plz", "kunde_ort", "kunde_email", "bezeichnung", "menge", "einzelpreis")
 _CSV_EINHEIT = {"": "C62", "stk": "C62", "stk.": "C62", "st": "C62", "stück": "C62", "stueck": "C62", "c62": "C62",
@@ -10162,13 +10189,42 @@ _CSV_EINHEIT = {"": "C62", "stk": "C62", "stk.": "C62", "st": "C62", "stück": "
                 "kg": "KGM", "kgm": "KGM", "l": "LTR", "ltr": "LTR"}
 _CSV_MUSTER = (
     "rechnungsnummer;rechnungsdatum;leistungsdatum;zahlungsziel_tage;kunde_name;kunde_strasse;kunde_hausnummer;kunde_plz;kunde_ort;"
-    "kunde_email;kunde_referenz;bezeichnung;menge;einheit;einzelpreis;steuersatz;notiz\r\n"
+    "kunde_email;kunde_referenz;bezeichnung;beschreibung;menge;einheit;einzelpreis;steuersatz;leistung_von;leistung_bis;"
+    "rabatt_prozent;rabatt_betrag;verwendungszweck;belegart;bezug_rechnung;notiz\r\n"
     "2026-0815;02.11.2026;31.10.2026;14;Beispiel Wohnbau AG;Beispielallee;20;54321;Beispielstadt;eingang@beispiel-wohnbau.example;"
-    "K-0001;Beratung vor Ort;12;Std;95,00;19;Leistungszeitraum Oktober 2026\r\n"
+    "K-0001;Beratung vor Ort;Termine laut Stundennachweis;12;Std;95,00;19;01.10.2026;31.10.2026;;;;;;Leistungszeitraum Oktober 2026\r\n"
     "2026-0815;02.11.2026;31.10.2026;14;Beispiel Wohnbau AG;Beispielallee;20;54321;Beispielstadt;eingang@beispiel-wohnbau.example;"
-    "K-0001;Dokumentation und Bericht;1;Stk;650,00;19;\r\n"
+    "K-0001;Dokumentation und Bericht;;1;Stk;650,00;19;01.10.2026;31.10.2026;10;;;;;\r\n"
     "2026-0816;03.11.2026;;30;Hausverwaltung Sonnenhof GmbH;Sonnenweg;12;23456;Sonnenstadt;buchhaltung@sonnenhof.example;"
-    "K-0003;Wartung Heizungsanlage, pauschal;1;psch;1.280,00;19;\r\n")
+    "K-0003;Wartung Heizungsanlage, pauschal;;1;psch;1.280,00;19;01.11.2026;30.11.2026;;;Vertrag 4711 November;;;\r\n"
+    "2026-0817;04.11.2026;;30;Hausverwaltung Sonnenhof GmbH;Sonnenweg;12;23456;Sonnenstadt;buchhaltung@sonnenhof.example;"
+    "K-0003;Wartung Heizungsanlage, pauschal (berichtigt);;1;psch;1.180,00;19;01.11.2026;30.11.2026;;;;384;2026-0816;"
+    "Berichtigung der Rechnung 2026-0816\r\n")
+
+
+def _r2a_csv_zeitraum(body: dict) -> None:
+    """Spalten leistung_von/leistung_bis stehen je Zeile (= je Position). Tragen alle Positionen einer Rechnung
+    denselben Zeitraum, wird er zum Rechnungszeitraum (BT-73/BT-74) und steht nicht noch einmal an jeder Position.
+    Bei verschiedenen Zeiträumen behält jede Position ihren (BT-134/BT-135), der Rechnungszeitraum ist die Spanne."""
+    zeilen = [l for l in (body.get("lines") or []) if isinstance(l, dict)]
+    paare = []
+    for l in zeilen:
+        if str(l.get("period_start") or "").strip() or str(l.get("period_end") or "").strip():
+            try:
+                paare.append((_csv_datum(l.get("period_start")), _csv_datum(l.get("period_end"))))
+            except ValueError:
+                return          # nicht lesbar: die Erstellung meldet die Position mit Klartext
+    if not paare:
+        return
+    starts, enden = [a for a, _ in paare if a], [b for _, b in paare if b]
+    if starts:
+        body["period_start"] = min(starts).isoformat()
+    if enden:
+        body["period_end"] = max(enden).isoformat()
+    if len(set(paare)) == 1:
+        for l in zeilen:
+            l.pop("period_start", None)
+            l.pop("period_end", None)
 
 
 def _csv_zahl(t):
@@ -10273,9 +10329,11 @@ def _csv_rechnungen_lesen(roh: bytes):
         _ohne_ust = (sf not in ("", "regel")) or (not sf and bool(ms.get("kleinunternehmer")))
         _satz_vorgabe = Decimal("0") if _ohne_ust else Decimal("19")
         art = wert(z0, "belegart") or "380"
-        art = {"rechnung": "380", "gutschrift": "381"}.get(art.lower(), art)
-        if art not in ("380", "381"):
-            probleme.append(f"Belegart „{art}“ wird nicht eingelesen (380 Rechnung oder 381 Gutschrift)")
+        art = {"rechnung": "380", "gutschrift": "381", "korrektur": "384", "rechnungskorrektur": "384"}.get(art.lower(), art)
+        if art not in ("380", "381", "384"):
+            probleme.append(f"Belegart „{art}“ wird nicht eingelesen (380 Rechnung, 381 Gutschrift oder 384 Rechnungskorrektur)")
+        if art == "384" and not wert(z0, "bezug_rechnung"):
+            probleme.append("Rechnungskorrektur (384): bezug_rechnung fehlt (Nummer der Ursprungsrechnung)")
         lines = []
         for nr, z in gruppen[rn]:
             try:
@@ -10294,10 +10352,13 @@ def _csv_rechnungen_lesen(roh: bytes):
                 probleme.append(f"Zeile {nr}: Einheit „{wert(z, 'einheit')}“ unbekannt")
             lines.append({"name": wert(z, "bezeichnung"), "description": wert(z, "beschreibung"), "quantity": str(menge), "price": str(preis),
                           "net": str((menge * preis).quantize(Decimal("0.01"))), "tax_rate": str(satz if satz is not None else _satz_vorgabe),
-                          "unit": _CSV_EINHEIT.get(einheit, "C62"), "item_id": wert(z, "artikelnummer")})
+                          "unit": _CSV_EINHEIT.get(einheit, "C62"), "item_id": wert(z, "artikelnummer"),
+                          "period_start": wert(z, "leistung_von"), "period_end": wert(z, "leistung_bis"),
+                          "discount_percent": wert(z, "rabatt_prozent"), "discount_amount": wert(z, "rabatt_betrag"),
+                          "discount_reason": wert(z, "rabatt_grund")})
         body = {
             "number": rn, "date": rdat.isoformat() if rdat else "", "delivery_date": ldat.isoformat() if ldat else "",
-            "type": art, "preceding_invoice": wert(z0, "bezug_rechnung") if art == "381" else "",
+            "type": art, "preceding_invoice": wert(z0, "bezug_rechnung") if art in ("381", "384") else "",
             "seller_name": " ".join(str(ms.get("name", "")).split()), "seller_street": ms.get("street", ""),
             "seller_house_number": ms.get("house_number", ""), "seller_city": ms.get("city", ""), "seller_postcode": ms.get("post_code", ""),
             "seller_vat": ms.get("vat_id", ""), "seller_email": ms.get("email", ""), "seller_contact": ms.get("contact_name", ""),
@@ -10311,8 +10372,12 @@ def _csv_rechnungen_lesen(roh: bytes):
             "order_reference": wert(z0, "bestellnummer"), "contract_reference": wert(z0, "vertragsnummer"),
             "project_reference": wert(z0, "projektnummer"),
             "steuerfall": sf, "steuerbefreiung_grund": wert(z0, "steuerbefreiung_grund"),
+            "remittance": wert(z0, "verwendungszweck"),
+            "skonto2_percent": wert(z0, "skonto2_prozent").replace(",", "."), "skonto2_days": wert(z0, "skonto2_tage"),
             "lines": lines, "user": _akt_benutzer() or "csv-import",
         }
+        _r2a_csv_zeitraum(body)
+        __import__("rechnungszusatz").csv_uebernehmen(body, lambda _f, _z=z0: wert(_z, _f), probleme)
         if not lines and not probleme:
             probleme.append("keine Positionen")
         aus.append({"nummer": rn, "zeile": nr0, "kunde": wert(z0, "kunde_name"), "datum": body["date"], "positionen": len(lines),
@@ -10946,7 +11011,7 @@ def _stammdaten_kennung(data, feld: str) -> str:
     return wert[:60]
 
 
-def _steuerfall_vorgabe_vorgang(inv):
+def _steuerfall_vorgabe_vorgang(inv, schritt=None):
     """Vorgangs- und Abschlagsweg bauen ihre Rechnung selbst und kennen keine Auswahl „Steuerfall“. Damit ein
     Kleinunternehmer dort gültige Rechnungen bekommt: Verkäuferkennung/Registernummer aus den Stammdaten; und sind
     die Stammdaten auf „Kleinunternehmer“ gestellt UND tragen alle Positionen 0 %, wird der Beleg zum
@@ -10956,6 +11021,21 @@ def _steuerfall_vorgabe_vorgang(inv):
         for feld in ("seller_id", "company_id"):
             if not getattr(inv.seller, feld, "") and ms.get(feld):
                 setattr(inv.seller, feld, " ".join(str(ms.get(feld)).split())[:60])
+        if not getattr(inv.seller, "legal_info", "") and ms.get("legal_info"):
+            inv.seller.legal_info = " ".join(str(ms.get("legal_info")).split())[:300]          # BT-33
+        if not inv.seller.address.address_line_2 and ms.get("address_line_2"):
+            inv.seller.address.address_line_2 = " ".join(str(ms.get("address_line_2")).split())[:100]   # BT-36
+        # Steuerfall, der an der Rechnungsstufe des Vorgangs gewählt wurde (alle Fälle, nicht nur das Häkchen
+        # „Kleinunternehmer“). Der Steuersatz der Positionen wird nicht stillschweigend geändert: stehen sie nicht
+        # auf 0 %, meldet die Prüfung BR-E-05/BR-AE-05/BR-Z-05 und die Rechnung wird nicht registriert.
+        _sf = (schritt or {}).get("steuerfall") if isinstance(schritt, dict) else ""
+        if str(_sf or "").strip():
+            import models as _m_sf
+            _fall = _m_sf.steuerfall_normalisieren(_sf)
+            if _fall != "regel":
+                inv.steuerfall = _fall
+                inv.steuerbefreiung_grund = " ".join(str((schritt or {}).get("steuerbefreiung_grund") or "").split())
+                inv.steuerfall_anwenden()
         if (ms.get("kleinunternehmer") and (getattr(inv, "steuerfall", "regel") or "regel") == "regel"
                 and inv.lines and all(Decimal(str(l.tax_rate or 0)) == 0 for l in inv.lines)):
             inv.steuerfall = "kleinunternehmer"
@@ -10963,6 +11043,297 @@ def _steuerfall_vorgabe_vorgang(inv):
     except Exception as e:
         print(f"[steuerfall] Vorgabe im Vorgangsweg nicht angewendet: {e}", flush=True)
     return inv
+
+
+# ── BT-Runde 2, Paket A (25.11.2026) ─────────────────────────────────────────────────────────────────────────────────
+def _kaeufer_email_pflicht(buyer_data) -> str:
+    """E-Mail des Käufers (BT-49) für Vorgangs- und Abschlagsrechnungen. Bis 25.11.2026 stand ersatzweise
+    „buyer@example.com“ in der E-Rechnung — eine erfundene Adresse. Jetzt: Fehler mit Klartext, es wird nichts angelegt."""
+    b = buyer_data if isinstance(buyer_data, dict) else {}
+    email = "".join(str(b.get("email") or "").split())
+    if not email:
+        name = " ".join(str(b.get("name") or b.get("contact_name") or "").split()) or "diesen Kunden"
+        raise ValueError(f"Für {name} ist keine E-Mail-Adresse hinterlegt. Die E-Rechnung verlangt die elektronische "
+                         f"Adresse des Käufers (BT-49). Bitte tragen Sie die E-Mail-Adresse im Kundenstamm ein und "
+                         f"erzeugen Sie die Rechnung dann erneut. Es wurde keine Rechnung angelegt.")
+    return email
+
+
+def _r2a_flach(s) -> str:
+    return " ".join(str(s or "").split()).casefold()
+
+
+def _r2a_kunde(data):
+    """Eintrag des Kundenstamms zur Anfrage — nur wenn die Anfrage eine Kunden-ID (buyer_id) trägt UND der Name dazu
+    passt. So landet nie die Kundennummer eines anderen Kunden in der Rechnung, wenn die Maske nach der Auswahl
+    überschrieben wurde."""
+    d = data if isinstance(data, dict) else {}
+    bid = str(d.get("buyer_id") or "").strip()
+    if not bid:
+        return None
+    try:
+        k = next((b for b in _load_buyers() if str(b.get("id") or "") == bid), None)
+    except Exception:
+        return None
+    if not k:
+        return None
+    namen = {_r2a_flach(k.get("name")), _r2a_flach(k.get("contact_name"))} - {""}
+    anfrage = {_r2a_flach(d.get("buyer_name")), _r2a_flach(d.get("buyer_contact_name"))} - {""}
+    return k if (namen & anfrage) else None
+
+
+def _kaeuferreferenz_vorgabe(data, nummer: str) -> str:
+    """Käuferreferenz BT-10 (in der XRechnung Pflicht, BR-DE-15). Reihenfolge:
+      1. die Angabe der Anfrage (Leitweg-ID der Behörde oder Zeichen des Kunden),
+      2. die Kundenreferenz bzw. Kundennummer aus dem Kundenstamm,
+      3. die Rechnungsnummer.
+    Bis 25.11.2026 stand ersatzweise „PRIV-00000“ bzw. „PRIV-<Kunden-ID>“ da. Eine Vorgabe, die wie eine Leitweg-ID
+    aussieht (Ziffern-Bindestrich-…-Prüfziffer), wird nie erzeugt."""
+    d = data if isinstance(data, dict) else {}
+    eigen = str(d.get("buyer_reference") or "").strip()
+    if eigen:
+        return eigen
+    from validator import leitweg_pruefen as _lw
+    k = _r2a_kunde(d) or {}
+    for kandidat in (k.get("reference"), k.get("id")):
+        kandidat = " ".join(str(kandidat or "").split())
+        if kandidat and not kandidat.upper().startswith("PRIV-") and not _lw(kandidat)[0]:
+            return kandidat
+    nummer = str(nummer or "").strip()
+    return ("RE " + nummer) if _lw(nummer)[0] else nummer
+
+
+def _r2a_datum(wert, feld):
+    t = str(wert or "").strip()
+    if not t:
+        return None
+    try:
+        return _csv_datum(t)
+    except ValueError:
+        raise ValueError(f"{feld}: Das Datum „{t}“ ist nicht lesbar (TT.MM.JJJJ oder JJJJ-MM-TT).")
+
+
+def _r2a_stammdaten_text(data, feld, laenge):
+    """Rechtsangaben BT-33 (legal_info) und Adresszusatz BT-36 (address_line_2) des Verkäufers: aus der Anfrage
+    (seller_<feld>), sonst aus den Stammdaten — nicht bei einem fremden Verkäufer (andere USt-ID als die Stammdaten)."""
+    d = data if isinstance(data, dict) else {}
+    eigen = " ".join(str(d.get("seller_" + feld) or "").split())
+    if eigen:
+        return eigen[:laenge]
+    try:
+        ms = _load_mandant_settings() or {}
+    except Exception:
+        return ""
+    wert = " ".join(str(ms.get(feld) or "").split())
+    if not wert:
+        return ""
+    _n = lambda s: "".join(str(s or "").split()).upper()
+    if _n(d.get("seller_vat")) and _n(ms.get("vat_id")) and _n(d.get("seller_vat")) != _n(ms.get("vat_id")):
+        return ""
+    return wert[:laenge]
+
+
+def _r2a_anwenden(inv, data):
+    """Zusatzangaben aus „Rechnung erstellen“, CSV-Import und Schnittstelle auf die fertig gebaute Rechnung legen.
+    Läuft nach dem Aufbau des Belegs und vor steuerfall_anwenden()/Prüfung. Fehlen alle diese Angaben, bleibt der
+    Beleg, wie er war (dieselbe XML wie vor dem 25.11.2026). Eingabefehler: ValueError mit Klartext (Antwort 400).
+
+      period_start, period_end              Rechnungszeitraum BT-73/BT-74
+      remittance                            Verwendungszweck BT-83
+      skonto2_percent, skonto2_days         zweite Skontostufe
+      preceding_invoice (bei type 384)      Bezug der Rechnungskorrektur BT-25/BT-26 (Pflicht)
+      allowances: [{charge, percent | amount, reason, tax_rate}]     Nachlass/Zuschlag auf Belegebene BG-20/BG-21
+      buyer_id, buyer_company_id, buyer_address_line_2               BT-46, BT-47, BT-51
+      seller_legal_info, seller_address_line_2                       BT-33, BT-36 (sonst aus den Stammdaten)
+      je Position: unit, description, period_start, period_end,
+                   discount_percent | discount_amount, discount_reason, discount_charge      BT-130, BT-154, BT-134/135, BG-27/28
+    """
+    import models as _m
+    d = data if isinstance(data, dict) else {}
+    typ = str(inv.invoice_type_code or "380")
+
+    # Rechnungszeitraum (BG-14)
+    von = _r2a_datum(d.get("period_start"), "Rechnungszeitraum von")
+    bis = _r2a_datum(d.get("period_end"), "Rechnungszeitraum bis")
+    if von and bis and bis < von:
+        raise ValueError("Rechnungszeitraum: Das Ende liegt vor dem Beginn.")
+    if von:
+        inv.period_start = von
+    if bis:
+        inv.period_end = bis
+
+    # Verwendungszweck (BT-83)
+    zweck = " ".join(str(d.get("remittance") or d.get("verwendungszweck") or "").split())
+    if zweck:
+        inv.payment.remittance = zweck[:140]
+
+    # Zweite Skontostufe
+    _dg = __import__("doc_generator")
+    sk2 = _dg._skonto_von({"skonto_percent": d.get("skonto2_percent"), "skonto_days": d.get("skonto2_days")})
+    if sk2[0] and typ != "381":
+        if not (inv.payment.skonto_percent and inv.payment.skonto_days):
+            raise ValueError("Skonto: Eine zweite Stufe setzt die erste voraus – bitte zuerst Prozent und Tage der ersten Stufe eintragen.")
+        if sk2[1] == int(inv.payment.skonto_days):
+            raise ValueError("Skonto: Beide Stufen haben dieselbe Frist – bitte zwei verschiedene Fristen eintragen.")
+        inv.payment.skonto2_percent, inv.payment.skonto2_days = sk2
+
+    # Rechnungskorrektur (384): berichtigte Rechnung mit den RICHTIGEN Werten, positiv, im RE-Kreis.
+    # Der Bezug auf die Ursprungsrechnung ist Pflicht (BR-DE-26) und muss auf eine Ausgangsrechnung im System zeigen.
+    if typ == "384":
+        bezug = " ".join(str(d.get("preceding_invoice") or "").split())
+        if not bezug:
+            raise ValueError("Rechnungskorrektur (384): Bitte geben Sie die Nummer der Ursprungsrechnung an, die berichtigt wird.")
+        orig = next((v for v in invoices.values() if v.invoice_number == bezug), None)
+        if orig is None:
+            raise ValueError(f"Rechnungskorrektur (384): Die Ursprungsrechnung {bezug} ist nicht im System. Bitte die Nummer prüfen.")
+        if (getattr(orig, "_direction", "") or "AUSGANG") != "AUSGANG" or str(getattr(orig, "invoice_type_code", "380")) == "381":
+            raise ValueError(f"Rechnungskorrektur (384): {bezug} ist keine Ausgangsrechnung. Berichtigt werden kann nur eine eigene Rechnung.")
+        inv.preceding_invoice = bezug
+        inv.preceding_invoice_date = orig.invoice_date
+
+    # Käufer: Kundennummer (BT-46), Registernummer (BT-47), zweite Adresszeile (BT-51)
+    kunde = _r2a_kunde(d)
+    if kunde:
+        inv.buyer.buyer_id = str(kunde.get("id") or "")[:60]
+    reg = " ".join(str(d.get("buyer_company_id") or (kunde or {}).get("company_id") or "").split())
+    if reg:
+        inv.buyer.company_id = reg[:60]
+    zusatz = " ".join(str(d.get("buyer_address_line_2") or (kunde or {}).get("address_line_2") or "").split())
+    if zusatz:
+        inv.buyer.address.address_line_2 = zusatz[:100]
+
+    # Verkäufer: Rechtsangaben (BT-33), zweite Adresszeile (BT-36)
+    recht = _r2a_stammdaten_text(d, "legal_info", 300)
+    if recht:
+        inv.seller.legal_info = recht
+    zusatz_v = _r2a_stammdaten_text(d, "address_line_2", 100)
+    if zusatz_v:
+        inv.seller.address.address_line_2 = zusatz_v
+
+    # Positionen: Einheit, Leistungszeitraum, Rabatt/Zuschlag
+    zeilen = d.get("lines") if isinstance(d.get("lines"), list) else []
+    for i, (line, ld) in enumerate(zip(inv.lines, zeilen), 1):
+        if not isinstance(ld, dict):
+            continue
+        try:
+            if str(ld.get("unit") or "").strip():
+                line.unit_code = _m.einheit_code(ld.get("unit"))
+            lv = _r2a_datum(ld.get("period_start"), "Leistungszeitraum von")
+            lb = _r2a_datum(ld.get("period_end"), "Leistungszeitraum bis")
+            if lv and lb and lb < lv:
+                raise ValueError("Der Leistungszeitraum endet vor seinem Beginn.")
+            if lv or lb:
+                line.period_start, line.period_end = lv, lb
+            angaben = []
+            if str(ld.get("discount_percent") or "").strip() or str(ld.get("discount_amount") or "").strip():
+                angaben.append({"percent": ld.get("discount_percent"), "amount": ld.get("discount_amount"),
+                                "reason": ld.get("discount_reason"), "charge": ld.get("discount_charge")})
+            if isinstance(ld.get("allowances"), list):
+                angaben.extend(a for a in ld["allowances"] if isinstance(a, dict))
+            basis = (line.quantity * line.unit_price / (line.price_base_quantity or Decimal("1")))
+            neu = []
+            for a in angaben:
+                zus = str(a.get("charge")).strip().lower() in ("1", "true", "ja", "zuschlag")
+                proz = _csv_zahl(str(a.get("percent") if a.get("percent") is not None else "").replace("%", ""))
+                betr = _csv_zahl(a.get("amount"))
+                if proz and betr:
+                    raise ValueError("Rabatt bitte in Prozent ODER als Betrag angeben, nicht beides.")
+                if not proz and not betr:
+                    continue
+                neu.append(_m.nachlass_bauen(basis, prozent=proz, betrag=betr, zuschlag=zus,
+                                             grund=a.get("reason") or ("Zuschlag" if zus else "Rabatt"),
+                                             steuersatz=line.tax_rate, kategorie=line.tax_category))
+            if neu:
+                line.allowances_charges = neu
+                line.line_net_amount = line.compute_net()      # Menge × Preis ± Rabatt/Zuschlag (BR-CO-10 … BT-131)
+                if line.line_net_amount < 0:
+                    raise ValueError("Der Rabatt ist höher als der Betrag der Position.")
+        except (ValueError, ArithmeticError) as e:
+            raise ValueError(f"Position {i}: {e}")
+
+    # Nachlass / Zuschlag auf Belegebene (BG-20 / BG-21). Jeder trägt EINEN Steuersatz (BT-95/BT-96 bzw. BT-102/BT-103).
+    # Ohne Angabe des Satzes wird er auf alle Steuersätze der Positionen verteilt: in Prozent je Satz derselbe
+    # Prozentsatz, als Betrag im Verhältnis der Nettosummen (der letzte Satz trägt den Rundungsrest).
+    roh = d.get("allowances") if isinstance(d.get("allowances"), list) else []
+    if roh:
+        netto = {}
+        for line in inv.lines:
+            netto[line.tax_rate] = netto.get(line.tax_rate, Decimal("0")) + line.line_net_amount
+        if not netto:
+            raise ValueError("Nachlass/Zuschlag: Die Rechnung hat keine Positionen.")
+        for n, a in enumerate(roh, 1):
+            if not isinstance(a, dict):
+                continue
+            try:
+                zus = str(a.get("charge")).strip().lower() in ("1", "true", "ja", "zuschlag")
+                proz = _csv_zahl(str(a.get("percent") if a.get("percent") is not None else "").replace("%", ""))
+                betr = _csv_zahl(a.get("amount"))
+                if proz and betr:
+                    raise ValueError("bitte Prozent ODER Betrag angeben, nicht beides.")
+                if not proz and not betr:
+                    continue
+                grund = a.get("reason") or ("Zuschlag" if zus else "Nachlass")
+                satz_roh = str(a.get("tax_rate") if a.get("tax_rate") is not None else "").replace("%", "").strip()
+                if satz_roh and satz_roh.lower() not in ("alle", "auto"):
+                    satz = Decimal(str(_steuersatz(satz_roh)))
+                    if getattr(inv, "steuerfall", "regel") != "regel":
+                        satz = Decimal("0")
+                    ziel = [next((s for s in netto if s == satz), satz)]
+                else:
+                    ziel = sorted(netto)
+                summe = sum((netto.get(s, Decimal("0")) for s in ziel), Decimal("0"))
+                rest = _m._cent(betr) if betr else None
+                for j, s in enumerate(ziel):
+                    if proz:
+                        ac = _m.nachlass_bauen(netto.get(s, Decimal("0")), prozent=proz, zuschlag=zus, grund=grund, steuersatz=s)
+                    else:
+                        if len(ziel) == 1 or j == len(ziel) - 1:
+                            teil = rest
+                        else:
+                            if not summe:
+                                raise ValueError("ohne Nettobetrag der Positionen nicht aufteilbar.")
+                            teil = _m._cent(_m._cent(betr) * netto.get(s, Decimal("0")) / summe)
+                        rest -= teil
+                        ac = _m.nachlass_bauen(0, betrag=teil, zuschlag=zus, grund=grund, steuersatz=s)
+                    if ac.amount:
+                        inv.allowances_charges.append(ac)
+            except (ValueError, ArithmeticError) as e:
+                raise ValueError(f"Nachlass/Zuschlag {n}: {e}")
+        if inv.tax_exclusive_amount() < 0:
+            raise ValueError("Die Nachlässe übersteigen den Rechnungsbetrag.")
+    return inv
+
+
+def _r2a_detail(inv) -> dict:
+    """Zusatzfelder für das Detail-JSON der Rechnungsansicht: Steuerfall, Bezug, Verwendungszweck, zweite
+    Skontostufe, Zeitraum/Rabatt je Position und die Rechnungskorrekturen (384), die auf diese Rechnung zeigen."""
+    import models as _m
+    fall = getattr(inv, "steuerfall", "regel") or "regel"
+    nr = (inv.invoice_number or "").upper()
+    korrekturen = [{"id": k._id, "number": k.invoice_number, "date": k.invoice_date.isoformat(),
+                    "gross": float(k.tax_inclusive_amount()), "status": k.status}
+                   for k in invoices.values()
+                   if k is not inv and str(getattr(k, "invoice_type_code", "")) == "384"
+                   and (getattr(k, "preceding_invoice", "") or "").upper() == nr and nr]
+    return {
+        "steuerfall": fall,
+        "steuerfall_name": _m.STEUERFAELLE.get(fall, _m.STEUERFAELLE["regel"])["name"],
+        "steuerhinweis": inv.steuerhinweis() if hasattr(inv, "steuerhinweis") else "",
+        "preceding_invoice_date": (inv.preceding_invoice_date.isoformat()
+                                   if getattr(inv, "preceding_invoice_date", None) else None),
+        "remittance": getattr(inv.payment, "remittance", "") or "",
+        "skonto_stufen": [{"percent": p_, "days": t_} for p_, t_ in
+                          (inv.payment.skonto_stufen() if hasattr(inv.payment, "skonto_stufen") else [])],
+        "korrekturen": korrekturen,
+        "buyer_id": getattr(inv.buyer, "buyer_id", "") or "",
+        "positionen_zusatz": [{
+            "line_id": l.line_id, "unit_code": l.unit_code, "description": l.item_description or "",
+            "period_start": l.period_start.isoformat() if l.period_start else None,
+            "period_end": l.period_end.isoformat() if l.period_end else None,
+            "allowances": [{"charge": bool(a.is_charge), "amount": float(a.amount), "percent": float(a.percentage or 0),
+                            "reason": a.reason} for a in (l.allowances_charges or [])],
+        } for l in inv.lines],
+    }
 
 
 def _api_generate_kern(nur_pruefen_erzwingen=False):
@@ -11090,7 +11461,7 @@ def _api_generate_kern(nur_pruefen_erzwingen=False):
                                           if v.invoice_number == _preceding), None)
                                     if (_ist_gutschrift and _preceding) else None),   # BT-26
             currency_code=data.get("currency", "EUR"),
-            buyer_reference=data.get("buyer_reference", "").strip() or "PRIV-" + (data.get("buyer_id", "") or "00000"),
+            buyer_reference=_kaeuferreferenz_vorgabe(data, number),
             note=data.get("note", ""),
             order_reference=" ".join(str(data.get("order_reference") or "").split()),          # BT-13 Bestellnummer des Kunden
             contract_reference=" ".join(str(data.get("contract_reference") or "").split()),    # BT-12 Vertragsnummer
@@ -11121,7 +11492,7 @@ def _api_generate_kern(nur_pruefen_erzwingen=False):
                                 post_code=data.get("buyer_postcode", "")),
                 electronic_address=data.get("buyer_email", ""),
                 electronic_address_scheme="EM",
-                buyer_reference=data.get("buyer_reference", "").strip() or "PRIV-" + (data.get("buyer_id", "") or "00000"),
+                buyer_reference=_kaeuferreferenz_vorgabe(data, number),
                 vat_id=data.get("buyer_vat", ""),
             ),
             payment=PaymentInfo(
@@ -11153,7 +11524,14 @@ def _api_generate_kern(nur_pruefen_erzwingen=False):
         # Steuerfall: Kategorie (E, AE, Z) in alle Positionen. Der Steuersatz wird NICHT stillschweigend
         # geändert — trägt eine Position trotz Kleinunternehmer/§ 13b/steuerfrei einen Satz über 0, meldet die
         # Prüfung das als Fehler (BR-E-05, BR-AE-05, BR-Z-05).
+        # Runde 2: Zeitraum, Einheit, Rabatt/Zuschlag, Verwendungszweck, zweite Skontostufe, Rechnungskorrektur (384) —
+        # vor steuerfall_anwenden(), damit auch die Nachlässe die Kategorie des Steuerfalls bekommen
+        _r2a_anwenden(inv, data)
         inv.steuerfall_anwenden()
+
+        # Zusatzangaben der Anfrage: Land des Käufers, Lieferadresse, Lastschrift, Zahlungsempfänger, Anhänge,
+        # weitere Bezüge, Rundung. Unlesbares (unbekanntes Land, kaputter Anhang) → ValueError → Antwort 400.
+        __import__("rechnungszusatz").aus_anfrage(inv, data, _load_mandant_settings() or {})
 
         # Dubletten-Check: Rechnungsnummer bereits vergeben?
         existing = [v for v in invoices.values() if v.invoice_number == inv.invoice_number]
@@ -11179,7 +11557,11 @@ def _api_generate_kern(nur_pruefen_erzwingen=False):
                 try:
                     return (str(getattr(v, "invoice_type_code", "380")), str(v.invoice_date), (v.buyer.name or "").strip().lower(),
                             tuple((str(l.item_name).strip(), str(l.quantity), str(l.unit_price), str(l.line_net_amount)) for l in v.lines),
-                            str(v.tax_inclusive_amount()))
+                            str(v.tax_inclusive_amount()),
+                            # 25.11.2026: zwei sonst gleiche Rechnungen mit verschiedenem Steuerfall, Bezug oder
+                            # Beginn des Rechnungszeitraums (wiederkehrende Rechnung) sind NICHT dieselbe
+                            str(getattr(v, "steuerfall", "regel") or "regel"), str(getattr(v, "preceding_invoice", "") or ""),
+                            str(v.period_start or ""))
                 except Exception:
                     return None
             _neu_sig = _sig(inv)
@@ -11264,6 +11646,7 @@ def _storno_anlegen(inv, user, reason, storno_number=None):
         buyer=copy.deepcopy(inv.buyer),
         payment=copy.deepcopy(inv.payment),
     )
+    __import__("rechnungszusatz").uebernehmen(storno, inv, voll=True)      # Lieferort, Zahlungsempfänger, weitere Bezüge
     # Steuerfall, Befreiungsgrund und Bezüge der Ursprungsrechnung gelten auch für das Storno — ohne den
     # Grund wäre das Storno einer Kleinunternehmer- oder § 13b-Rechnung amtlich ungültig.
     for _feld in ("steuerfall", "steuerbefreiung_grund", "steuerbefreiung_code",
@@ -11272,6 +11655,7 @@ def _storno_anlegen(inv, user, reason, storno_number=None):
     # Skonto gilt für die Ursprungsrechnung, nicht für das Storno (25.11.2026)
     storno.payment.skonto_percent = 0.0
     storno.payment.skonto_days = 0
+    storno.payment.skonto2_percent, storno.payment.skonto2_days, storno.payment.remittance = 0.0, 0, ""
     if "skonto" in (storno.payment.payment_terms or "").lower():
         storno.payment.payment_terms = ""
 
@@ -11289,6 +11673,9 @@ def _storno_anlegen(inv, user, reason, storno_number=None):
             line_net_amount=line.line_net_amount,
             tax_category=line.tax_category,
             tax_rate=line.tax_rate,
+            # ohne den Rabatt der Position passt ihr Nettobetrag nicht mehr zu Menge × Preis (BR-CO-10)
+            allowances_charges=copy.deepcopy(list(getattr(line, "allowances_charges", None) or [])),
+            period_start=line.period_start, period_end=line.period_end,
         ))
 
     # Nachlässe/Zuschläge unverändert übernehmen (Vorzeichen kommt aus 381)
@@ -11462,6 +11849,7 @@ def api_gutschrift(inv_id):
     # Skonto gilt für die Ursprungsrechnung, nicht für die Gutschrift (25.11.2026)
     gs.payment.skonto_percent = 0.0
     gs.payment.skonto_days = 0
+    gs.payment.skonto2_percent, gs.payment.skonto2_days, gs.payment.remittance = 0.0, 0, ""
     if "skonto" in (gs.payment.payment_terms or "").lower():
         gs.payment.payment_terms = ""
     gs.payment.due_date = None
@@ -11498,6 +11886,8 @@ def api_gutschrift(inv_id):
                 item_name=line.item_name, item_description=line.item_description,
                 unit_price=line.unit_price, line_net_amount=line.line_net_amount,
                 tax_category=line.tax_category, tax_rate=line.tax_rate,
+                allowances_charges=copy.deepcopy(list(getattr(line, "allowances_charges", None) or [])),
+                period_start=line.period_start, period_end=line.period_end,
             ))
         for ac in inv.allowances_charges:
             gs.allowances_charges.append(AllowanceCharge(
@@ -11505,6 +11895,7 @@ def api_gutschrift(inv_id):
                 percentage=ac.percentage, reason=ac.reason,
                 tax_category=ac.tax_category, tax_rate=ac.tax_rate,
             ))
+    __import__("rechnungszusatz").uebernehmen(gs, inv)      # Lieferort, Zahlungsempfänger, weitere Bezüge
     # Steuerfall und Befreiungsgrund der Ursprungsrechnung übernehmen (Kategorie E/AE/Z auch für frei
     # eingegebene Positionen)
     for _feld in ("steuerfall", "steuerbefreiung_grund", "steuerbefreiung_code",
@@ -13198,6 +13589,14 @@ if __name__ == "__main__":
 # Lokale Erweiterungen laden — am Modulende, damit alle oben definierten
 # Namen bereitstehen und jeder Starter sie bekommt.
 _load_extensions()
+
+
+# Zusatzangaben der Rechnung (Lieferort, Lastschrift, Zahlungsempfänger, Anhänge …) — Modul rechnungszusatz.py
+try:
+    import rechnungszusatz as _rz
+    _rz.einrichten(app, globals())
+except Exception as _rz_fehler:
+    print(f"[rechnungszusatz] Routen nicht geladen: {_rz_fehler}", flush=True)
 
 
 # Gutschriftverfahren (Selbstfakturierung, Belegart 389) — eigenes, abschaltbares Modul gutschriftverfahren.py

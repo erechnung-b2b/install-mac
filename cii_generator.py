@@ -115,6 +115,7 @@ def _verkaeufer(parent, inv):
     p = _el(parent, "SellerTradeParty")
     _txt(p, "ID", s.kennung() if hasattr(s, "kennung") else "")     # BT-29 Verkäuferkennung (BR-CO-26)
     _el(p, "Name", s.name)
+    _txt(p, "Description", getattr(s, "legal_info", ""))             # BT-33
     if s.company_id:
         lo = _el(p, "SpecifiedLegalOrganization")
         _el(lo, "ID", s.company_id)
@@ -127,6 +128,7 @@ def _verkaeufer(parent, inv):
 def _kaeufer(parent, inv):
     b = inv.buyer
     p = _el(parent, "BuyerTradeParty")
+    _txt(p, "ID", getattr(b, "buyer_id", ""))                        # BT-46 Käuferkennung (Kundennummer)
     _el(p, "Name", b.name)
     if b.company_id:
         lo = _el(p, "SpecifiedLegalOrganization")
@@ -201,6 +203,22 @@ def _position(parent, line, cur):
     _el(summ, "LineTotalAmount", _betrag(line.line_net_amount))
 
 
+def _verwendungszweck(st, inv):
+    """BT-83 als ram:PaymentReference. Das Schema verlangt die Stelle hinter CreditorReferenceID und vor
+    TaxCurrencyCode/InvoiceCurrencyCode — sie wird hier gesucht, damit die Reihenfolge auch dann stimmt, wenn
+    davor weitere Angaben (Gläubiger-ID, Steuerwährung) geschrieben werden."""
+    text = getattr(inv.payment, "remittance", "") or ""
+    if not text:
+        return
+    el = etree.Element(_ram("PaymentReference"))
+    el.text = str(_einzeilig(text))
+    for i, kind in enumerate(st):
+        if etree.QName(kind.tag).localname in ("TaxCurrencyCode", "InvoiceCurrencyCode"):
+            st.insert(i, el)
+            return
+    st.append(el)
+
+
 def generate_cii(inv: Invoice) -> etree._Element:
     cur = inv.currency_code or "EUR"
     root = etree.Element(_rsm("CrossIndustryInvoice"), nsmap=NSMAP)
@@ -245,6 +263,7 @@ def generate_cii(inv: Invoice) -> etree._Element:
     # ── Abrechnung ──
     st = _el(tx, "ApplicableHeaderTradeSettlement")
     _el(st, "InvoiceCurrencyCode", cur)
+    _verwendungszweck(st, inv)                                        # BT-83
     pm = _el(st, "SpecifiedTradeSettlementPaymentMeans")
     _el(pm, "TypeCode", inv.payment.means_code or "58")
     if inv.payment.iban:
@@ -283,7 +302,8 @@ def generate_cii(inv: Invoice) -> etree._Element:
             _pd.text = inv.payment.terms_mit_skonto()     # Skonto-Zeile braucht ihre Zeilenumbrüche (BR-DE-18)
         if inv.payment.due_date:
             _datum(pt, "DueDateDateTime", inv.payment.due_date)
-        _txt(pt, "DirectDebitMandateID", inv.payment.mandate_reference)
+        if str(inv.payment.means_code or "") == "59":      # bei Überweisung (58) verbietet BR-DE-23-b die Lastschrift-Angaben
+            _txt(pt, "DirectDebitMandateID", inv.payment.mandate_reference)
 
     summ = _el(st, "SpecifiedTradeSettlementHeaderMonetarySummation")
     _el(summ, "LineTotalAmount", _betrag(inv.sum_line_net()))
@@ -307,6 +327,8 @@ def generate_cii(inv: Invoice) -> etree._Element:
             _fd.set("format", "102")
             _fd.text = inv.preceding_invoice_date.strftime("%Y%m%d")
 
+    # Zusatzangaben (Lieferort, Lastschrift, Zahlungsempfänger, Anhänge, weitere Bezüge …) – ohne sie keine Änderung
+    __import__("rechnungszusatz").cii_ergaenzen(root, inv)
     return root
 
 

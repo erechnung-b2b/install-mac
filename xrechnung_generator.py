@@ -88,6 +88,7 @@ def _build_seller(root, inv):
     legal = etree.SubElement(party, _cac("PartyLegalEntity"))
     _txt(legal, "RegistrationName", inv.seller.name)
     if inv.seller.company_id: _txt(legal, "CompanyID", inv.seller.company_id)
+    if getattr(inv.seller, "legal_info", ""): _txt(legal, "CompanyLegalForm", inv.seller.legal_info)   # BT-33
     contact = etree.SubElement(party, _cac("Contact"))
     _txt(contact, "Name", inv.seller.contact.name)
     _txt(contact, "Telephone", inv.seller.contact.telephone)
@@ -99,6 +100,8 @@ def _build_buyer(root, inv):
     ep = etree.SubElement(party, _cbc("EndpointID"))
     ep.text = inv.buyer.electronic_address
     ep.set("schemeID", inv.buyer.electronic_address_scheme)
+    if getattr(inv.buyer, "buyer_id", ""):      # BT-46 Käuferkennung (Kundennummer)
+        _bid = etree.SubElement(party, _cac("PartyIdentification")); _txt(_bid, "ID", inv.buyer.buyer_id)
     pn = etree.SubElement(party, _cac("PartyName"))
     _txt(pn, "Name", inv.buyer.name)
     _build_address(party, inv.buyer.address)
@@ -108,6 +111,11 @@ def _build_buyer(root, inv):
         ts = etree.SubElement(ts_w, _cac("TaxScheme")); _txt(ts, "ID", "VAT")
     legal = etree.SubElement(party, _cac("PartyLegalEntity"))
     _txt(legal, "RegistrationName", inv.buyer.name)
+    if getattr(inv.buyer, "company_id", ""): _txt(legal, "CompanyID", inv.buyer.company_id)      # BT-47
+    _bk = getattr(inv.buyer, "contact", None)
+    if _bk is not None and (_bk.name or _bk.telephone or _bk.email):                             # BT-56 … BT-58
+        _bc = etree.SubElement(party, _cac("Contact"))
+        _txt(_bc, "Name", _bk.name); _txt(_bc, "Telephone", _bk.telephone); _txt(_bc, "ElectronicMail", _bk.email)
 
 def _build_payment(root, inv, credit=False):
     pm = etree.SubElement(root, _cac("PaymentMeans"))
@@ -116,6 +124,7 @@ def _build_payment(root, inv, credit=False):
     # in PaymentMeans/PaymentDueDate (direkt hinter dem PaymentMeansCode).
     if credit and inv.payment.due_date:
         _dt(pm, "PaymentDueDate", inv.payment.due_date)
+    if getattr(inv.payment, "remittance", ""): _txt(pm, "PaymentID", inv.payment.remittance)     # BT-83
     if inv.payment.iban:
         pf = etree.SubElement(pm, _cac("PayeeFinancialAccount"))
         _txt(pf, "ID", inv.payment.iban)
@@ -128,7 +137,7 @@ def _build_payment(root, inv, credit=False):
         if _pn is not None and inv.payment.skonto_zeile():
             _pn.text = inv.payment.terms_mit_skonto()     # Skonto-Zeile braucht ihre Zeilenumbrüche (BR-DE-18)
 
-def _build_allowance_charge(parent, ac, cur):
+def _build_allowance_charge(parent, ac, cur, kopf=True):
     el = etree.SubElement(parent, _cac("AllowanceCharge"))
     _txt(el, "ChargeIndicator", "true" if ac.is_charge else "false")
     if ac.reason_code: _txt(el, "AllowanceChargeReasonCode", ac.reason_code)
@@ -136,6 +145,8 @@ def _build_allowance_charge(parent, ac, cur):
     if ac.percentage: _txt(el, "MultiplierFactorNumeric", str(ac.percentage))
     _amt(el, "Amount", ac.amount, cur)
     if ac.base_amount: _amt(el, "BaseAmount", ac.base_amount, cur)
+    if not kopf:
+        return      # BG-27/BG-28 tragen keine eigene Steuerkategorie — es gilt die der Position (UBL-CR-558)
     tc = etree.SubElement(el, _cac("TaxCategory"))
     _txt(tc, "ID", ac.tax_category); _txt(tc, "Percent", str(ac.tax_rate))
     ts = etree.SubElement(tc, _cac("TaxScheme")); _txt(ts, "ID", "VAT")
@@ -177,11 +188,15 @@ def _build_invoice_line(root, line, cur, credit=False):
     qty = etree.SubElement(il, _cbc("CreditedQuantity" if credit else "InvoicedQuantity"))
     qty.text = str(line.quantity); qty.set("unitCode", line.unit_code)
     _amt(il, "LineExtensionAmount", line.line_net_amount, cur)
+    if line.period_start or line.period_end:      # BG-26 Leistungszeitraum der Position
+        _lp = etree.SubElement(il, _cac("InvoicePeriod"))
+        if line.period_start: _dt(_lp, "StartDate", line.period_start)
+        if line.period_end: _dt(_lp, "EndDate", line.period_end)
     if line.order_reference:
         oref = etree.SubElement(il, _cac("OrderLineReference"))
         _txt(oref, "LineID", line.order_reference)
     for ac in line.allowances_charges:
-        _build_allowance_charge(il, ac, cur)
+        _build_allowance_charge(il, ac, cur, kopf=False)
     item = etree.SubElement(il, _cac("Item"))
     if line.item_description: _txt(item, "Description", line.item_description)
     _txt(item, "Name", line.item_name)
@@ -249,6 +264,8 @@ def generate_xrechnung(inv: Invoice) -> etree._Element:
     _build_tax_total(root, inv)
     _build_monetary_total(root, inv)
     for line in inv.lines: _build_invoice_line(root, line, inv.currency_code, credit)
+    # Zusatzangaben (Lieferort, Lastschrift, Zahlungsempfänger, Anhänge, weitere Bezüge …) – ohne sie keine Änderung
+    __import__("rechnungszusatz").ubl_ergaenzen(root, inv)
     return root
 
 def serialize_xml(root: etree._Element, pretty: bool = True) -> bytes:
