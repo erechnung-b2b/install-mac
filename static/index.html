@@ -8638,6 +8638,7 @@ async function bankInitConnection() {
   try { data = await fetch(API + '/api/bank/connections').then(r => r.json()); }
   catch (e) { listEl.innerHTML = 'Verbindungen konnten nicht geladen werden.'; return; }
   _bankConns = data.connections || [];
+  window._bankProduktZentral = !!data.produkt_zentral;   // Produktnummer kommt vom Betreiber – Feld im Dialog entfällt
   if (!_bankConns.length) {
     listEl.innerHTML = 'Noch keine Bank verbunden — über „➕ Bank hinzufügen" Zugangsdaten hinterlegen.';
     return;
@@ -8705,6 +8706,7 @@ function bankConnectOpen(id) {
   document.getElementById('bc-error').innerHTML = '';
   document.getElementById('bc-pin').value = '';
   document.getElementById('bc-product').value = '';
+  { const pl = document.getElementById('bc-product').closest('label'); if (pl) pl.style.display = window._bankProduktZentral ? 'none' : ''; }
   const c = id ? _bankConns.find(x => x.id === id) : null;
   document.getElementById('bc-id').value = c ? c.id : '';
   document.getElementById('bc-bankname').value = c ? (c.bank_name || '') : '';
@@ -10840,8 +10842,10 @@ function stbSetQuartal(offset) {
   if (q > 3) { q = 0; y++; }
   const von = new Date(y, q * 3, 1);
   const bis = new Date(y, q * 3 + 3, 0);
-  document.getElementById('stb-von').value = von.toISOString().split('T')[0];
-  document.getElementById('stb-bis').value = bis.toISOString().split('T')[0];
+  // 26.11.2026: lokales Datum statt toISOString() – in deutscher Zeit ergab das sonst 30.09.–30.12.
+  const iso = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  document.getElementById('stb-von').value = iso(von);
+  document.getElementById('stb-bis').value = iso(bis);
   loadStbBelege();
 }
 
@@ -10887,7 +10891,7 @@ async function loadStbBelege() {
           '<td style="font-size:11px;font-weight:500;'+typCls+'">'+b.typ+'</td>' +
           '<td style="font-size:11px">'+esc(b.kategorie||'')+'</td>' +
           '<td style="font-family:var(--mono);font-size:12px">'+(b.nummer||'\u2013')+'</td>' +
-          '<td>'+(b.datum||'')+'</td>' +
+          '<td>'+(b.datum&&/^\d{4}-\d{2}-\d{2}/.test(b.datum)?b.datum.slice(8,10)+'.'+b.datum.slice(5,7)+'.'+b.datum.slice(0,4):(b.datum||''))+'</td>' +
           '<td>'+esc(partner)+'</td>' +
           '<td style="text-align:right">'+(b.betrag?fmt(b.betrag)+' \u20ac':'\u2013')+'</td>' +
           '<td>'+(hasPdf?'\u2714':'\u2013')+'</td></tr>';

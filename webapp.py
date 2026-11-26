@@ -5525,27 +5525,51 @@ def api_stb_belege():
         if idx_file.exists():
             try:
                 idx = json.loads(idx_file.read_text("utf-8"))
+                # 26.11.2026: Der Index speichert je Beleg invoice_id, direction und die Kopfdaten unter
+                # invoice_metadata. Gelesen wurden vorher Felder, die es nicht gibt (invoice_date, id,
+                # seller_name, total_gross auf oberster Ebene) – dadurch fiel JEDE E-Rechnung aus dem
+                # Belegpaket. Wird ein Beleg mehrfach archiviert, gilt der letzte Eintrag.
+                _stb_art = {"380": "Rechnung", "381": "Gutschrift", "384": "Rechnungskorrektur",
+                            "389": "Gutschriftverfahren", "326": "Teilrechnung", "875": "Teilrechnung",
+                            "876": "Teilrechnung", "877": "Schlussrechnung"}
+                _stb_letzte = {}
                 for entry in idx:
-                    inv_date = entry.get("invoice_date", entry.get("archived_at", ""))[:10]
+                    _k = entry.get("invoice_id") or entry.get("id") or entry.get("invoice_number", "")
+                    _stb_letzte[_k] = entry
+                for inv_id, entry in _stb_letzte.items():
+                    meta = entry.get("invoice_metadata") or {}
+                    inv_date = str(meta.get("invoice_date") or entry.get("invoice_date")
+                                   or entry.get("created_at") or "")[:10]
                     if not in_range(inv_date):
                         continue
-                    inv_id = entry.get("id", "")
-                    inv_dir = archiv_dir / inv_id
+                    richtung = str(entry.get("direction") or meta.get("direction") or "").upper()
+                    ist_eingang = richtung == "EINGANG"
+                    inv_dir = archiv_dir / str(inv_id)
                     pdf_file = xml_file = None
                     if inv_dir.exists():
+                        if (inv_dir / "original.pdf").exists():
+                            pdf_file = str(inv_dir / "original.pdf")
+                        _xml = entry.get("xml_filename")
+                        if _xml and (inv_dir / _xml).exists():
+                            xml_file = str(inv_dir / _xml)
                         for f in inv_dir.iterdir():
-                            if f.suffix.lower() == ".pdf":
+                            if not pdf_file and f.suffix.lower() == ".pdf":
                                 pdf_file = str(f)
-                            elif f.suffix.lower() == ".xml":
+                            elif not xml_file and f.suffix.lower() == ".xml":
                                 xml_file = str(f)
+                    try:
+                        _betrag = float(meta.get("gross_amount") or 0)
+                    except (TypeError, ValueError):
+                        _betrag = 0.0
                     belege.append({
-                        "typ": "Eingang",
-                        "kategorie": "E-Rechnung",
-                        "nummer": entry.get("invoice_number", ""),
+                        "typ": "Eingang" if ist_eingang else "Ausgang",
+                        "kategorie": "E-Rechnung · " + ("Storno" if str(meta.get("invoice_number") or "").startswith("ST-")
+                                                       else _stb_art.get(str(meta.get("type_code") or ""), "Rechnung")),
+                        "nummer": meta.get("invoice_number") or entry.get("invoice_number", ""),
                         "datum": inv_date,
-                        "lieferant": entry.get("seller_name", ""),
-                        "kunde": entry.get("buyer_name", ""),
-                        "betrag": entry.get("total_gross", 0),
+                        "lieferant": (meta.get("seller_name") or meta.get("seller") or "") if ist_eingang else "",
+                        "kunde": "" if ist_eingang else (meta.get("buyer_name") or ""),
+                        "betrag": _betrag,
                         "pdf": pdf_file,
                         "xml": xml_file,
                         "id": inv_id,
@@ -5654,8 +5678,11 @@ def api_stb_belege():
                 filepath = doc.get("filepath", "")
                 if filepath in seen_files:
                     continue
-                seen_files.add(filepath)
                 doc_type = doc.get("type", "")
+                # 26.11.2026: Rechnungen, die schon als E-Rechnung aus dem Archiv kommen, nicht doppelt.
+                if doc_type == "invoice" and any(b.get("nummer") == doc.get("reference", "") for b in belege):
+                    continue
+                seen_files.add(filepath)
                 type_labels = {
                     "invoice": "Ausgangsrechnung",
                     "customer_quote": "Kundenangebot",
@@ -5694,7 +5721,8 @@ def api_stb_belege():
             if not in_range(inv_date):
                 continue
             ref = inv_step.get("reference", "")
-            if any(b["nummer"] == ref and b["kategorie"] == "Ausgangsrechnung" for b in belege):
+            if any(b["nummer"] == ref and (b["kategorie"] == "Ausgangsrechnung"
+                                           or str(b["kategorie"]).startswith("E-Rechnung")) for b in belege):
                 continue
             amount = inv_step.get("amount", 0)
             pdf_path = str(docs_dir / f"{ref}.pdf") if ref else ""
@@ -5739,8 +5767,7 @@ def api_stb_export():
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         # CSV-Übersicht
-        csv_buffer = io.StringIO()
-        csv_buffer.write("\ufeff")
+        csv_buffer = io.StringIO()   # BOM setzt encode("utf-8-sig") unten – vorher stand sie doppelt drin
         w = csv.writer(csv_buffer, delimiter=";")
         w.writerow(["Typ", "Kategorie", "Belegnummer", "Datum", "Lieferant/Kunde", "Betrag", "Datei"])
         for b in belege:
@@ -8092,9 +8119,19 @@ def _bank_slug(s):
     return sl or "bank"
 
 
+def _fints_produkt_zentral():
+    """Registrierungsnummer des PRODUKTS bei der Deutschen Kreditwirtschaft, zentral vom Betreiber gesetzt
+    (Umgebung ERECHNUNG_FINTS_PRODUKT). Sie gehört zur Software, nicht zum Anwender: Ist sie gesetzt, gilt
+    sie für jede Bankverbindung, und niemand muss (oder kann) eine eigene eintragen. Nie ausgeben."""
+    pid = (os.environ.get("ERECHNUNG_FINTS_PRODUKT") or "").strip()
+    return pid if (pid and len(pid) <= 25) else ""
+
+
 def _gen_product_id():
     """python-fints verlangt seit v4 eine product_id (FinTS-Limit: max. 25 Zeichen).
     Wer eine registrierte ID hat, trägt sie ein; sonst eine stabile app-eigene Kennung."""
+    if _fints_produkt_zentral():
+        return _fints_produkt_zentral()
     import secrets as _secrets
     return ("B2B" + _secrets.token_hex(10))[:25]  # 3 + 20 = 23 Zeichen
 
@@ -8105,6 +8142,9 @@ def _valid_pid(pid):
 
 def _bank_ensure_product_id(cid, conn):
     """Heilt gespeicherte Verbindungen ohne/mit zu langer product_id (persistiert stabil)."""
+    if _fints_produkt_zentral():                  # zentrale Nummer geht vor – nur für diesen Abruf, nicht gespeichert
+        c = dict(conn); c["product_id"] = _fints_produkt_zentral()
+        return c
     if _valid_pid(conn.get("product_id")):
         return conn
     conns = _bsec.load_connections()
@@ -8153,7 +8193,8 @@ def _bank_conn_public(cid, conn):
 def api_bank_connections_list():
     """Liste aller Bankverbindungen (ohne PIN)."""
     conns = _bsec.load_connections()
-    return _json({"connections": [_bank_conn_public(cid, c) for cid, c in conns.items()]})
+    return _json({"connections": [_bank_conn_public(cid, c) for cid, c in conns.items()],
+                  "produkt_zentral": bool(_fints_produkt_zentral())})
 
 
 @app.route("/api/bank/connection", methods=["POST"])
@@ -8174,6 +8215,8 @@ def api_bank_connection_save():
         return _json({"error": "Benutzerkennung und PIN erforderlich"}, 400)
     _entered = (data.get("product_id") or "").strip()
     product_id = _entered if _valid_pid(_entered) else (prev.get("product_id") if _valid_pid(prev.get("product_id")) else _gen_product_id())
+    if _fints_produkt_zentral():
+        product_id = _fints_produkt_zentral()
     conns[cid] = {
         "blz": (data.get("blz") or prev.get("blz") or "").strip(),
         "fints_url": (data.get("fints_url") or prev.get("fints_url") or "").strip(),
